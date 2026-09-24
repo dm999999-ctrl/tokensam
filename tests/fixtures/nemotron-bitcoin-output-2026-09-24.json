@@ -1,0 +1,105 @@
+{
+ "executiveSummary": {
+  "overview": "Bitcoin (BTC) traded at approximately $84,388 with a market cap of about $1.69 trillion as of 2026-09-24T17:00:20Z. The 24‑hour price change was slightly positive (+0.34%), while the 7‑day change showed stronger gains (+10.15%). Short‑term metrics (2.5‑hour interval) indicated a modest decline in both price and market cap. Circulating supply stood at 20,088,743 BTC, roughly 95.7% of the 21,000,000 BTC maximum supply. Trading volume over the past 24 hours represented about 2.3% of market cap. DEX‑specific liquidity and volume data are unavailable due to lack of a mapped Bitcoin‑chain address, and DeFiLlama protocol metrics (TVL, fees, revenue) are unavailable by design.",
+  "statements": []
+ },
+ "marketPerformance": {
+  "overview": "Bitcoin’s short‑term price action was mildly bearish, while longer‑term weekly momentum remained positive. Volume‑to‑market‑cap ratio suggests moderate trading activity relative to total valuation.",
+  "statements": []
+ },
+ "fundamentalPerformance": {
+  "overview": "Bitcoin’s supply metrics indicate a highly mature issuance schedule, with circulating supply nearing the maximum cap. No on‑chain protocol‑level data (TVL, fees, revenue) are available for Bitcoin within the current context.",
+  "statements": []
+ },
+ "valuation": {
+  "overview": "Valuation ratios that depend on TVL or revenue cannot be computed due to missing DeFiLlama data. The only directly calculable valuation ratio from the available data is volume‑to‑market‑cap, which is approximately 2.3%.",
+  "statements": []
+ },
+ "marketFundamentalRelationships": {
+  "overview": "No reliable relationships can be derived between Bitcoin’s market‑cap or price and protocol‑level TVL or revenue because those data points are absent.",
+  "statements": []
+ },
+ "liquidityMarketStructure": {
+  "overview": "DEX‑based liquidity and volume metrics for the exact Bitcoin address are unavailable. Consequently, derived ratios such as DEX liquidity/market cap, DEX volume/liquidity, and buy/sell transaction ratios cannot be calculated.",
+  "statements": []
+ },
+ "tokenomics": {
+  "overview": "Circulating supply of 20,088,743 BTC represents about 95.7% of the maximum supply of 21,000,000 BTC, indicating a late stage of the programmed issuance schedule.",
+  "statements": []
+ },
+ "risks": [
+  {
+   "title": "DEX‑liquidity and volume unavailability",
+   "basis": "data_limitation",
+   "detail": "No exact‑address Bitcoin‑chain DEX Screener pair is configured, so aggregate DEX liquidity, volume, and related ratios are unavailable.",
+   "sourceIds": [
+    "scope:dexscreener",
+    "calc:128",
+    "calc:127",
+    "calc:134"
+   ]
+  },
+  {
+   "title": "DeFiLlama protocol metrics missing",
+   "basis": "data_limitation",
+   "detail": "No DeFiLlama protocol mapping exists for Bitcoin, so TVL, fees, and revenue data are unavailable by design.",
+   "sourceIds": [
+    "scope:defillama",
+    "fresh:defillama"
+   ]
+  }
+ ],
+ "dataGaps": [
+  {
+   "category": "missing_history",
+   "detail": "Historical observations for DeFiLlama TVL, fees, and revenue are absent, preventing calculation of TVL‑ or revenue‑based growth and divergence metrics.",
+   "sourceIds": [
+    "hist:defillama:tvl_usd",
+    "hist:defillama:fees_24h_usd",
+    "hist:defillama:revenue_24h_usd"
+   ]
+  },
+  {
+   "category": "missing_history",
+   "detail": "Insufficient history for DeFiLlama protocol TVL, fees, and revenue blocks growth metrics (TVL growth, revenue growth, market‑cap vs TVL/revenue changes).",
+   "sourceIds": [
+    "calc:118",
+    "calc:119",
+    "calc:120",
+    "calc:123",
+    "calc:124",
+    "calc:125",
+    "calc:126"
+   ]
+  },
+  {
+   "category": "missing_history",
+   "detail": "No market‑cap/TVL or price/TVL aligned observations exist within the last 24 hours, rendering divergence metrics unavailable.",
+   "sourceIds": [
+    "calc:135",
+    "calc:136",
+    "calc:137",
+    "calc:138",
+    "calc:139",
+    "calc:140"
+   ]
+  }
+ ],
+ "furtherResearchQuestions": [
+  {
+   "question": "Is there any DEX liquidity data for wrapped Bitcoin (e.g., WBTC) on Ethereum or other chains that could serve as a proxy for Bitcoin’s on‑chain activity?",
+   "rationale": "The context notes that no canonical Bitcoin‑chain DEX Screener address is configured, but wrapped versions may be tracked elsewhere.",
+   "sourceIds": [
+    "scope:dexscreener"
+   ]
+  },
+  {
+   "question": "How does Bitcoin’s current issuance rate (block subsidy) compare with historical levels given that circulating supply is approximately 95.7% of the maximum supply?",
+   "rationale": "The context provides circulating and maximum supply figures, enabling a comparison of issuance progress.",
+   "sourceIds": [
+    "obs:40095",
+    "obs:40097"
+   ]
+  }
+ ]
+}

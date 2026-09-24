@@ -1,0 +1,141 @@
+import "server-only";
+
+/**
+ * Minimal server-side Gemini client using the REST `models.generateContent`
+ * method (https://ai.google.dev/api/generate-content) with structured JSON
+ * output. It follows the provider collectors' pattern: plain fetch with an
+ * injectable fetchImpl, bounded retries, and errors that never include the key.
+ * No tools are enabled, so the model cannot browse or call external URLs.
+ */
+
+const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+/** Current stable general-purpose model at the time of writing; override with GEMINI_MODEL. */
+export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
+const MODEL_PATTERN = /^[a-z0-9][a-z0-9.-]{0,63}$/;
+const MAX_ATTEMPTS = 2;
+// Two Gemini attempts plus one OpenRouter fallback attempt must fit the 300 s route budget.
+const REQUEST_TIMEOUT_MS = 60_000;
+
+export type GeminiConfig = { apiKey: string; model: string };
+
+export class GeminiError extends Error {
+  readonly code: "config" | "http" | "network" | "timeout" | "blocked" | "incomplete" | "empty" | "malformed_json";
+  readonly status: number | null;
+  constructor(code: GeminiError["code"], message: string, status: number | null = null) {
+    super(message);
+    this.name = "GeminiError";
+    this.code = code;
+    this.status = status;
+  }
+
+  /**
+   * Temporary provider-side failures (rate limit, overload, timeout, network).
+   * Only these may trigger the OpenRouter fallback; configuration, auth,
+   * request/schema, blocked, or truncated-output errors never do.
+   */
+  get retryable(): boolean {
+    if (this.code === "timeout" || this.code === "network") return true;
+    return this.code === "http" && this.status !== null && (this.status === 408 || this.status === 429 || this.status >= 500);
+  }
+
+  /** Stable, secret-free label for provenance, e.g. "gemini_503". */
+  get reasonCode(): string {
+    return this.code === "http" && this.status !== null ? `gemini_${this.status}` : `gemini_${this.code}`;
+  }
+}
+
+/** Returns null when GEMINI_API_KEY is not configured; analysis is then unavailable, never faked. */
+export function getGeminiConfig(env: Record<string, string | undefined> = process.env): GeminiConfig | null {
+  const apiKey = env.GEMINI_API_KEY?.trim();
+  if (!apiKey) return null;
+  const model = env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
+  if (!MODEL_PATTERN.test(model)) throw new GeminiError("config", "GEMINI_MODEL is not a valid model code.");
+  return { apiKey, model };
+}
+
+type GenerateContentResponse = {
+  candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[];
+  promptFeedback?: { blockReason?: string };
+  modelVersion?: string;
+};
+
+export async function generateStructuredJson(options: {
+  config: GeminiConfig;
+  systemInstruction: string;
+  userText: string;
+  responseSchema: unknown;
+  fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<{ json: unknown; modelVersion: string | null }> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const url = `${BASE_URL}/models/${encodeURIComponent(options.config.model)}:generateContent`;
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: options.systemInstruction }] },
+    contents: [{ role: "user", parts: [{ text: options.userText }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseJsonSchema: options.responseSchema,
+      // Thinking tokens count toward this budget (observed on gemini-3.6-flash), so leave
+      // room for reasoning plus the full JSON; still below the model's 65,536 output limit.
+      maxOutputTokens: 32_768,
+    },
+  });
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": options.config.apiKey },
+        body,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      if (attempt === MAX_ATTEMPTS) {
+        throw new GeminiError(timedOut ? "timeout" : "network", timedOut ? "The Gemini request timed out." : "The Gemini request failed due to a network error.");
+      }
+      await sleep(1_000);
+      continue;
+    }
+
+    if (!response.ok) {
+      const retryable = response.status === 429 || response.status >= 500;
+      if (retryable && attempt < MAX_ATTEMPTS) {
+        const retryAfter = Number(response.headers.get("retry-after"));
+        await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 10_000) : 2_000);
+        continue;
+      }
+      // Response bodies and URLs are not included in errors or logs.
+      throw new GeminiError("http", `Gemini returned HTTP ${response.status}.`, response.status);
+    }
+
+    let payload: GenerateContentResponse;
+    try {
+      payload = (await response.json()) as GenerateContentResponse;
+    } catch (error) {
+      // The request deadline also covers reading the body; an abort here is a timeout, not bad JSON.
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        throw new GeminiError("timeout", "The Gemini request timed out while receiving the response.");
+      }
+      throw new GeminiError("malformed_json", "Gemini returned a response that was not valid JSON.");
+    }
+    if (payload.promptFeedback?.blockReason) {
+      throw new GeminiError("blocked", `Gemini blocked the request (${payload.promptFeedback.blockReason}).`);
+    }
+    const candidate = payload.candidates?.[0];
+    if (!candidate) throw new GeminiError("empty", "Gemini returned no candidates.");
+    if (candidate.finishReason && candidate.finishReason !== "STOP") {
+      throw new GeminiError("incomplete", `Gemini did not finish normally (${candidate.finishReason}).`);
+    }
+    const textOut = (candidate.content?.parts ?? []).filter((part) => !part.thought).map((part) => part.text ?? "").join("");
+    if (!textOut.trim()) throw new GeminiError("empty", "Gemini returned an empty response.");
+    try {
+      return { json: JSON.parse(textOut), modelVersion: payload.modelVersion ?? null };
+    } catch {
+      throw new GeminiError("malformed_json", "Gemini's structured output was not valid JSON.");
+    }
+  }
+  throw new GeminiError("network", "The Gemini request exhausted its retry limit.");
+}

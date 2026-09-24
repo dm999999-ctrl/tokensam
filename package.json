@@ -1,0 +1,38 @@
+{
+  "name": "crypto-fundamentals-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/coingecko.test.mjs && node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/defillama.test.mjs && node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/dexscreener.test.mjs && node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/universe.test.mjs && node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/live-data.test.mjs && node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/refresh.test.mjs && node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/analysis.test.mjs && node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/history.test.mjs && node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/evidence-contract.test.mjs && node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/token-centric.test.mjs",
+    "coingecko:sync": "node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/sync-coingecko.mjs",
+    "defillama:sync": "node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/sync-defillama.mjs",
+    "dexscreener:sync": "node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/sync-dexscreener.mjs",
+    "metrics:calculate": "node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/calculate-metrics.mjs",
+    "refresh": "node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/refresh-data.mjs",
+    "backfill:coingecko": "node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/backfill-coingecko.mjs",
+    "backfill:defillama": "node --conditions=react-server --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/sync-defillama.mjs --history"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
+    "next": "16.3.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "recharts": "^3.10.1",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  },
+  "packageManager": "pnpm@11.19.0"
+}

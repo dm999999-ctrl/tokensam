@@ -1,0 +1,1846 @@
+{
+ "contextVersion": "2",
+ "builtAt": "2026-09-24T17:35:27.857Z",
+ "contextAsOf": "2026-09-24T17:03:31.689Z",
+ "token": {
+  "id": "bitcoin-btc",
+  "name": "Bitcoin",
+  "symbol": "BTC",
+  "chain": "Bitcoin",
+  "chainId": "bitcoin",
+  "category": "Payments",
+  "contractAddress": null,
+  "isNative": true,
+  "description": null
+ },
+ "scope": [
+  {
+   "id": "scope:coingecko",
+   "provider": "CoinGecko",
+   "mapped": true,
+   "statement": "Token-level market data as aggregated by CoinGecko across the markets it tracks (CoinGecko ID \"bitcoin\")."
+  },
+  {
+   "id": "scope:defillama",
+   "provider": "DeFiLlama",
+   "mapped": false,
+   "statement": "No curated DeFiLlama protocol mapping exists for this token, so TVL, fees, and revenue are unavailable by design. This is a coverage limitation, not evidence of zero protocol activity."
+  },
+  {
+   "id": "scope:dexscreener",
+   "provider": "DEX Screener",
+   "mapped": false,
+   "statement": "No verified DEX Screener address mapping (No canonical Bitcoin-chain DEX Screener token address is configured; bridged BTC wrappers are distinct assets.); DEX metrics are unavailable by design."
+  }
+ ],
+ "providerFreshness": [
+  {
+   "id": "fresh:coingecko",
+   "provider": "CoinGecko",
+   "state": "current",
+   "tokenDataCollectedAt": "2026-09-24T17:02:51.123Z",
+   "tokenDataAge": "33 minutes",
+   "staleAfter": "3 hours",
+   "lastSuccessfulRefreshAt": "2026-09-24T17:02:52.977Z",
+   "latestRefreshAttempt": {
+    "status": "succeeded",
+    "finishedAt": "2026-09-24T17:02:52.977Z"
+   },
+   "note": "CoinGecko data for this token was last collected 33 minutes before this context was built; it is within CoinGecko's 3 hours freshness window."
+  },
+  {
+   "id": "fresh:dexscreener",
+   "provider": "DEX Screener",
+   "state": "unavailable",
+   "tokenDataCollectedAt": null,
+   "tokenDataAge": null,
+   "staleAfter": "3 hours",
+   "lastSuccessfulRefreshAt": "2026-09-24T17:02:55.529Z",
+   "latestRefreshAttempt": {
+    "status": "succeeded",
+    "finishedAt": "2026-09-24T17:02:55.529Z"
+   },
+   "note": "No DEX Screener observations are stored for this token."
+  },
+  {
+   "id": "fresh:defillama",
+   "provider": "DeFiLlama",
+   "state": "unavailable",
+   "tokenDataCollectedAt": null,
+   "tokenDataAge": null,
+   "staleAfter": "24 hours",
+   "lastSuccessfulRefreshAt": null,
+   "latestRefreshAttempt": {
+    "status": "failed",
+    "finishedAt": "2026-09-24T17:03:31.403Z"
+   },
+   "note": "No DeFiLlama observations are stored for this token."
+  }
+ ],
+ "observations": [
+  {
+   "id": "obs:40095",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "circulating_supply",
+   "name": "Circulating supply",
+   "unit": "token",
+   "value": 20088743,
+   "status": "available",
+   "observedAt": "2026-09-24T17:00:20.000Z",
+   "collectedAt": "2026-09-24T17:02:51.123Z",
+   "window": {
+    "kind": "point_in_time",
+    "days": null,
+    "label": "Point-in-time value as of 2026-09-24T17:00:20.000Z."
+   },
+   "note": null
+  },
+  {
+   "id": "obs:40091",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "market_cap_usd",
+   "name": "Market capitalization",
+   "unit": "USD",
+   "value": 1694946521905,
+   "status": "available",
+   "observedAt": "2026-09-24T17:00:20.000Z",
+   "collectedAt": "2026-09-24T17:02:51.123Z",
+   "window": {
+    "kind": "point_in_time",
+    "days": null,
+    "label": "Point-in-time value as of 2026-09-24T17:00:20.000Z."
+   },
+   "note": null
+  },
+  {
+   "id": "obs:40097",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "maximum_supply",
+   "name": "Maximum supply",
+   "unit": "token",
+   "value": 21000000,
+   "status": "available",
+   "observedAt": "2026-09-24T17:00:20.000Z",
+   "collectedAt": "2026-09-24T17:02:51.123Z",
+   "window": {
+    "kind": "point_in_time",
+    "days": null,
+    "label": "Point-in-time value as of 2026-09-24T17:00:20.000Z."
+   },
+   "note": null
+  },
+  {
+   "id": "obs:40093",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "price_change_24h_pct",
+   "name": "24-hour price change",
+   "unit": "percent",
+   "value": 0.33979,
+   "status": "available",
+   "observedAt": "2026-09-24T17:00:20.000Z",
+   "collectedAt": "2026-09-24T17:02:51.123Z",
+   "window": {
+    "kind": "provider_rolling_window",
+    "days": 1,
+    "label": "Provider-reported rolling 24-hour window ending at 2026-09-24T17:00:20.000Z."
+   },
+   "note": null
+  },
+  {
+   "id": "obs:40094",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "price_change_7d_pct",
+   "name": "7-day price change",
+   "unit": "percent",
+   "value": 10.1548,
+   "status": "available",
+   "observedAt": "2026-09-24T17:00:20.000Z",
+   "collectedAt": "2026-09-24T17:02:51.123Z",
+   "window": {
+    "kind": "provider_rolling_window",
+    "days": 7,
+    "label": "Provider-reported rolling 7-day window ending at 2026-09-24T17:00:20.000Z."
+   },
+   "note": null
+  },
+  {
+   "id": "obs:40090",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "price_usd",
+   "name": "Price",
+   "unit": "USD",
+   "value": 84388,
+   "status": "available",
+   "observedAt": "2026-09-24T17:00:20.000Z",
+   "collectedAt": "2026-09-24T17:02:51.123Z",
+   "window": {
+    "kind": "point_in_time",
+    "days": null,
+    "label": "Point-in-time value as of 2026-09-24T17:00:20.000Z."
+   },
+   "note": null
+  },
+  {
+   "id": "obs:40096",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "total_supply",
+   "name": "Total supply",
+   "unit": "token",
+   "value": 20088781,
+   "status": "available",
+   "observedAt": "2026-09-24T17:00:20.000Z",
+   "collectedAt": "2026-09-24T17:02:51.123Z",
+   "window": {
+    "kind": "point_in_time",
+    "days": null,
+    "label": "Point-in-time value as of 2026-09-24T17:00:20.000Z."
+   },
+   "note": null
+  },
+  {
+   "id": "obs:40092",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "volume_24h_usd",
+   "name": "24-hour volume",
+   "unit": "USD",
+   "value": 39081497805,
+   "status": "available",
+   "observedAt": "2026-09-24T17:00:20.000Z",
+   "collectedAt": "2026-09-24T17:02:51.123Z",
+   "window": {
+    "kind": "provider_rolling_window",
+    "days": 1,
+    "label": "Provider-defined 24-hour window per the metric definition (\"Rolling 24-hour trading volume in US dollars.\"), as of 2026-09-24T17:00:20.000Z."
+   },
+   "note": null
+  }
+ ],
+ "calculatedMetrics": [
+  {
+   "id": "calc:3548",
+   "metricId": "dex_aggregate_liquidity_to_market_cap_pct",
+   "name": "Aggregate DEX liquidity / market cap",
+   "category": "market_structure",
+   "unit": "percent",
+   "value": null,
+   "status": "unavailable",
+   "formula": "aggregate DEX liquidity / CoinGecko market_cap_usd * 100",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Required numeric source value is unavailable.",
+   "sourceObservationIds": [
+    "obs:40091"
+   ]
+  },
+  {
+   "id": "calc:128",
+   "metricId": "dex_aggregate_liquidity_usd",
+   "name": "Aggregate DEX liquidity",
+   "category": "market_structure",
+   "unit": "USD",
+   "value": null,
+   "status": "unavailable",
+   "formula": "sum exact-address DEX pair liquidity.usd",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "No exact-address pair returned a numeric liquidity.usd value.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:127",
+   "metricId": "dex_aggregate_volume_24h_usd",
+   "name": "Aggregate DEX volume (24h)",
+   "category": "market_structure",
+   "unit": "USD",
+   "value": null,
+   "status": "unavailable",
+   "formula": "sum exact-address DEX pair volume.h24",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [
+     "Uses a provider-reported rolling 24-hour trading volume."
+    ],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "No exact-address pair returned a numeric volume.h24 value.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:134",
+   "metricId": "dex_buy_sell_ratio",
+   "name": "DEX buy / sell transaction ratio",
+   "category": "market_structure",
+   "unit": "ratio",
+   "value": null,
+   "status": "unavailable",
+   "formula": "exact-address DEX buys_24h_count / sells_24h_count",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [
+     "Uses DEX Screener's rolling 24-hour buy/sell transaction counts."
+    ],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Required input unavailable: DEX buys.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:3547",
+   "metricId": "dex_liquidity_to_market_cap_pct",
+   "name": "Primary-pair liquidity / market cap",
+   "category": "market_structure",
+   "unit": "percent",
+   "value": null,
+   "status": "unavailable",
+   "formula": "primary-pair liquidity / CoinGecko market_cap_usd * 100",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Required numeric source value is unavailable.",
+   "sourceObservationIds": [
+    "obs:40091"
+   ]
+  },
+  {
+   "id": "calc:129",
+   "metricId": "dex_primary_pair_liquidity_usd",
+   "name": "Primary-pair liquidity",
+   "category": "market_structure",
+   "unit": "USD",
+   "value": null,
+   "status": "unavailable",
+   "formula": "liquidity.usd for primary exact-address pair",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Primary pair liquidity is unavailable.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:130",
+   "metricId": "dex_primary_pair_volume_24h_usd",
+   "name": "Primary-pair volume (24h)",
+   "category": "market_structure",
+   "unit": "USD",
+   "value": null,
+   "status": "unavailable",
+   "formula": "volume.h24 for primary exact-address pair",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [
+     "Uses a provider-reported rolling 24-hour trading volume."
+    ],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Primary pair 24-hour volume is unavailable.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:133",
+   "metricId": "dex_volume_to_liquidity",
+   "name": "DEX volume / liquidity",
+   "category": "market_structure",
+   "unit": "ratio",
+   "value": null,
+   "status": "unavailable",
+   "formula": "aggregate exact-address DEX volume.h24 / aggregate exact-address DEX liquidity.usd",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [
+     "Uses a provider-reported rolling 24-hour trading volume."
+    ],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Required numeric source value is unavailable.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:137",
+   "metricId": "divergence_market_cap_up_faster_tvl",
+   "name": "Market-cap/TVL divergence: market cap grew faster",
+   "category": "divergence",
+   "unit": "boolean",
+   "value": null,
+   "status": "unavailable",
+   "formula": "market-cap growth > TVL growth on aligned intervals",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No market cap/TVL observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:136",
+   "metricId": "divergence_price_down_tvl_up",
+   "name": "Price/TVL divergence: price down, TVL up",
+   "category": "divergence",
+   "unit": "boolean",
+   "value": null,
+   "status": "unavailable",
+   "formula": "price growth < 0 AND TVL growth > 0 on aligned intervals",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No price/TVL observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:135",
+   "metricId": "divergence_price_up_tvl_down",
+   "name": "Price/TVL divergence: price up, TVL down",
+   "category": "divergence",
+   "unit": "boolean",
+   "value": null,
+   "status": "unavailable",
+   "formula": "price growth > 0 AND TVL growth < 0 on aligned intervals",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No price/TVL observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:140",
+   "metricId": "divergence_revenue_down_market_cap_up",
+   "name": "Revenue/market-cap divergence: revenue down, market cap up",
+   "category": "divergence",
+   "unit": "boolean",
+   "value": null,
+   "status": "unavailable",
+   "formula": "protocol revenue growth < 0 AND market-cap growth > 0 on aligned intervals",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No market cap/protocol revenue observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:139",
+   "metricId": "divergence_revenue_up_market_cap_down",
+   "name": "Revenue/market-cap divergence: revenue up, market cap down",
+   "category": "divergence",
+   "unit": "boolean",
+   "value": null,
+   "status": "unavailable",
+   "formula": "protocol revenue growth > 0 AND market-cap growth < 0 on aligned intervals",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No market cap/protocol revenue observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:138",
+   "metricId": "divergence_tvl_up_faster_market_cap",
+   "name": "Market-cap/TVL divergence: TVL grew faster",
+   "category": "divergence",
+   "unit": "boolean",
+   "value": null,
+   "status": "unavailable",
+   "formula": "TVL growth > market-cap growth on aligned intervals",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No market cap/TVL observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:116",
+   "metricId": "fdv_to_revenue_24h",
+   "name": "FDV / 24h protocol revenue",
+   "category": "valuation",
+   "unit": "ratio",
+   "value": null,
+   "status": "unavailable",
+   "formula": "DEX Screener primary-pair fdv_usd / DeFiLlama revenue_24h_usd",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [
+     "Uses DeFiLlama's source-reported 24-hour protocol revenue total."
+    ],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Required input unavailable: DEX Screener FDV.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:114",
+   "metricId": "fdv_to_tvl",
+   "name": "FDV / TVL",
+   "category": "valuation",
+   "unit": "ratio",
+   "value": null,
+   "status": "unavailable",
+   "formula": "DEX Screener primary-pair fdv_usd / DeFiLlama protocol tvl_usd",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Required input unavailable: DEX Screener FDV.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:120",
+   "metricId": "fees_growth_pct",
+   "name": "Protocol fees growth",
+   "category": "growth",
+   "unit": "percent",
+   "value": null,
+   "status": "unavailable",
+   "formula": "(latest DeFiLlama fees_24h_usd / previous DeFiLlama fees_24h_usd - 1) * 100",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [
+     "Uses DeFiLlama's source-reported 24-hour protocol fees total."
+    ],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "Insufficient history for DeFiLlama protocol fees; at least two distinct available observation times are required.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:126",
+   "metricId": "market_cap_change_vs_revenue_growth_pct_points",
+   "name": "Market-cap change vs revenue growth",
+   "category": "growth",
+   "unit": "percentage_points",
+   "value": null,
+   "status": "unavailable",
+   "formula": "market-cap growth percent - protocol revenue growth percent over timestamp-aligned start/end pairs",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No market cap/protocol revenue observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:125",
+   "metricId": "market_cap_change_vs_tvl_growth_pct_points",
+   "name": "Market-cap change vs TVL growth",
+   "category": "growth",
+   "unit": "percentage_points",
+   "value": null,
+   "status": "unavailable",
+   "formula": "market-cap growth percent - TVL growth percent over timestamp-aligned start/end pairs",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No market cap/TVL observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:3538",
+   "metricId": "market_cap_growth_pct",
+   "name": "Market cap growth",
+   "category": "growth",
+   "unit": "percent",
+   "value": -0.4004908611099922,
+   "status": "available",
+   "formula": "(latest CoinGecko market_cap_usd / previous CoinGecko market_cap_usd - 1) * 100",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "interval_between_latest_observations",
+    "startAt": "2026-09-24T14:28:20.000Z",
+    "endAt": "2026-09-24T17:00:20.000Z",
+    "durationHours": 2.53,
+    "providerWindows": [],
+    "label": "Change between the two most recent distinct stored observations, 2026-09-24T14:28:20.000Z to 2026-09-24T17:00:20.000Z (2.5 hours). It is not a fixed 24-hour, 7-day, or 30-day period and must not be described as one."
+   },
+   "unavailableReason": null,
+   "sourceObservationIds": [
+    "obs:40091"
+   ]
+  },
+  {
+   "id": "calc:3531",
+   "metricId": "market_cap_to_revenue_24h",
+   "name": "Market cap / 24h protocol revenue",
+   "category": "valuation",
+   "unit": "ratio",
+   "value": null,
+   "status": "unavailable",
+   "formula": "CoinGecko market_cap_usd / DeFiLlama revenue_24h_usd",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [
+     "Uses DeFiLlama's source-reported 24-hour protocol revenue total."
+    ],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Required input unavailable: DeFiLlama protocol 24-hour revenue.",
+   "sourceObservationIds": [
+    "obs:40091"
+   ]
+  },
+  {
+   "id": "calc:3529",
+   "metricId": "market_cap_to_tvl",
+   "name": "Market cap / TVL",
+   "category": "valuation",
+   "unit": "ratio",
+   "value": null,
+   "status": "unavailable",
+   "formula": "CoinGecko market_cap_usd / DeFiLlama protocol tvl_usd",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "Point-in-time value from the latest stored inputs; input observation times were not recorded for this metric."
+   },
+   "unavailableReason": "Required input unavailable: DeFiLlama protocol TVL.",
+   "sourceObservationIds": [
+    "obs:40091"
+   ]
+  },
+  {
+   "id": "calc:124",
+   "metricId": "price_change_vs_revenue_growth_pct_points",
+   "name": "Price change vs revenue growth",
+   "category": "growth",
+   "unit": "percentage_points",
+   "value": null,
+   "status": "unavailable",
+   "formula": "price growth percent - protocol revenue growth percent over timestamp-aligned start/end pairs",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No price/protocol revenue observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:123",
+   "metricId": "price_change_vs_tvl_growth_pct_points",
+   "name": "Price change vs TVL growth",
+   "category": "growth",
+   "unit": "percentage_points",
+   "value": null,
+   "status": "unavailable",
+   "formula": "price growth percent - TVL growth percent over timestamp-aligned start/end pairs",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "No price/TVL observations have end times within 24 hours.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:3537",
+   "metricId": "price_growth_pct",
+   "name": "Price growth",
+   "category": "growth",
+   "unit": "percent",
+   "value": -0.4106873111782483,
+   "status": "available",
+   "formula": "(latest CoinGecko price_usd / previous CoinGecko price_usd - 1) * 100",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "interval_between_latest_observations",
+    "startAt": "2026-09-24T14:28:20.000Z",
+    "endAt": "2026-09-24T17:00:20.000Z",
+    "durationHours": 2.53,
+    "providerWindows": [],
+    "label": "Change between the two most recent distinct stored observations, 2026-09-24T14:28:20.000Z to 2026-09-24T17:00:20.000Z (2.5 hours). It is not a fixed 24-hour, 7-day, or 30-day period and must not be described as one."
+   },
+   "unavailableReason": null,
+   "sourceObservationIds": [
+    "obs:40090"
+   ]
+  },
+  {
+   "id": "calc:119",
+   "metricId": "revenue_growth_pct",
+   "name": "Protocol revenue growth",
+   "category": "growth",
+   "unit": "percent",
+   "value": null,
+   "status": "unavailable",
+   "formula": "(latest DeFiLlama revenue_24h_usd / previous DeFiLlama revenue_24h_usd - 1) * 100",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [
+     "Uses DeFiLlama's source-reported 24-hour protocol revenue total."
+    ],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "Insufficient history for DeFiLlama protocol revenue; at least two distinct available observation times are required.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:118",
+   "metricId": "tvl_growth_pct",
+   "name": "TVL growth",
+   "category": "growth",
+   "unit": "percent",
+   "value": null,
+   "status": "unavailable",
+   "formula": "(latest DeFiLlama tvl_usd / previous DeFiLlama tvl_usd - 1) * 100",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "unavailable",
+    "startAt": null,
+    "endAt": null,
+    "durationHours": null,
+    "providerWindows": [],
+    "label": "The observation period for this change could not be established; do not attribute any time period to it."
+   },
+   "unavailableReason": "Insufficient history for DeFiLlama protocol TVL; at least two distinct available observation times are required.",
+   "sourceObservationIds": []
+  },
+  {
+   "id": "calc:3533",
+   "metricId": "volume_to_market_cap",
+   "name": "Volume / market cap",
+   "category": "valuation",
+   "unit": "ratio",
+   "value": 0.023057658339022496,
+   "status": "available",
+   "formula": "CoinGecko volume_24h_usd / CoinGecko market_cap_usd",
+   "calculatedAt": "2026-09-24T17:03:31.689Z",
+   "period": {
+    "kind": "point_in_time",
+    "startAt": "2026-09-24T17:00:20.000Z",
+    "endAt": "2026-09-24T17:00:20.000Z",
+    "durationHours": 0,
+    "providerWindows": [
+     "Uses a provider-reported rolling 24-hour trading volume."
+    ],
+    "label": "Point-in-time value; inputs observed at 2026-09-24T17:00:20.000Z."
+   },
+   "unavailableReason": null,
+   "sourceObservationIds": [
+    "obs:40091",
+    "obs:40092"
+   ]
+  }
+ ],
+ "history": [
+  {
+   "id": "hist:coingecko:price_usd",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "price_usd",
+   "unit": "USD",
+   "sampling": "Last stored observation of each UTC day within the 30 days before this context; days without stored data are absent (no interpolation).",
+   "points": [
+    {
+     "at": "2026-08-26T00:00:00.000Z",
+     "value": 78511.2331116067,
+     "sourceId": "obs:3547"
+    },
+    {
+     "at": "2026-08-27T00:00:00.000Z",
+     "value": 79018.03405750773,
+     "sourceId": "obs:3548"
+    },
+    {
+     "at": "2026-08-28T00:00:00.000Z",
+     "value": 80268.37474707834,
+     "sourceId": "obs:3549"
+    },
+    {
+     "at": "2026-08-29T00:00:00.000Z",
+     "value": 77820.76428719184,
+     "sourceId": "obs:3550"
+    },
+    {
+     "at": "2026-08-30T00:00:00.000Z",
+     "value": 78225.13950818499,
+     "sourceId": "obs:3551"
+    },
+    {
+     "at": "2026-08-31T00:00:00.000Z",
+     "value": 77658.23133225394,
+     "sourceId": "obs:3552"
+    },
+    {
+     "at": "2026-09-01T00:00:00.000Z",
+     "value": 78552.77932895812,
+     "sourceId": "obs:3553"
+    },
+    {
+     "at": "2026-09-02T00:00:00.000Z",
+     "value": 77416.44110979848,
+     "sourceId": "obs:3554"
+    },
+    {
+     "at": "2026-09-03T00:00:00.000Z",
+     "value": 77297.13347191992,
+     "sourceId": "obs:3555"
+    },
+    {
+     "at": "2026-09-04T00:00:00.000Z",
+     "value": 81264.70153038795,
+     "sourceId": "obs:3556"
+    },
+    {
+     "at": "2026-09-05T00:00:00.000Z",
+     "value": 79671.25767420157,
+     "sourceId": "obs:3557"
+    },
+    {
+     "at": "2026-09-06T00:00:00.000Z",
+     "value": 79821.69873179746,
+     "sourceId": "obs:3558"
+    },
+    {
+     "at": "2026-09-07T00:00:00.000Z",
+     "value": 80329.3478460037,
+     "sourceId": "obs:3559"
+    },
+    {
+     "at": "2026-09-08T00:00:00.000Z",
+     "value": 79093.4641898418,
+     "sourceId": "obs:3560"
+    },
+    {
+     "at": "2026-09-09T00:00:00.000Z",
+     "value": 78450.75303870205,
+     "sourceId": "obs:3561"
+    },
+    {
+     "at": "2026-09-10T00:00:00.000Z",
+     "value": 78283.06047169256,
+     "sourceId": "obs:3562"
+    },
+    {
+     "at": "2026-09-11T00:00:00.000Z",
+     "value": 76554.98664973286,
+     "sourceId": "obs:3563"
+    },
+    {
+     "at": "2026-09-12T00:00:00.000Z",
+     "value": 77203.53444805603,
+     "sourceId": "obs:3564"
+    },
+    {
+     "at": "2026-09-13T00:00:00.000Z",
+     "value": 77261.62722069985,
+     "sourceId": "obs:3565"
+    },
+    {
+     "at": "2026-09-14T00:00:00.000Z",
+     "value": 76819.04496746542,
+     "sourceId": "obs:3566"
+    },
+    {
+     "at": "2026-09-15T00:00:00.000Z",
+     "value": 78173.35158344489,
+     "sourceId": "obs:3567"
+    },
+    {
+     "at": "2026-09-16T00:00:00.000Z",
+     "value": 75590.24471973324,
+     "sourceId": "obs:3568"
+    },
+    {
+     "at": "2026-09-17T23:00:00.000Z",
+     "value": 76353.2776230547,
+     "sourceId": "obs:3583"
+    },
+    {
+     "at": "2026-09-18T23:00:00.000Z",
+     "value": 81124.11668162764,
+     "sourceId": "obs:3606"
+    },
+    {
+     "at": "2026-09-19T23:00:00.000Z",
+     "value": 81226.58014364234,
+     "sourceId": "obs:3629"
+    },
+    {
+     "at": "2026-09-20T23:00:00.000Z",
+     "value": 81197.32632288539,
+     "sourceId": "obs:3652"
+    },
+    {
+     "at": "2026-09-21T23:00:00.000Z",
+     "value": 86421.95454677695,
+     "sourceId": "obs:3675"
+    },
+    {
+     "at": "2026-09-22T23:00:00.000Z",
+     "value": 86120.19453430604,
+     "sourceId": "obs:3698"
+    },
+    {
+     "at": "2026-09-23T23:00:00.000Z",
+     "value": 84550.14189817327,
+     "sourceId": "obs:3721"
+    },
+    {
+     "at": "2026-09-24T17:00:20.000Z",
+     "value": 84388,
+     "sourceId": "obs:40090"
+    }
+   ],
+   "coverage": {
+    "24H": {
+     "requestedPeriod": "24H",
+     "windowStart": "2026-09-23T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 23,
+     "coverageStart": "2026-09-23T18:00:00.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 23.01,
+     "coverageLabel": "23 observations spanning 23 hours",
+     "unavailableReason": null,
+     "coversRequestedWindow": true
+    },
+    "7D": {
+     "requestedPeriod": "7D",
+     "windowStart": "2026-09-17T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 169,
+     "coverageStart": "2026-09-17T18:00:00.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 167.01,
+     "coverageLabel": "169 observations spanning 7 days",
+     "unavailableReason": null,
+     "coversRequestedWindow": true
+    },
+    "30D": {
+     "requestedPeriod": "30D",
+     "windowStart": "2026-08-25T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 193,
+     "coverageStart": "2026-08-26T00:00:00.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 713.01,
+     "coverageLabel": "193 observations spanning 29.7 days",
+     "unavailableReason": null,
+     "coversRequestedWindow": true
+    }
+   },
+   "summary": {
+    "firstAt": "2026-08-26T00:00:00.000Z",
+    "firstValue": 78511.2331116067,
+    "lastAt": "2026-09-24T17:00:20.000Z",
+    "lastValue": 84388,
+    "span": "29.7 days",
+    "changePct": 7.49,
+    "label": "Change from the first to the last stored daily point: 2026-08-26T00:00:00.000Z to 2026-09-24T17:00:20.000Z (29.7 days, 30 points). This spans exactly these timestamps, not a named period."
+   }
+  },
+  {
+   "id": "hist:coingecko:market_cap_usd",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "market_cap_usd",
+   "unit": "USD",
+   "sampling": "Last stored observation of each UTC day within the 30 days before this context; days without stored data are absent (no interpolation).",
+   "points": [
+    {
+     "at": "2026-08-26T00:00:00.000Z",
+     "value": 1576126744181.299,
+     "sourceId": "obs:3796"
+    },
+    {
+     "at": "2026-08-27T00:00:00.000Z",
+     "value": 1586333891398.6638,
+     "sourceId": "obs:3797"
+    },
+    {
+     "at": "2026-08-28T00:00:00.000Z",
+     "value": 1611476640675.1921,
+     "sourceId": "obs:3798"
+    },
+    {
+     "at": "2026-08-29T00:00:00.000Z",
+     "value": 1562365617022.764,
+     "sourceId": "obs:3799"
+    },
+    {
+     "at": "2026-08-30T00:00:00.000Z",
+     "value": 1570516817114.2285,
+     "sourceId": "obs:3800"
+    },
+    {
+     "at": "2026-08-31T00:00:00.000Z",
+     "value": 1559173121661.4866,
+     "sourceId": "obs:3801"
+    },
+    {
+     "at": "2026-09-01T00:00:00.000Z",
+     "value": 1577171863083.2737,
+     "sourceId": "obs:3802"
+    },
+    {
+     "at": "2026-09-02T00:00:00.000Z",
+     "value": 1554389755370.4558,
+     "sourceId": "obs:3803"
+    },
+    {
+     "at": "2026-09-03T00:00:00.000Z",
+     "value": 1552036311658.5237,
+     "sourceId": "obs:3804"
+    },
+    {
+     "at": "2026-09-04T00:00:00.000Z",
+     "value": 1631720768263.5881,
+     "sourceId": "obs:3805"
+    },
+    {
+     "at": "2026-09-05T00:00:00.000Z",
+     "value": 1599775191734.4382,
+     "sourceId": "obs:3806"
+    },
+    {
+     "at": "2026-09-06T00:00:00.000Z",
+     "value": 1602832641649.6875,
+     "sourceId": "obs:3807"
+    },
+    {
+     "at": "2026-09-07T00:00:00.000Z",
+     "value": 1613068250021.681,
+     "sourceId": "obs:3808"
+    },
+    {
+     "at": "2026-09-08T00:00:00.000Z",
+     "value": 1588284950144.5952,
+     "sourceId": "obs:3809"
+    },
+    {
+     "at": "2026-09-09T00:00:00.000Z",
+     "value": 1575415387009.9504,
+     "sourceId": "obs:3810"
+    },
+    {
+     "at": "2026-09-10T00:00:00.000Z",
+     "value": 1572081359789.2556,
+     "sourceId": "obs:3811"
+    },
+    {
+     "at": "2026-09-11T00:00:00.000Z",
+     "value": 1537413069633.6875,
+     "sourceId": "obs:3812"
+    },
+    {
+     "at": "2026-09-12T00:00:00.000Z",
+     "value": 1550479277152.1194,
+     "sourceId": "obs:3813"
+    },
+    {
+     "at": "2026-09-13T00:00:00.000Z",
+     "value": 1551683581240.4167,
+     "sourceId": "obs:3814"
+    },
+    {
+     "at": "2026-09-14T00:00:00.000Z",
+     "value": 1542831471374.2715,
+     "sourceId": "obs:3815"
+    },
+    {
+     "at": "2026-09-15T00:00:00.000Z",
+     "value": 1570066504182.9238,
+     "sourceId": "obs:3816"
+    },
+    {
+     "at": "2026-09-16T00:00:00.000Z",
+     "value": 1518224622698.2222,
+     "sourceId": "obs:3817"
+    },
+    {
+     "at": "2026-09-17T23:00:00.000Z",
+     "value": 1533613075077.1038,
+     "sourceId": "obs:3832"
+    },
+    {
+     "at": "2026-09-18T23:00:00.000Z",
+     "value": 1629479775441.0432,
+     "sourceId": "obs:3855"
+    },
+    {
+     "at": "2026-09-19T23:00:00.000Z",
+     "value": 1631569073776.492,
+     "sourceId": "obs:3878"
+    },
+    {
+     "at": "2026-09-20T23:00:00.000Z",
+     "value": 1631023360630.7053,
+     "sourceId": "obs:3901"
+    },
+    {
+     "at": "2026-09-21T23:00:00.000Z",
+     "value": 1736009308466.0186,
+     "sourceId": "obs:3924"
+    },
+    {
+     "at": "2026-09-22T23:00:00.000Z",
+     "value": 1729985395891.754,
+     "sourceId": "obs:3947"
+    },
+    {
+     "at": "2026-09-23T23:00:00.000Z",
+     "value": 1698478846060.244,
+     "sourceId": "obs:3970"
+    },
+    {
+     "at": "2026-09-24T17:00:20.000Z",
+     "value": 1694946521905,
+     "sourceId": "obs:40091"
+    }
+   ],
+   "coverage": {
+    "24H": {
+     "requestedPeriod": "24H",
+     "windowStart": "2026-09-23T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 23,
+     "coverageStart": "2026-09-23T18:00:00.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 23.01,
+     "coverageLabel": "23 observations spanning 23 hours",
+     "unavailableReason": null,
+     "coversRequestedWindow": true
+    },
+    "7D": {
+     "requestedPeriod": "7D",
+     "windowStart": "2026-09-17T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 169,
+     "coverageStart": "2026-09-17T18:00:00.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 167.01,
+     "coverageLabel": "169 observations spanning 7 days",
+     "unavailableReason": null,
+     "coversRequestedWindow": true
+    },
+    "30D": {
+     "requestedPeriod": "30D",
+     "windowStart": "2026-08-25T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 193,
+     "coverageStart": "2026-08-26T00:00:00.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 713.01,
+     "coverageLabel": "193 observations spanning 29.7 days",
+     "unavailableReason": null,
+     "coversRequestedWindow": true
+    }
+   },
+   "summary": {
+    "firstAt": "2026-08-26T00:00:00.000Z",
+    "firstValue": 1576126744181.299,
+    "lastAt": "2026-09-24T17:00:20.000Z",
+    "lastValue": 1694946521905,
+    "span": "29.7 days",
+    "changePct": 7.54,
+    "label": "Change from the first to the last stored daily point: 2026-08-26T00:00:00.000Z to 2026-09-24T17:00:20.000Z (29.7 days, 30 points). This spans exactly these timestamps, not a named period."
+   }
+  },
+  {
+   "id": "hist:coingecko:volume_24h_usd",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "volume_24h_usd",
+   "unit": "USD",
+   "sampling": "Last stored observation of each UTC day within the 30 days before this context; days without stored data are absent (no interpolation).",
+   "points": [
+    {
+     "at": "2026-08-26T00:00:00.000Z",
+     "value": 42844457202.96398,
+     "sourceId": "obs:4045"
+    },
+    {
+     "at": "2026-08-27T00:00:00.000Z",
+     "value": 28508064828.85475,
+     "sourceId": "obs:4046"
+    },
+    {
+     "at": "2026-08-28T00:00:00.000Z",
+     "value": 33271382525.81097,
+     "sourceId": "obs:4047"
+    },
+    {
+     "at": "2026-08-29T00:00:00.000Z",
+     "value": 36320805552.04175,
+     "sourceId": "obs:4048"
+    },
+    {
+     "at": "2026-08-30T00:00:00.000Z",
+     "value": 15083877886.534477,
+     "sourceId": "obs:4049"
+    },
+    {
+     "at": "2026-08-31T00:00:00.000Z",
+     "value": 18928816149.23794,
+     "sourceId": "obs:4050"
+    },
+    {
+     "at": "2026-09-01T00:00:00.000Z",
+     "value": 29723745445.38036,
+     "sourceId": "obs:4051"
+    },
+    {
+     "at": "2026-09-02T00:00:00.000Z",
+     "value": 30118812390.414185,
+     "sourceId": "obs:4052"
+    },
+    {
+     "at": "2026-09-03T00:00:00.000Z",
+     "value": 26617233991.00716,
+     "sourceId": "obs:4053"
+    },
+    {
+     "at": "2026-09-04T00:00:00.000Z",
+     "value": 39842820911.97599,
+     "sourceId": "obs:4054"
+    },
+    {
+     "at": "2026-09-05T00:00:00.000Z",
+     "value": 35605666977.42856,
+     "sourceId": "obs:4055"
+    },
+    {
+     "at": "2026-09-06T00:00:00.000Z",
+     "value": 18822345309.3012,
+     "sourceId": "obs:4056"
+    },
+    {
+     "at": "2026-09-07T00:00:00.000Z",
+     "value": 19671698954.25346,
+     "sourceId": "obs:4057"
+    },
+    {
+     "at": "2026-09-08T00:00:00.000Z",
+     "value": 23156361224.106297,
+     "sourceId": "obs:4058"
+    },
+    {
+     "at": "2026-09-09T00:00:00.000Z",
+     "value": 36832978946.46288,
+     "sourceId": "obs:4059"
+    },
+    {
+     "at": "2026-09-10T00:00:00.000Z",
+     "value": 34938279858.59001,
+     "sourceId": "obs:4060"
+    },
+    {
+     "at": "2026-09-11T00:00:00.000Z",
+     "value": 30257901047.74022,
+     "sourceId": "obs:4061"
+    },
+    {
+     "at": "2026-09-12T00:00:00.000Z",
+     "value": 35407367571.01674,
+     "sourceId": "obs:4062"
+    },
+    {
+     "at": "2026-09-13T00:00:00.000Z",
+     "value": 15195615506.929926,
+     "sourceId": "obs:4063"
+    },
+    {
+     "at": "2026-09-14T00:00:00.000Z",
+     "value": 16138951580.829597,
+     "sourceId": "obs:4064"
+    },
+    {
+     "at": "2026-09-15T00:00:00.000Z",
+     "value": 32369566520.9512,
+     "sourceId": "obs:4065"
+    },
+    {
+     "at": "2026-09-16T00:00:00.000Z",
+     "value": 39803154169.39753,
+     "sourceId": "obs:4066"
+    },
+    {
+     "at": "2026-09-17T23:00:00.000Z",
+     "value": 24063278814.275494,
+     "sourceId": "obs:4081"
+    },
+    {
+     "at": "2026-09-18T23:00:00.000Z",
+     "value": 44526837878.17969,
+     "sourceId": "obs:4104"
+    },
+    {
+     "at": "2026-09-19T23:00:00.000Z",
+     "value": 24233577186.704716,
+     "sourceId": "obs:4127"
+    },
+    {
+     "at": "2026-09-20T23:00:00.000Z",
+     "value": 23889450696.689007,
+     "sourceId": "obs:4150"
+    },
+    {
+     "at": "2026-09-21T23:00:00.000Z",
+     "value": 60589325104.24097,
+     "sourceId": "obs:4173"
+    },
+    {
+     "at": "2026-09-22T23:00:00.000Z",
+     "value": 42873504200.62065,
+     "sourceId": "obs:4196"
+    },
+    {
+     "at": "2026-09-23T23:00:00.000Z",
+     "value": 44237076845.62518,
+     "sourceId": "obs:4219"
+    },
+    {
+     "at": "2026-09-24T17:00:20.000Z",
+     "value": 39081497805,
+     "sourceId": "obs:40092"
+    }
+   ],
+   "coverage": {
+    "24H": {
+     "requestedPeriod": "24H",
+     "windowStart": "2026-09-23T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 23,
+     "coverageStart": "2026-09-23T18:00:00.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 23.01,
+     "coverageLabel": "23 observations spanning 23 hours",
+     "unavailableReason": null,
+     "coversRequestedWindow": true
+    },
+    "7D": {
+     "requestedPeriod": "7D",
+     "windowStart": "2026-09-17T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 169,
+     "coverageStart": "2026-09-17T18:00:00.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 167.01,
+     "coverageLabel": "169 observations spanning 7 days",
+     "unavailableReason": null,
+     "coversRequestedWindow": true
+    },
+    "30D": {
+     "requestedPeriod": "30D",
+     "windowStart": "2026-08-25T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 193,
+     "coverageStart": "2026-08-26T00:00:00.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 713.01,
+     "coverageLabel": "193 observations spanning 29.7 days",
+     "unavailableReason": null,
+     "coversRequestedWindow": true
+    }
+   },
+   "summary": {
+    "firstAt": "2026-08-26T00:00:00.000Z",
+    "firstValue": 42844457202.96398,
+    "lastAt": "2026-09-24T17:00:20.000Z",
+    "lastValue": 39081497805,
+    "span": "29.7 days",
+    "changePct": -8.78,
+    "label": "Change from the first to the last stored daily point: 2026-08-26T00:00:00.000Z to 2026-09-24T17:00:20.000Z (29.7 days, 30 points). This spans exactly these timestamps, not a named period."
+   }
+  },
+  {
+   "id": "hist:coingecko:circulating_supply",
+   "provider": "CoinGecko",
+   "scope": "token-level, CoinGecko aggregate (see scope:coingecko)",
+   "metric": "circulating_supply",
+   "unit": "token",
+   "sampling": "Last stored observation of each UTC day within the 30 days before this context; days without stored data are absent (no interpolation).",
+   "points": [
+    {
+     "at": "2026-09-23T17:27:30.000Z",
+     "value": 20088325,
+     "sourceId": "obs:580"
+    },
+    {
+     "at": "2026-09-24T17:00:20.000Z",
+     "value": 20088743,
+     "sourceId": "obs:40095"
+    }
+   ],
+   "coverage": {
+    "24H": {
+     "requestedPeriod": "24H",
+     "windowStart": "2026-09-23T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 2,
+     "coverageStart": "2026-09-24T14:28:20.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 2.53,
+     "coverageLabel": "2 observations spanning 2.5 hours",
+     "unavailableReason": null,
+     "coversRequestedWindow": false
+    },
+    "7D": {
+     "requestedPeriod": "7D",
+     "windowStart": "2026-09-17T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 4,
+     "coverageStart": "2026-09-23T12:45:10.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 28.25,
+     "coverageLabel": "4 observations spanning 28.3 hours",
+     "unavailableReason": null,
+     "coversRequestedWindow": false
+    },
+    "30D": {
+     "requestedPeriod": "30D",
+     "windowStart": "2026-08-25T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "available",
+     "observationCount": 4,
+     "coverageStart": "2026-09-23T12:45:10.000Z",
+     "coverageEnd": "2026-09-24T17:00:20.000Z",
+     "coverageHours": 28.25,
+     "coverageLabel": "4 observations spanning 28.3 hours",
+     "unavailableReason": null,
+     "coversRequestedWindow": false
+    }
+   },
+   "summary": {
+    "firstAt": "2026-09-23T17:27:30.000Z",
+    "firstValue": 20088325,
+    "lastAt": "2026-09-24T17:00:20.000Z",
+    "lastValue": 20088743,
+    "span": "23.5 hours",
+    "changePct": 0,
+    "label": "Change from the first to the last stored daily point: 2026-09-23T17:27:30.000Z to 2026-09-24T17:00:20.000Z (23.5 hours, 2 points). This spans exactly these timestamps, not a named period."
+   }
+  },
+  {
+   "id": "hist:defillama:tvl_usd",
+   "provider": "DeFiLlama",
+   "scope": "protocol-level (see scope:defillama)",
+   "metric": "tvl_usd",
+   "unit": "USD",
+   "sampling": "Last stored observation of each UTC day within the 30 days before this context; days without stored data are absent (no interpolation).",
+   "points": [],
+   "coverage": {
+    "24H": {
+     "requestedPeriod": "24H",
+     "windowStart": "2026-09-23T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "unavailable",
+     "observationCount": 0,
+     "coverageStart": null,
+     "coverageEnd": null,
+     "coverageHours": null,
+     "coverageLabel": "No stored observations",
+     "unavailableReason": "No stored observations fall in the requested 24H window.",
+     "coversRequestedWindow": false
+    },
+    "7D": {
+     "requestedPeriod": "7D",
+     "windowStart": "2026-09-17T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "unavailable",
+     "observationCount": 0,
+     "coverageStart": null,
+     "coverageEnd": null,
+     "coverageHours": null,
+     "coverageLabel": "No stored observations",
+     "unavailableReason": "No stored observations fall in the requested 7D window.",
+     "coversRequestedWindow": false
+    },
+    "30D": {
+     "requestedPeriod": "30D",
+     "windowStart": "2026-08-25T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "unavailable",
+     "observationCount": 0,
+     "coverageStart": null,
+     "coverageEnd": null,
+     "coverageHours": null,
+     "coverageLabel": "No stored observations",
+     "unavailableReason": "No stored observations fall in the requested 30D window.",
+     "coversRequestedWindow": false
+    }
+   },
+   "summary": null
+  },
+  {
+   "id": "hist:defillama:fees_24h_usd",
+   "provider": "DeFiLlama",
+   "scope": "protocol-level (see scope:defillama)",
+   "metric": "fees_24h_usd",
+   "unit": "USD",
+   "sampling": "Last stored observation of each UTC day within the 30 days before this context; days without stored data are absent (no interpolation).",
+   "points": [],
+   "coverage": {
+    "24H": {
+     "requestedPeriod": "24H",
+     "windowStart": "2026-09-23T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "unavailable",
+     "observationCount": 0,
+     "coverageStart": null,
+     "coverageEnd": null,
+     "coverageHours": null,
+     "coverageLabel": "No stored observations",
+     "unavailableReason": "No stored observations fall in the requested 24H window.",
+     "coversRequestedWindow": false
+    },
+    "7D": {
+     "requestedPeriod": "7D",
+     "windowStart": "2026-09-17T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "unavailable",
+     "observationCount": 0,
+     "coverageStart": null,
+     "coverageEnd": null,
+     "coverageHours": null,
+     "coverageLabel": "No stored observations",
+     "unavailableReason": "No stored observations fall in the requested 7D window.",
+     "coversRequestedWindow": false
+    },
+    "30D": {
+     "requestedPeriod": "30D",
+     "windowStart": "2026-08-25T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "unavailable",
+     "observationCount": 0,
+     "coverageStart": null,
+     "coverageEnd": null,
+     "coverageHours": null,
+     "coverageLabel": "No stored observations",
+     "unavailableReason": "No stored observations fall in the requested 30D window.",
+     "coversRequestedWindow": false
+    }
+   },
+   "summary": null
+  },
+  {
+   "id": "hist:defillama:revenue_24h_usd",
+   "provider": "DeFiLlama",
+   "scope": "protocol-level (see scope:defillama)",
+   "metric": "revenue_24h_usd",
+   "unit": "USD",
+   "sampling": "Last stored observation of each UTC day within the 30 days before this context; days without stored data are absent (no interpolation).",
+   "points": [],
+   "coverage": {
+    "24H": {
+     "requestedPeriod": "24H",
+     "windowStart": "2026-09-23T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "unavailable",
+     "observationCount": 0,
+     "coverageStart": null,
+     "coverageEnd": null,
+     "coverageHours": null,
+     "coverageLabel": "No stored observations",
+     "unavailableReason": "No stored observations fall in the requested 24H window.",
+     "coversRequestedWindow": false
+    },
+    "7D": {
+     "requestedPeriod": "7D",
+     "windowStart": "2026-09-17T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "unavailable",
+     "observationCount": 0,
+     "coverageStart": null,
+     "coverageEnd": null,
+     "coverageHours": null,
+     "coverageLabel": "No stored observations",
+     "unavailableReason": "No stored observations fall in the requested 7D window.",
+     "coversRequestedWindow": false
+    },
+    "30D": {
+     "requestedPeriod": "30D",
+     "windowStart": "2026-08-25T17:35:27.857Z",
+     "windowEnd": "2026-09-24T17:35:27.857Z",
+     "status": "unavailable",
+     "observationCount": 0,
+     "coverageStart": null,
+     "coverageEnd": null,
+     "coverageHours": null,
+     "coverageLabel": "No stored observations",
+     "unavailableReason": "No stored observations fall in the requested 30D window.",
+     "coversRequestedWindow": false
+    }
+   },
+   "summary": null
+  }
+ ],
+ "unavailable": [
+  {
+   "sourceId": "calc:3548",
+   "item": "Calculated: Aggregate DEX liquidity / market cap",
+   "reason": "Required numeric source value is unavailable."
+  },
+  {
+   "sourceId": "calc:128",
+   "item": "Calculated: Aggregate DEX liquidity",
+   "reason": "No exact-address pair returned a numeric liquidity.usd value."
+  },
+  {
+   "sourceId": "calc:127",
+   "item": "Calculated: Aggregate DEX volume (24h)",
+   "reason": "No exact-address pair returned a numeric volume.h24 value."
+  },
+  {
+   "sourceId": "calc:134",
+   "item": "Calculated: DEX buy / sell transaction ratio",
+   "reason": "Required input unavailable: DEX buys."
+  },
+  {
+   "sourceId": "calc:3547",
+   "item": "Calculated: Primary-pair liquidity / market cap",
+   "reason": "Required numeric source value is unavailable."
+  },
+  {
+   "sourceId": "calc:129",
+   "item": "Calculated: Primary-pair liquidity",
+   "reason": "Primary pair liquidity is unavailable."
+  },
+  {
+   "sourceId": "calc:130",
+   "item": "Calculated: Primary-pair volume (24h)",
+   "reason": "Primary pair 24-hour volume is unavailable."
+  },
+  {
+   "sourceId": "calc:133",
+   "item": "Calculated: DEX volume / liquidity",
+   "reason": "Required numeric source value is unavailable."
+  },
+  {
+   "sourceId": "calc:137",
+   "item": "Calculated: Market-cap/TVL divergence: market cap grew faster",
+   "reason": "No market cap/TVL observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:136",
+   "item": "Calculated: Price/TVL divergence: price down, TVL up",
+   "reason": "No price/TVL observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:135",
+   "item": "Calculated: Price/TVL divergence: price up, TVL down",
+   "reason": "No price/TVL observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:140",
+   "item": "Calculated: Revenue/market-cap divergence: revenue down, market cap up",
+   "reason": "No market cap/protocol revenue observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:139",
+   "item": "Calculated: Revenue/market-cap divergence: revenue up, market cap down",
+   "reason": "No market cap/protocol revenue observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:138",
+   "item": "Calculated: Market-cap/TVL divergence: TVL grew faster",
+   "reason": "No market cap/TVL observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:116",
+   "item": "Calculated: FDV / 24h protocol revenue",
+   "reason": "Required input unavailable: DEX Screener FDV."
+  },
+  {
+   "sourceId": "calc:114",
+   "item": "Calculated: FDV / TVL",
+   "reason": "Required input unavailable: DEX Screener FDV."
+  },
+  {
+   "sourceId": "calc:120",
+   "item": "Calculated: Protocol fees growth",
+   "reason": "Insufficient history for DeFiLlama protocol fees; at least two distinct available observation times are required."
+  },
+  {
+   "sourceId": "calc:126",
+   "item": "Calculated: Market-cap change vs revenue growth",
+   "reason": "No market cap/protocol revenue observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:125",
+   "item": "Calculated: Market-cap change vs TVL growth",
+   "reason": "No market cap/TVL observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:3531",
+   "item": "Calculated: Market cap / 24h protocol revenue",
+   "reason": "Required input unavailable: DeFiLlama protocol 24-hour revenue."
+  },
+  {
+   "sourceId": "calc:3529",
+   "item": "Calculated: Market cap / TVL",
+   "reason": "Required input unavailable: DeFiLlama protocol TVL."
+  },
+  {
+   "sourceId": "calc:124",
+   "item": "Calculated: Price change vs revenue growth",
+   "reason": "No price/protocol revenue observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:123",
+   "item": "Calculated: Price change vs TVL growth",
+   "reason": "No price/TVL observations have end times within 24 hours."
+  },
+  {
+   "sourceId": "calc:119",
+   "item": "Calculated: Protocol revenue growth",
+   "reason": "Insufficient history for DeFiLlama protocol revenue; at least two distinct available observation times are required."
+  },
+  {
+   "sourceId": "calc:118",
+   "item": "Calculated: TVL growth",
+   "reason": "Insufficient history for DeFiLlama protocol TVL; at least two distinct available observation times are required."
+  },
+  {
+   "sourceId": "hist:defillama:tvl_usd",
+   "item": "DeFiLlama tvl_usd history",
+   "reason": "No stored observations in the history window."
+  },
+  {
+   "sourceId": "hist:defillama:fees_24h_usd",
+   "item": "DeFiLlama fees_24h_usd history",
+   "reason": "No stored observations in the history window."
+  },
+  {
+   "sourceId": "hist:defillama:revenue_24h_usd",
+   "item": "DeFiLlama revenue_24h_usd history",
+   "reason": "No stored observations in the history window."
+  }
+ ]
+}
