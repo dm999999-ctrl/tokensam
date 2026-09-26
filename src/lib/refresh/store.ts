@@ -30,6 +30,20 @@ export interface RefreshStore {
 const STEPS: RefreshStep[] = ["coingecko", "defillama", "dexscreener", "defillama_coins", "metrics"];
 const UNIQUE_VIOLATION = "23505";
 
+// TEMPORARY diagnostic logging for the acquireRun 500 investigation. Logs only the
+// Supabase error's own code/message/details/hint — never headers, secrets, or env vars.
+// Remove once the cause is confirmed.
+function logSupabaseError(operation: string, error: { code?: string; message?: string; details?: string; hint?: string } | null): void {
+  if (!error) return;
+  console.error("[diagnostic] acquireRun operation failed", {
+    operation,
+    code: error.code ?? null,
+    message: error.message ?? null,
+    details: error.details ?? null,
+    hint: error.hint ?? null,
+  });
+}
+
 function fail(error: { message: string } | null, action: string): void {
   if (error) throw new Error(`Supabase ${action} failed: ${error.message}`);
 }
@@ -43,18 +57,22 @@ export class SupabaseRefreshStore implements RefreshStore {
 
   async acquireRun(trigger: RefreshTrigger, now: Date, leaseMs: number): Promise<number | null> {
     // Release a lock left behind by a run that crashed or was killed mid-flight.
+    console.log("[diagnostic] acquireRun: about to run expire-abandoned-runs UPDATE");
     const { error: expireError } = await this.client.from("data_refresh_runs")
       .update({ status: "failed", finished_at: now.toISOString(), error: "Run abandoned: its lease expired before it finished." })
       .eq("status", "running")
       .lt("lease_expires_at", now.toISOString());
+    logSupabaseError("expire_abandoned_refresh_runs", expireError as { code?: string; message?: string; details?: string; hint?: string } | null);
     fail(expireError, "expire abandoned refresh runs");
 
+    console.log("[diagnostic] acquireRun: about to run data_refresh_runs INSERT");
     const { data, error } = await this.client.from("data_refresh_runs")
       .insert({ trigger, status: "running", started_at: now.toISOString(), lease_expires_at: new Date(now.getTime() + leaseMs).toISOString() })
       .select("id")
       .single();
     // The partial unique index permits a single 'running' row: a conflict means busy.
     if (error && (error as { code?: string }).code === UNIQUE_VIOLATION) return null;
+    logSupabaseError("start_refresh_run", error as { code?: string; message?: string; details?: string; hint?: string } | null);
     fail(error, "start refresh run");
     return (data as { id: number }).id;
   }
