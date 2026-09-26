@@ -65,11 +65,11 @@ const request = { systemInstruction: SYSTEM_INSTRUCTION, userText: buildUserCont
 
 // ---- Mocked provider responses, scripted per host ----
 
-const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 const chatOk = (report = validReport(), model = "served-model") => () => json({ id: "gen-x", model, choices: [{ finish_reason: "stop", message: { content: typeof report === "string" ? report : JSON.stringify(report) } }], usage: { prompt_tokens: 21000, completion_tokens: 4000, completion_tokens_details: { reasoning_tokens: 900 } } });
 const geminiOk = (report = validReport()) => () => json({ candidates: [{ content: { parts: [{ text: JSON.stringify(report) }] }, finishReason: "STOP" }], modelVersion: "gemini-served", usageMetadata: { promptTokenCount: 21000, candidatesTokenCount: 3000, thoughtsTokenCount: 800 } });
 const orOk = (report = validReport()) => () => json({ id: "gen-or", model: "vendor/model:free", provider: "Upstream", choices: [{ finish_reason: "stop", message: { content: JSON.stringify(report) } }], usage: { prompt_tokens: 21500, completion_tokens: 5000 } });
-const http = (code, message = `upstream ${RAW_ERROR} ${Object.values(KEYS).join(" ")}`) => () => json({ error: { code, message } }, code);
+const http = (code, message = `upstream ${RAW_ERROR} ${Object.values(KEYS).join(" ")}`, headers = {}) => () => json({ error: { code, message } }, code, headers);
 const timeout = () => () => { throw Object.assign(new Error("aborted"), { name: "TimeoutError" }); };
 const network = () => () => { throw new TypeError("fetch failed"); };
 
@@ -88,13 +88,15 @@ function scripted(script) {
   return { fetchImpl, calls };
 }
 
-async function route(script, { env = ENV, health = createProviderHealth(), clock, deadlineAt, events = [] } = {}) {
+const instantSleep = () => Promise.resolve();
+
+async function route(script, { env = ENV, health = createProviderHealth(), clock, deadlineAt, events = [], sleep = instantSleep } = {}) {
   const { fetchImpl, calls } = scripted(script);
   const now = clock ?? Date.now;
   try {
     const result = await routeReport({
       request, providers: buildProviders(env), priority: providerPriority(env), allowedTiers: allowedFreeTiers(env),
-      deadlineAt: deadlineAt ?? now() + 240_000, validate, health, clock: now, fetchImpl,
+      deadlineAt: deadlineAt ?? now() + 240_000, validate, health, clock: now, fetchImpl, sleep,
       diagnostics: { runId: "test-run", sink: (event) => events.push(event) },
     });
     return { result, calls, health, events };
@@ -121,10 +123,10 @@ test("1. primary provider (Qwen) success: one request, native JSON schema, valid
   assert.deepEqual(result.attempt.usage, { inputTokens: 21000, outputTokens: 4000, reasoningTokens: 900 });
 });
 
-test("2-5. primary 503, 429, timeout, and network error are transient: one request, cooldown, next provider", async () => {
+test("2-5. primary 503, 429, timeout, and network error are transient: one bounded in-adapter retry, then cooldown, next provider", async () => {
   for (const failure of [http(503), http(429), timeout(), network()]) {
-    const { result, calls, health } = await route({ qwen: [failure], mistral: [chatOk()] });
-    assert.equal(calls.qwen.length, 1, "no retry on the failing provider");
+    const { result, calls, health } = await route({ qwen: [failure, failure], mistral: [chatOk()] });
+    assert.equal(calls.qwen.length, 2, "one bounded retry (never indefinite) before falling back");
     assert.equal(result.provider.id, "mistral");
     assert.equal(result.attempts.find((item) => item.providerId === "qwen").category, "transient");
     assert.equal(health.get("qwen", Date.now()).status, "cooldown");
@@ -171,7 +173,7 @@ test("12-13. cooldown blocks requests; after it ends a probe is allowed; success
   let now = 1_000_000;
   const clock = () => now;
   const health = createProviderHealth();
-  await route({ qwen: [http(503)], mistral: [chatOk()] }, { health, clock });
+  await route({ qwen: [http(503), http(503)], mistral: [chatOk()] }, { health, clock });
   assert.equal(health.get("qwen", now).available, false);
 
   const during = await route({ mistral: [chatOk()] }, { health, clock });
@@ -180,8 +182,8 @@ test("12-13. cooldown blocks requests; after it ends a probe is allowed; success
 
   now += COOLDOWN_POLICY.transientBaseMs + 1;
   assert.equal(health.get("qwen", now).probing, true);
-  const failedProbe = await route({ qwen: [http(503)], mistral: [chatOk()] }, { health, clock });
-  assert.equal(failedProbe.calls.qwen.length, 1, "one probe request");
+  const failedProbe = await route({ qwen: [http(503), http(503)], mistral: [chatOk()] }, { health, clock });
+  assert.equal(failedProbe.calls.qwen.length, 2, "the probe still gets its one bounded in-adapter retry before failing again");
   assert.equal(health.get("qwen", now).until, now + COOLDOWN_POLICY.transientBaseMs * 2, "a failed probe doubles the cooldown");
 
   now += COOLDOWN_POLICY.transientBaseMs * 2 + 1;
@@ -248,10 +250,11 @@ test("17. one overall deadline: each attempt gets only the remaining budget; not
   const slow = () => { now += 85_000; return json({ error: { code: 503 } }, 503); };
   const { error } = await route({ qwen: [slow], mistral: [chatOk()] }, { clock, deadlineAt, events });
   const [qwenAttempt] = error.attempts.filter((item) => item.action === "attempted");
-  // Four providers are actually eligible here (qwen, mistral, gemini, openrouter; hunyuan/glm/groq/siliconflow
-  // are all unconfigured in this env): the first provider gets min(its cap, remaining, a fair 1/4 share),
-  // not the whole 100s remaining — see test 25 for the full starvation scenario this prevents.
-  assert.equal(qwenAttempt.timeoutMs, 25_000, "the first provider gets an equal share of the remaining deadline, not all of it");
+  // Three OTHER providers are eligible here (mistral, gemini, openrouter; hunyuan/glm/groq/siliconflow
+  // are all unconfigured in this env), each with minAttemptMs reserved: budget = min(cap, remaining -
+  // 3*20_000) = min(120_000, 100_000 - 60_000) = 40_000, not the whole 100s remaining — see tests
+  // 25-26 for the full starvation scenario this reservation prevents.
+  assert.equal(qwenAttempt.timeoutMs, 40_000, "the first provider's budget reserves minAttemptMs for every later eligible provider");
   const mistral = error.attempts.find((item) => item.providerId === "mistral");
   assert.equal(mistral.skipReason, "deadline", "15 s left is below the minimum attempt window");
   assert.ok(events.some((event) => event.type === "ai.router_attempt" && event.skipReason === "deadline"));
@@ -291,7 +294,7 @@ async function serviceRun(script) {
   console.error = () => {};
   console.info = () => {};
   try {
-    const result = await generateTokenAnalysis(db.client, TOKEN, { env: ENV, fetchImpl, now: () => NOW, providerHealth: createProviderHealth(), diagnosticsSink: (event) => events.push(event) });
+    const result = await generateTokenAnalysis(db.client, TOKEN, { env: ENV, fetchImpl, sleep: instantSleep, now: () => NOW, providerHealth: createProviderHealth(), diagnosticsSink: (event) => events.push(event) });
     return { result, db, calls, events };
   } finally {
     console.error = error;
@@ -300,7 +303,7 @@ async function serviceRun(script) {
 }
 
 test("19. a valid report is stored with provider, models, route, and validation metadata", async () => {
-  const { result, db } = await serviceRun({ qwen: [http(503)], mistral: [chatOk(minimalReport, "mistral-medium-2609")] });
+  const { result, db } = await serviceRun({ qwen: [http(503), http(503)], mistral: [chatOk(minimalReport, "mistral-medium-2609")] });
   assert.equal(result.ok, true, result.message);
   const [row] = db.rows("token_ai_analyses");
   const { metadata } = row.analysis;
@@ -326,9 +329,9 @@ test("20. an invalid report is never stored", async () => {
 // ---- 21: secrets ----
 
 test("21. no secret or raw provider text leaks into results, errors, diagnostics, or stored metadata", async () => {
-  const run = await serviceRun({ qwen: [http(503)], mistral: [http(401)], gemini: [http(429)], openrouter: [http(502)] });
+  const run = await serviceRun({ qwen: [http(503), http(503)], mistral: [http(401)], gemini: [http(429)], openrouter: [http(502)] });
   const events = [];
-  const routed = await route({ qwen: [http(500)], mistral: [chatOk()] }, { events });
+  const routed = await route({ qwen: [http(500), http(500)], mistral: [chatOk()] }, { events });
   await new Promise((resolve) => setTimeout(resolve, 30));
   const blob = JSON.stringify([run.result, run.events, routed.result.attempts, events]);
   for (const secret of [...Object.values(KEYS), RAW_ERROR, "authorization", "x-goog-api-key"]) assert.ok(!blob.includes(secret), `no ${secret}`);
@@ -395,17 +398,49 @@ test("23F. GLM output failing the evidence contract is rejected (no retry) and f
   assert.equal(health.get("glm", Date.now()).status, "healthy", "the provider answered; validation is not an availability failure");
 });
 
-test("23G. GLM HTTP 429/5xx/timeout is infrastructure-transient and falls back to Mistral", async () => {
+test("23G. GLM HTTP 429/5xx/timeout is infrastructure-transient: one bounded in-adapter retry (Task 1), then falls back to Mistral", async () => {
   for (const failure of [http(429), http(503), timeout()]) {
-    const { result, calls, health } = await route({ glm: [failure], mistral: [chatOk()] }, { env: GLM_ENV, health: createProviderHealth() });
-    assert.equal(calls.glm.length, 1, "no retry on an infrastructure failure");
+    const { result, calls, health } = await route({ glm: [failure, failure], mistral: [chatOk()] }, { env: GLM_ENV, health: createProviderHealth() });
+    assert.equal(calls.glm.length, 2, "one bounded retry, never indefinite, before falling back");
     assert.equal(result.provider.id, "mistral");
     assert.equal(result.attempts.find((item) => item.providerId === "glm").category, "transient");
     assert.equal(health.get("glm", Date.now()).status, "cooldown");
   }
 });
 
+test("23H. GLM 429 with a Retry-After header is retried once after waiting that long (capped at 10s), not indefinitely", async () => {
+  const calls429 = [];
+  const retryAfter429 = () => { calls429.push(Date.now()); return json({ error: { code: 429, message: "rate limited" } }, 429, { "retry-after": "3" }); };
+  const waits = [];
+  const sleep = async (ms) => { waits.push(ms); };
+  const { result, calls } = await route({ glm: [retryAfter429, chatOk()], mistral: [chatOk()] }, { env: GLM_ENV, sleep });
+  assert.equal(calls.glm.length, 2, "the retry happened");
+  assert.equal(result.provider.id, "glm", "the retry succeeded, so GLM itself is used — Mistral is never called");
+  assert.deepEqual(waits, [3_000], "waited exactly the Retry-After duration (well under the 10s cap)");
+});
+
+test("23I. GLM 429 with a Retry-After far beyond 10s is capped, and a second consecutive 429 is never retried again", async () => {
+  const waits = [];
+  const sleep = async (ms) => { waits.push(ms); };
+  const { result, calls } = await route(
+    { glm: [http(429, "rate limited", { "retry-after": "120" }), http(429)], mistral: [chatOk()] },
+    { env: GLM_ENV, sleep },
+  );
+  assert.equal(calls.glm.length, 2, "exactly one retry — never indefinite");
+  assert.deepEqual(waits, [10_000], "a 120s Retry-After is capped at 10s");
+  assert.equal(result.provider.id, "mistral", "GLM failed twice, so the router falls back");
+});
+
 // ---- 24: SiliconFlow and ModelScope wiring (verified json_object capability, no invented model) ----
+
+test("24z. Task 3 production scenario: GLM fails fast (HTTP 429), Mistral then gets a realistic budget well above its observed ~41.5s completion time", async () => {
+  const { result, calls } = await route({ glm: [http(429), http(429)], mistral: [chatOk()] }, { env: GLM_ENV });
+  assert.equal(result.provider.id, "mistral");
+  const mistralAttempt = result.attempts.find((item) => item.providerId === "mistral");
+  // Only one later candidate here (none, since mistral is last), so mistral gets its own full cap.
+  assert.equal(mistralAttempt.timeoutMs, 120_000, "well above the ~47.7s the equal-share formula gave it, and its own observed ~41.5s completion time");
+  assert.equal(calls.glm.length, 2, "GLM's bounded retry (Task 1) still ran before falling back");
+});
 
 test("24. SiliconFlow and ModelScope are eligible json_object providers, but stay unconfigured without their model env var", async () => {
   const siliconflow = buildProviders({ SILICONFLOW_API_KEY: "sk" }).get("siliconflow");
@@ -425,6 +460,62 @@ test("24. SiliconFlow and ModelScope are eligible json_object providers, but sta
   assert.equal(skips.modelscope, "not_configured");
 });
 
+test("24y. Task 5: SiliconFlow generates via json_object mode against the correct OpenAI-compatible endpoint, once configured", async () => {
+  const siliconflow = buildProviders({ SILICONFLOW_API_KEY: "sk", SILICONFLOW_MODEL: "Qwen/Qwen3-32B" }).get("siliconflow");
+  const calls = [];
+  const fetchImpl = async (url, init) => { calls.push({ url: String(url), init }); return chatOk()(); };
+  const outcome = await siliconflow.generateStructuredReport(request, { timeoutMs: 10_000, fetchImpl });
+  assert.equal(outcome.ok, true);
+  assert.equal(calls[0].url, "https://api.siliconflow.com/v1/chat/completions", "correct base URL, from the registry, unchanged by any model choice");
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.model, "Qwen/Qwen3-32B", "the model is configuration-driven (SILICONFLOW_MODEL), never hard-coded");
+  assert.deepEqual(body.response_format, { type: "json_object" });
+  assert.equal(calls[0].init.headers.authorization, "Bearer sk", "standard OpenAI-compatible Bearer auth, matching GLM/Mistral");
+});
+
+test("24x. Task 6: ModelScope HTTP 401 is classified as configuration (not transient): never retried, and it is distinguishable from a fixable infrastructure failure", async () => {
+  const env = { MODELSCOPE_API_TOKEN: "mt", MODELSCOPE_MODEL: "Qwen/Qwen3.5-72B-Instruct", GEMINI_API_KEY: "gk", AI_PROVIDER_PRIORITY: "modelscope,gemini" };
+  const { result, calls, health } = await route({ modelscope: [http(401)], gemini: [geminiOk()] }, { env });
+  assert.equal(calls.modelscope.length, 1, "a 401 is never retried (only transient categories get Task 1's bounded retry)");
+  assert.equal(result.attempts.find((item) => item.providerId === "modelscope").category, "configuration");
+  // A real, working ModelScope 401 in this same code path (correct Bearer header, correct base
+  // URL, correct request body — verified in test 24y) means the credential itself is invalid or
+  // expired; the router correctly marks it "configuration_error" (a 30-minute probe cooldown, not
+  // an infinite retry loop) rather than treating it as a fixable transient/infrastructure failure.
+  assert.equal(health.get("modelscope", Date.now()).status, "configuration_error");
+  assert.equal(result.provider.id, "gemini", "the router falls through cleanly to the next provider");
+});
+
+// ---- Task 10: explicit mocked end-to-end scenarios through the real router + real validator ----
+
+test("29a. end-to-end: a report with only warning-tier language (grounded analytical wording) parses, validates, and is ACCEPTED with warnings recorded", async () => {
+  const growth = calc("price_growth_pct");
+  const withMomentum = validReport();
+  withMomentum.marketPerformance.statements.push(st("interpretation", "Momentum in the price change was neutral overall.", [growth.id], growth.period.label));
+  const { result } = await route({ glm: [chatOk(withMomentum)] }, { env: GLM_ENV });
+  assert.equal(result.provider.id, "glm");
+  assert.equal(result.attempt.validationPassed, true, "the report is accepted — a warning-tier word does not reject it");
+  assert.equal(result.value.warnings.some((item) => /\("Momentum"\)/.test(item)), true, "but the warning is still recorded for provenance");
+});
+
+test("29b. end-to-end: a report with an unsupported (fabricated) number fails evidence validation and falls back to the next provider", async () => {
+  const badNumber = validReport();
+  badNumber.tokenomics.statements.push(st("calculated", "Circulating supply is about 95.7% of maximum supply.", [calc("volume_to_market_cap").id]));
+  const { result } = await route({ glm: [chatOk(badNumber)], mistral: [chatOk()] }, { env: GLM_ENV });
+  assert.equal(result.provider.id, "mistral", "GLM's report is rejected; the router falls back");
+  const glmAttempt = result.attempts.find((item) => item.providerId === "glm");
+  assert.equal(glmAttempt.category, "validation");
+  assert.equal(glmAttempt.validationPassed, false);
+});
+
+test("29c. end-to-end: OpenRouter's body-timeout is transient and falls through cleanly, and the global deadline is still enforced afterward", async () => {
+  const env = { OPENROUTER_API_KEY: "ok", OPENROUTER_MODEL: "openrouter/free", GEMINI_API_KEY: "gk", AI_PROVIDER_PRIORITY: "openrouter,gemini" };
+  const { result, calls } = await route({ openrouter: [timeout()], gemini: [geminiOk()] }, { env });
+  assert.equal(result.attempts.find((item) => item.providerId === "openrouter").category, "transient");
+  assert.equal(calls.openrouter.length, 1, "OpenRouter's own client never retries in place (existing, intentional design)");
+  assert.equal(result.provider.id, "gemini", "falls through cleanly; the deadline math is unaffected — see tests 25-26");
+});
+
 // ---- 25-26: bounded per-provider timeout budgeting (production incident: GLM alone used 118.7s
 // of a 240s deadline, and OpenRouter's later attempt was cut off, so SiliconFlow/ModelScope/Gemini
 // never even got skipped-for-real-eligibility — they were starved to zero) ----
@@ -438,7 +529,7 @@ const SIX_ENV = {
   AI_PROVIDER_PRIORITY: "glm,mistral,openrouter,siliconflow,modelscope,gemini",
 };
 
-test("25. with all six providers eligible, the first attempt gets an equal share of the 240s deadline, not the whole thing, and every provider reaches an actual attempt (none pre-emptively starved)", async () => {
+test("25. with all six providers eligible, the first attempt's budget reserves minAttemptMs for every later provider (not the whole 240s), and every provider reaches an actual attempt (none pre-emptively starved)", async () => {
   let now = 0;
   const clock = () => now;
   const deadlineAt = now + 240_000;
@@ -452,40 +543,44 @@ test("25. with all six providers eligible, the first attempt gets an equal share
   const attempted = result.attempts.filter((item) => item.action === "attempted");
   assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope", "gemini"], "every provider is actually attempted, none skipped for \"deadline\"");
   assert.ok(result.attempts.every((item) => item.skipReason !== "deadline"), "none of the six is starved before it even gets a turn");
-  // At the very first attempt, before any clock advance, remaining is exactly 240_000 and all six
-  // are candidates: the fair share is 240_000 / 6 = 40_000, well below GLM's own 120_000 cap —
-  // proving the cap actually engaged instead of handing GLM the whole remaining budget.
+  // At the very first attempt, remaining is exactly 240_000 and 5 later providers are reserved
+  // minAttemptMs (20_000) each = 100_000: GLM's budget is min(120_000, 240_000 - 100_000) =
+  // 120_000 — its own full cap, since plenty of budget remains. This is the intended, more
+  // realistic allocation (Task 3): an early provider isn't punished down to a bare equal share
+  // just because others are queued, as long as their reserved floors are still honored.
   const glmAttempt = attempted.find((item) => item.providerId === "glm");
-  assert.equal(glmAttempt.timeoutMs, 40_000, "GLM's allocation is bounded to its fair share, not min(cap, remaining) alone");
+  assert.equal(glmAttempt.timeoutMs, 120_000, "GLM gets its own full cap when the reserved floors for later providers still leave enough room");
   assert.equal(calls.gemini.length, 1);
 });
 
-test("26. worst case — every provider fully consumes its own allocated share, every time — still leaves every later provider a genuine, non-zero window (the exact production starvation is fixed)", async () => {
+test("26. worst case — every provider fully consumes its own allocated budget, every time — still leaves every later provider at least minAttemptMs (the exact production starvation is fixed)", async () => {
   let now = 0;
   const clock = () => now;
   const deadlineAt = now + 240_000;
-  // With 6 equally-weighted candidates and a 240_000ms budget, an even split gives each one
-  // exactly 40_000ms, and — critically — consuming exactly that share still leaves the same even
-  // split for whoever is left, so the allocation is 40_000ms for all six, every single time.
+  // Reserving minAttemptMs (20_000) per later provider, deducted before this one's own budget is
+  // computed, guarantees every later provider at least that floor no matter what an earlier one
+  // consumes — even in the adversarial case where each provider takes exactly what it was given:
+  //   glm:         reserve 5*20_000=100_000 -> budget min(120_000, 240_000-100_000)      = 120_000
+  //   mistral:     reserve 4*20_000= 80_000 -> budget min(120_000, 120_000- 80_000)      =  40_000
+  //   openrouter:  reserve 3*20_000= 60_000 -> budget min(150_000,  80_000- 60_000)      =  20_000
+  //   siliconflow: reserve 2*20_000= 40_000 -> budget min(120_000,  60_000- 40_000)      =  20_000
+  //   modelscope:  reserve 1*20_000= 20_000 -> budget min(120_000,  40_000- 20_000)      =  20_000
+  //   gemini:      reserve 0        -> budget min( 90_000,  20_000-      0)      =  20_000
+  const expected = [120_000, 40_000, 20_000, 20_000, 20_000, 20_000];
+  const providers = ["glm", "mistral", "openrouter", "siliconflow", "modelscope"];
   const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
   const { result } = await route(
     {
-      glm: [advanceBy(40_000, http(500))],
-      mistral: [advanceBy(40_000, http(500))],
-      openrouter: [advanceBy(40_000, http(500))],
-      siliconflow: [advanceBy(40_000, http(500))],
-      modelscope: [advanceBy(40_000, http(500))],
-      gemini: [advanceBy(40_000, geminiOk())],
+      ...Object.fromEntries(providers.map((id, index) => [id, [advanceBy(expected[index], http(500))]])),
+      gemini: [advanceBy(expected[5], geminiOk())],
     },
     { env: SIX_ENV, clock, deadlineAt },
   );
   assert.equal(result.provider.id, "gemini", "even in the worst case, the last provider in priority still gets attempted and succeeds");
   const attempted = result.attempts.filter((item) => item.action === "attempted");
   assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope", "gemini"]);
-  // Every attempt got exactly the same 40_000ms share: no earlier provider's full-share consumption
-  // ever reduces a later one's guaranteed slice below its fair portion of what remains.
-  assert.deepEqual(attempted.map((item) => item.timeoutMs), [40_000, 40_000, 40_000, 40_000, 40_000, 40_000]);
-  assert.equal(now, 240_000, "all six providers, including Gemini, each got and used their full 40s share of the 240s budget");
+  assert.deepEqual(attempted.map((item) => item.timeoutMs), expected, "each budget matches the reservation formula exactly, and none is starved to zero");
+  assert.equal(now, 240_000, "the full 240s budget is used, exactly, with nothing left over and nothing exceeded");
 });
 
 let failures = 0;

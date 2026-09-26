@@ -6,11 +6,13 @@
 
 import {
   buildEvidenceIndex,
+  findAnalyticalLanguage,
   findDirectionalLanguage,
   findExternalConcept,
   findOtherAsset,
   findUnmappedExplanationIssue,
   findUnsupportedNamedPeriod,
+  overviewPeriods,
   sentenceCount,
   storedEvidence,
   ungroundedNumbers,
@@ -88,6 +90,8 @@ export type AnalysisMetadata = {
   /** Labels for every cited source ID, so the UI can show provenance. */
   sources: Record<string, string>;
   validation: { droppedSourceIds: number; untraceableFactualStatements: number };
+  /** Non-fatal evidence-contract observations (e.g. analytical wording, an overview period already grounded elsewhere in the section). */
+  validationWarnings?: string[];
 };
 
 export type TokenAnalysis = ModelAnalysis & { metadata: AnalysisMetadata };
@@ -193,6 +197,8 @@ export const ANALYSIS_RESPONSE_SCHEMA = {
 
 export class AnalysisValidationError extends Error {
   readonly violations: string[];
+  /** Non-fatal observations gathered before the fatal violations were found (diagnostics only). */
+  warnings: string[] = [];
   constructor(message: string, violations: string[] = [message]) {
     super(message);
     this.name = "AnalysisValidationError";
@@ -249,7 +255,7 @@ function oneOf<T extends string>(value: unknown, options: readonly T[], path: st
 
 type Counters = { droppedSourceIds: number; untraceableFactualStatements: number };
 
-type Check = { evidence: EvidenceIndex; violations: string[]; counters: Counters };
+type Check = { evidence: EvidenceIndex; violations: string[]; warnings: string[]; counters: Counters };
 
 const MAX_OVERVIEW_SENTENCES = 3;
 
@@ -273,15 +279,25 @@ function citedItems(ids: string[], check: Check): EvidenceItem[] {
   return items ? ids.map((id) => items.get(id)).filter((item): item is EvidenceItem => Boolean(item)) : [];
 }
 
-/** Language rules that apply to every piece of model text. */
-function languageRules(value: string, path: string, check: Check, options: { unmappedCheck?: boolean } = {}): void {
+/**
+ * Language rules that apply to every piece of model text.
+ * `concept: "warning"` is used for forward-looking research questions/rationales, where naming a
+ * concept to investigate is not the same as asserting it as fact (see furtherResearchQuestions).
+ */
+function languageRules(value: string, path: string, check: Check, options: { unmappedCheck?: boolean; concept?: "fatal" | "warning" } = {}): void {
   for (const directional of findDirectionalLanguage(value)) {
     check.violations.push(`${path}: directional/sentiment language ("${directional}"); describe observed changes neutrally.`);
+  }
+  for (const analytical of findAnalyticalLanguage(value)) {
+    check.warnings.push(`${path}: analytical language ("${analytical}") — only a warning while the underlying claim is otherwise grounded.`);
   }
   const context = check.evidence.context;
   if (!context) return;
   const concept = findExternalConcept(value, context.text);
-  if (concept) check.violations.push(`${path}: introduces "${concept}", which the research context does not contain.`);
+  if (concept) {
+    const message = `${path}: introduces "${concept}", which the research context does not contain.`;
+    if (options.concept === "warning") check.warnings.push(message); else check.violations.push(message);
+  }
   const asset = findOtherAsset(value, context.text, context.tokenSymbol);
   if (asset) check.violations.push(`${path}: refers to ${asset}, a distinct asset the research context does not establish for this token.`);
   if (options.unmappedCheck === false) return;
@@ -317,12 +333,14 @@ const KIND_SOURCES: Record<StatementKind, { test: (id: string) => boolean; need:
 function section(value: unknown, path: string, check: Check): AnalysisSection {
   if (!isRecord(value)) throw new AnalysisValidationError(`${path} must be an object.`);
   const overview = text(value.overview, `${path}.overview`);
+  const sectionIds: string[] = [];
   const statements = list(value.statements, `${path}.statements`, LIMITS.statements).map((item, index) => {
     const itemPath = `${path}.statements[${index}]`;
     if (!isRecord(item)) throw new AnalysisValidationError(`${itemPath} must be an object.`);
     const kind = oneOf(item.kind, STATEMENT_KINDS, `${itemPath}.kind`);
     const statementText = text(item.text, `${itemPath}.text`);
     const ids = sourceIds(item.sourceIds, `${itemPath}.sourceIds`, check);
+    sectionIds.push(...ids);
     const period = item.period === null || item.period === undefined ? "" : text(item.period, `${itemPath}.period`, { allowEmpty: true });
 
     if (!ids.some(KIND_SOURCES[kind].test)) {
@@ -342,11 +360,15 @@ function section(value: unknown, path: string, check: Check): AnalysisSection {
     return { kind, text: statementText, sourceIds: ids, period: period || null, traceable: ids.length > 0 };
   });
 
-  // Overviews are short syntheses; evidence-derived facts belong in sourced statements.
-  if (/\d/.test(overview)) check.violations.push(`${path}.overview: contains numbers or dates; state evidence-derived facts as sourced statements.`);
-  // An overview cites nothing, so any named period in it is unsupported; time-based claims belong in statements.
-  const overviewPeriod = findUnsupportedNamedPeriod(overview, []);
-  if (overviewPeriod) check.violations.push(`${path}.overview: names a period ("${overviewPeriod}"); time-based claims belong in sourced statements.`);
+  // Overviews are short syntheses; evidence-derived facts belong in sourced statements. A named
+  // period (e.g. "24 hours") already established by this section's own cited evidence is only a
+  // warning — the underlying fact is grounded, it's just described in the synthesis too — but a
+  // period the section's evidence does not establish, or any other number, is still fatal.
+  const sectionCited = citedItems(sectionIds, check);
+  const { grounded, ungrounded, residual } = overviewPeriods(overview, sectionCited);
+  for (const period of grounded) check.warnings.push(`${path}.overview: names a period ("${period}") already established by this section's own cited evidence.`);
+  for (const period of ungrounded) check.violations.push(`${path}.overview: names a period ("${period}"); time-based claims belong in sourced statements.`);
+  if (/\d/.test(residual)) check.violations.push(`${path}.overview: contains numbers or dates; state evidence-derived facts as sourced statements.`);
   const sentences = sentenceCount(overview);
   if (sentences > MAX_OVERVIEW_SENTENCES) check.violations.push(`${path}.overview: longer than ${MAX_OVERVIEW_SENTENCES} sentences.`);
   if (statements.length === 0 && sentences > 1) check.violations.push(`${path}: has no statements, so its overview may only be a one-sentence note.`);
@@ -360,10 +382,10 @@ function section(value: unknown, path: string, check: Check): AnalysisSection {
  * structural and language rules apply. Throws AnalysisValidationError listing
  * every violation.
  */
-export function validateModelAnalysis(raw: unknown, evidenceOrIds: EvidenceIndex | Set<string>): { analysis: ModelAnalysis; counters: Counters } {
+export function validateModelAnalysis(raw: unknown, evidenceOrIds: EvidenceIndex | Set<string>): { analysis: ModelAnalysis; counters: Counters; warnings: string[] } {
   if (!isRecord(raw)) throw new AnalysisValidationError("The response must be a JSON object.");
   const evidence = evidenceOrIds instanceof Set ? storedEvidence(evidenceOrIds) : evidenceOrIds;
-  const check: Check = { evidence, violations: [], counters: { droppedSourceIds: 0, untraceableFactualStatements: 0 } };
+  const check: Check = { evidence, violations: [], warnings: [], counters: { droppedSourceIds: 0, untraceableFactualStatements: 0 } };
   const sections = Object.fromEntries(SECTION_KEYS.map((key) => [key, section(raw[key], key, check)])) as Record<SectionKey, AnalysisSection>;
 
   const risks = list(raw.risks, "risks", LIMITS.risks).map((item, index) => {
@@ -411,7 +433,7 @@ export function validateModelAnalysis(raw: unknown, evidenceOrIds: EvidenceIndex
       sourceIds: sourceIds(item.sourceIds, `${path}.sourceIds`, check),
     };
     for (const [field, value] of [["question", question.question], ["rationale", question.rationale]] as const) {
-      languageRules(value, `${path}.${field}`, check, { unmappedCheck: false });
+      languageRules(value, `${path}.${field}`, check, { unmappedCheck: false, concept: "warning" });
       if (question.sourceIds.length === 0 && /\d/.test(value)) check.violations.push(`${path}.${field}: states figures without citing their sources.`);
       else groundingRules(value, `${path}.${field}`, question.sourceIds, check);
     }
@@ -420,9 +442,11 @@ export function validateModelAnalysis(raw: unknown, evidenceOrIds: EvidenceIndex
   });
 
   if (check.violations.length > 0) {
-    throw new AnalysisValidationError(`The analysis violates the evidence contract (${check.violations.length} issue(s)): ${check.violations.slice(0, 6).join(" ")}`, check.violations);
+    const error = new AnalysisValidationError(`The analysis violates the evidence contract (${check.violations.length} issue(s)): ${check.violations.slice(0, 6).join(" ")}`, check.violations);
+    error.warnings = check.warnings;
+    throw error;
   }
-  return { analysis: { ...sections, risks, dataGaps, furtherResearchQuestions }, counters: check.counters };
+  return { analysis: { ...sections, risks, dataGaps, furtherResearchQuestions }, counters: check.counters, warnings: check.warnings };
 }
 
 /** Re-validate a stored analysis before rendering it (stored JSON is still untrusted). */

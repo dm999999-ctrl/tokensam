@@ -121,6 +121,8 @@ export async function generateTokenAnalysis(
   options: {
     env?: Record<string, string | undefined>;
     fetchImpl?: typeof fetch;
+    /** Injectable for tests; forwarded to each provider's bounded in-adapter retry backoff. */
+    sleep?: (ms: number) => Promise<void>;
     now?: () => Date;
     diagnosticsSink?: DiagnosticSink;
     /** Provider health/cooldown state; defaults to this server instance's shared store. */
@@ -227,6 +229,7 @@ export async function generateTokenAnalysis(
       health: options.providerHealth ?? providerHealth,
       clock,
       fetchImpl: options.fetchImpl,
+      sleep: options.sleep,
       diagnostics,
     });
   } catch (error) {
@@ -275,6 +278,7 @@ export async function generateTokenAnalysis(
       contextHash: profilePayloadHash(payload),
       sources: profileSourceLabels(payload, validated.analysis),
       validation: validated.counters,
+      validationWarnings: validated.warnings.length ? validated.warnings.slice(0, 20) : undefined,
       routing: {
         runId: diagnostics.runId,
         providerId: provider.id,

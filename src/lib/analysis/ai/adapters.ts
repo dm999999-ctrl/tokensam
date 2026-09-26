@@ -125,39 +125,55 @@ export async function generateWithOpenAiCompatible(
     [config.outputTokenParam ?? "max_tokens"]: config.maxOutputTokens,
   });
   const reasonPrefix = `${config.providerId}_`;
-  const record = attemptRecorder({ options: options.diagnostics, provider: config.providerId, model: config.model, attempt: 1, maxAttempts: 1, requestBytes: byteLength(body) });
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  // Bounded in-adapter retry (mirrors gemini.ts): only 429/5xx/timeout/network are retried, at
+  // most once, with a short capped backoff. Quota, configuration, and success are never retried
+  // here — the router's own fallback and per-provider cooldown handle those.
+  const MAX_ATTEMPTS = 2;
   let response: Response;
-  try {
-    response = await fetchImpl(`${config.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` },
-      body,
-      signal: AbortSignal.timeout(options.timeoutMs),
-    });
-  } catch (error) {
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    record.finish(timedOut ? "timeout" : "network");
-    return { ok: false, category: "transient", httpStatus: null, reason: `${reasonPrefix}${timedOut ? "timeout" : "network"}` };
-  }
-  record.headers(response, !response.ok);
-
   let text: string;
-  try {
-    text = await response.text();
-  } catch (error) {
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    record.finish(timedOut ? "body_timeout" : "network");
-    return { ok: false, category: "transient", httpStatus: response.status, reason: `${reasonPrefix}${timedOut ? "timeout" : "network"}` };
-  }
-  if (!response.ok) {
-    record.finish("http_error");
-    const category = classifyHttpStatus(response.status, QUOTA_SIGNALS.test(text));
-    return {
-      ok: false, category, httpStatus: response.status,
-      reason: category === "quota" ? `${reasonPrefix}free_quota_exhausted` : `${reasonPrefix}${response.status}`,
-      // Honoured by the provider's cooldown (the router never retries in place).
-      retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
-    };
+  let record: ReturnType<typeof attemptRecorder>;
+  for (let attempt = 1; ; attempt += 1) {
+    record = attemptRecorder({ options: options.diagnostics, provider: config.providerId, model: config.model, attempt, maxAttempts: MAX_ATTEMPTS, requestBytes: byteLength(body) });
+    try {
+      response = await fetchImpl(`${config.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` },
+        body,
+        signal: AbortSignal.timeout(options.timeoutMs),
+      });
+    } catch (error) {
+      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      record.finish(timedOut ? "timeout" : "network");
+      if (attempt < MAX_ATTEMPTS) { await sleep(timedOut ? 2_000 : 1_000); continue; }
+      return { ok: false, category: "transient", httpStatus: null, reason: `${reasonPrefix}${timedOut ? "timeout" : "network"}` };
+    }
+    record.headers(response, !response.ok);
+
+    try {
+      text = await response.text();
+    } catch (error) {
+      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      record.finish(timedOut ? "body_timeout" : "network");
+      if (attempt < MAX_ATTEMPTS) { await sleep(timedOut ? 2_000 : 1_000); continue; }
+      return { ok: false, category: "transient", httpStatus: response.status, reason: `${reasonPrefix}${timedOut ? "timeout" : "network"}` };
+    }
+    if (!response.ok) {
+      record.finish("http_error");
+      const category = classifyHttpStatus(response.status, QUOTA_SIGNALS.test(text));
+      if (category === "transient" && attempt < MAX_ATTEMPTS) {
+        const retryAfter = retryAfterMs(response.headers.get("retry-after"));
+        await sleep(retryAfter !== null ? Math.min(retryAfter, 10_000) : 2_000);
+        continue;
+      }
+      return {
+        ok: false, category, httpStatus: response.status,
+        reason: category === "quota" ? `${reasonPrefix}free_quota_exhausted` : `${reasonPrefix}${response.status}`,
+        // Honoured by the provider's cooldown (the router never retries in place).
+        retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
+      };
+    }
+    break;
   }
 
   let payload: unknown;

@@ -76,12 +76,12 @@ function scripted(script) {
   };
   return { fetchImpl, calls };
 }
-async function route(script, { env = ENV, health = createProviderHealth(), now = Date.now } = {}) {
+async function route(script, { env = ENV, health = createProviderHealth(), now = Date.now, sleep = () => Promise.resolve() } = {}) {
   const { fetchImpl, calls } = scripted(script);
   try {
     const result = await routeReport({
       request, providers: buildProviders(env), priority: providerPriority(env), allowedTiers: allowedFreeTiers(env),
-      deadlineAt: now() + 240_000, validate, health, clock: now, fetchImpl, diagnostics: { runId: "m", sink: () => {} },
+      deadlineAt: now() + 240_000, validate, health, clock: now, fetchImpl, sleep, diagnostics: { runId: "m", sink: () => {} },
     });
     return { result, calls, health };
   } catch (error) {
@@ -128,10 +128,10 @@ test("M3. malformed Mistral output: one controlled retry, then Gemini", async ()
   assert.equal(calls.openrouter.length, 0);
 });
 
-test("M4. HTTP 429 with Retry-After: no in-place retry; cooldown honours Retry-After; Gemini is next", async () => {
+test("M4. HTTP 429 with Retry-After: one bounded in-adapter retry (capped at 10s, not the full 300s), then cooldown honours the real Retry-After; Gemini is next", async () => {
   const now = 2_000_000;
-  const { result, calls, health } = await route({ mistral: [status(429, { "retry-after": "300" })], gemini: [geminiOk()] }, { now: () => now });
-  assert.equal(calls.mistral.length, 1);
+  const { result, calls, health } = await route({ mistral: [status(429, { "retry-after": "300" }), status(429, { "retry-after": "300" })], gemini: [geminiOk()] }, { now: () => now });
+  assert.equal(calls.mistral.length, 2, "one bounded retry, capped well under the 300s Retry-After");
   assert.equal(result.provider.id, "gemini");
   const state = health.get("mistral", now);
   assert.equal(state.status, "cooldown");
@@ -154,12 +154,12 @@ test("M5. HTTP 401/403 and 400: configuration errors, never retried; Gemini is n
   }
 });
 
-test("M6. HTTP 5xx, 408, timeout, and network failure: transient, one request, Gemini next", async () => {
+test("M6. HTTP 5xx, 408, timeout, and network failure: transient, one bounded in-adapter retry (Task 1), Gemini next", async () => {
   const timeout = () => { throw Object.assign(new Error("aborted"), { name: "TimeoutError" }); };
   const network = () => { throw new TypeError("fetch failed"); };
   for (const failure of [status(500), status(503), status(408), timeout, network]) {
-    const { result, calls } = await route({ mistral: [failure], gemini: [geminiOk()] });
-    assert.equal(calls.mistral.length, 1);
+    const { result, calls } = await route({ mistral: [failure, failure], gemini: [geminiOk()] });
+    assert.equal(calls.mistral.length, 2, "one bounded retry before falling back");
     assert.equal(result.attempts[0].category, "transient");
     assert.equal(result.attempts[0].reason.startsWith("mistral_"), true, "failures are labelled as Mistral's");
     assert.equal(result.provider.id, "gemini");
@@ -167,9 +167,10 @@ test("M6. HTTP 5xx, 408, timeout, and network failure: transient, one request, G
 });
 
 test("M7. fallback chain: Mistral fails → Gemini fails → OpenRouter", async () => {
-  const { result, calls } = await route({ mistral: [status(502)], gemini: [() => json({ error: { code: 503, status: "UNAVAILABLE" } }, 503)], openrouter: [orOk()] });
+  const { result, calls } = await route({ mistral: [status(502), status(502)], gemini: [() => json({ error: { code: 503, status: "UNAVAILABLE" } }, 503)], openrouter: [orOk()] });
   assert.deepEqual(tried(result.attempts), ["mistral:transient", "gemini:transient", "openrouter:ok"]);
-  assert.deepEqual([calls.mistral.length, calls.gemini.length, calls.openrouter.length], [1, 1, 1]);
+  // Mistral gets its one bounded in-adapter retry (Task 1); Gemini and OpenRouter are unaffected (existing, intentional single-attempt designs).
+  assert.deepEqual([calls.mistral.length, calls.gemini.length, calls.openrouter.length], [2, 1, 1]);
 });
 
 test("M8. missing MISTRAL_API_KEY: Mistral is skipped without a request; Gemini is next", async () => {

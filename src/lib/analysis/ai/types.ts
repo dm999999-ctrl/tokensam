@@ -70,6 +70,8 @@ export type GenerateOptions = {
   timeoutMs: number;
   fetchImpl?: typeof fetch;
   diagnostics?: DiagnosticsOptions;
+  /** Injectable for tests; defaults to a real timer. Used only for a bounded in-adapter retry backoff. */
+  sleep?: (ms: number) => Promise<void>;
 };
 
 export interface AIProvider {

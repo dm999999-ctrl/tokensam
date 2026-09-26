@@ -120,6 +120,8 @@ export async function routeReport<T>(input: {
   health: ProviderHealthStore;
   clock?: () => number;
   fetchImpl?: typeof fetch;
+  /** Injectable for tests; forwarded to each provider's bounded in-adapter retry backoff. */
+  sleep?: (ms: number) => Promise<void>;
   diagnostics?: DiagnosticsOptions;
   minAttemptMs?: number;
   minOutputTokens?: number;
@@ -161,16 +163,21 @@ export async function routeReport<T>(input: {
         log({ ...base(provider, id), skipReason: "deadline", retry });
         break;
       }
-      // Bounded fair share: split what's left of the deadline evenly across this provider and
-      // every later one that would still be attempted, so a slow provider (up to its own
-      // attemptTimeoutMs) can never leave nothing for the rest of the priority list. With only
-      // one candidate left this reduces to the previous behavior (min(cap, remaining)).
-      const candidates = Math.max(1, remainingCandidates(input.priority, priorityIndex, input.providers, input.request, input.allowedTiers, input.health, clock(), input.minOutputTokens));
-      const fairShareMs = Math.floor(remaining / candidates);
-      const timeoutMs = Math.min(provider!.attemptTimeoutMs, remaining, Math.max(fairShareMs, minAttemptMs));
+      // Bounded budget by reservation, not equal division: reserve minAttemptMs for every later
+      // provider that would still be attempted, and let this one use whatever is left of the
+      // deadline, up to its own attemptTimeoutMs. Unlike an equal split, this gives a provider a
+      // realistic, close-to-its-own-cap budget whenever earlier providers failed fast (the
+      // common case), while still guaranteeing every later provider at least minAttemptMs even in
+      // the worst case (every provider fully consuming its own budget, every time — see the
+      // "worst case" test): reserving minAttemptMs per later provider, deducted before this one's
+      // own budget is computed, can never be exceeded by construction. With no later provider
+      // left, this reduces to the previous behavior (min(cap, remaining)).
+      const laterCandidates = remainingCandidates(input.priority, priorityIndex + 1, input.providers, input.request, input.allowedTiers, input.health, clock(), input.minOutputTokens);
+      const reservedForLaterMs = laterCandidates * minAttemptMs;
+      const timeoutMs = Math.min(provider!.attemptTimeoutMs, Math.max(minAttemptMs, remaining - reservedForLaterMs));
       attemptNumber += 1;
       const started = clock();
-      const outcome = await provider!.generateStructuredReport(input.request, { timeoutMs, fetchImpl: input.fetchImpl, diagnostics: input.diagnostics });
+      const outcome = await provider!.generateStructuredReport(input.request, { timeoutMs, fetchImpl: input.fetchImpl, diagnostics: input.diagnostics, sleep: input.sleep });
       const record: RouteAttempt = { ...base(provider, id), action: "attempted", retry, latencyMs: clock() - started, timeoutMs };
       if (!outcome.ok) {
         input.health.recordFailure(id, outcome.category, clock(), outcome.retryAfterMs);

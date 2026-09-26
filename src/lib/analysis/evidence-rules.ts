@@ -81,10 +81,12 @@ export function storedEvidence(ids: Iterable<string>): EvidenceIndex {
 
 // ---- Text rules ----
 
-/** Market-sentiment and trend-prediction language; neutral wording ("increased") is unaffected. */
+/**
+ * Sentiment/prediction language: opinion or forward-looking framing that reads as trading
+ * guidance regardless of how well-grounded the underlying facts are. Always fatal.
+ */
 const DIRECTIONAL_PATTERNS: RegExp[] = [
   /\b(bullish|bearish)\b/i,
-  /\bmomentum\b/i,
   /\b(up|down)trend\b/i,
   /\b(rally|rallies|rallied|sell-?off|breakout|overbought|oversold)\b/i,
   /\blikely to (rise|fall|increase|decrease|recover|decline|continue|rebound)\b/i,
@@ -92,9 +94,28 @@ const DIRECTIONAL_PATTERNS: RegExp[] = [
   /\b(positive|negative|bullish|bearish) (outlook|sentiment|signal)\b/i,
 ];
 
-/** Every sentiment/trend term in the text (all are reported, not just the first). */
+/**
+ * Analytical/descriptive language about already-observed behavior (not a prediction or opinion).
+ * A statement using one of these is only as good as its own grounding (sources, numbers, kind):
+ * if that grounding passes, the word choice alone is a warning, not a rejection.
+ */
+const ANALYTICAL_PATTERNS: RegExp[] = [
+  /\bmomentum\b/i,
+  /\btrends?\b/i,
+  /\bstrength(en(s|ed|ing)?)?\b/i,
+  /\bweak(ness(es)?|en(s|ed|ing)?)?\b/i,
+  /\bimprov(e[ds]?|ing|ement)\b/i,
+  /\bdeterior(ate[ds]?|ating|ation)\b/i,
+];
+
+/** Every fatal sentiment/prediction term in the text (all are reported, not just the first). */
 export function findDirectionalLanguage(text: string): string[] {
   return DIRECTIONAL_PATTERNS.flatMap((pattern) => text.match(pattern)?.[0] ?? []);
+}
+
+/** Every analytical/descriptive term in the text; downgraded to a warning when the text is otherwise grounded. */
+export function findAnalyticalLanguage(text: string): string[] {
+  return ANALYTICAL_PATTERNS.flatMap((pattern) => text.match(pattern)?.[0] ?? []);
 }
 
 /**
@@ -214,6 +235,31 @@ export function findUnsupportedNamedPeriod(text: string, cited: EvidenceItem[]):
     if (match && !evidence.test(citedText)) return match[0];
   }
   return null;
+}
+
+/**
+ * Splits every named period mentioned in an overview into grounded (established by the section's
+ * own cited evidence, e.g. a statement citing a 24-hour observation) and ungrounded. Grounded
+ * matches are removed from the returned residual text before the caller's "no digits" check, so
+ * an evidence-backed "24 hours" does not by itself fail the overview; a genuinely unsupported
+ * period, or any other number, still does.
+ */
+export function overviewPeriods(text: string, cited: EvidenceItem[]): { grounded: string[]; ungrounded: string[]; residual: string } {
+  const citedText = cited.map((evidence) => evidence.text).join(" ").replace(/it is not a fixed [^.]*\./g, "");
+  const grounded: string[] = [];
+  const ungrounded: string[] = [];
+  let residual = text;
+  for (const { pattern, evidence } of NAMED_PERIODS) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    if (evidence.test(citedText)) {
+      grounded.push(match[0]);
+      residual = residual.replace(pattern, "");
+    } else {
+      ungrounded.push(match[0]);
+    }
+  }
+  return { grounded, ungrounded, residual };
 }
 
 export function sentenceCount(text: string): number {
