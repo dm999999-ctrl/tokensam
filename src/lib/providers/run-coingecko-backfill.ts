@@ -9,7 +9,7 @@ type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createS
 
 const BACKFILL_METRICS = ["price_usd", "market_cap_usd", "volume_24h_usd"];
 const BACKFILL_DAYS = 90;
-/** Two market_chart calls per token; the whole universe is 100 calls (about 1% of the documented Demo monthly allowance). */
+/** Two market_chart calls per token; the whole 238-token universe is 476 calls across ceil(238/50) runs (about 5% of the documented Demo monthly allowance). */
 export const MAX_BACKFILL_TOKENS = 50;
 
 export type BackfillTokenResult = {

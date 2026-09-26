@@ -179,11 +179,11 @@ test("16. columns hide only when no displayed row has valid data; zero is data; 
   assert.deepEqual(filtered.visible.map((column) => column.key), ["name", "fees"], "after filtering to A, TVL has no data and is hidden; the zero keeps fees");
 });
 
-// ---- Coverage across all 100 canonical tokens ----
+// ---- Coverage across all 238 canonical tokens ----
 
 test("coverage: every token has an identity or an explicit reason for each provider; no ticker identity; no wrapped proxies", () => {
   const matrix = coverageMatrix();
-  assert.equal(matrix.length, 100);
+  assert.equal(matrix.length, 238);
   const reasons = new Set(["provider_does_not_support_token", "native_asset_lacks_provider_identifier", "wrapped_representation_only", "contract_address_unavailable", "requires_paid_access", "token_level_metric_unavailable", "requires_manual_verification", "no_protocol_association", "no_provider_data"]);
   const llamaKeys = new Set();
   for (const { tokenId, symbol, isNative, coverage } of matrix) {
@@ -215,7 +215,7 @@ test("coverage: every token has an identity or an explicit reason for each provi
     llamaKeys.add(llama);
   }
   const count = (provider) => matrix.filter((row) => row.coverage.find((item) => item.provider === provider).status === "mapped").length;
-  assert.deepEqual({ coingecko: count("coingecko"), defillama_coins: count("defillama_coins"), defillama: count("defillama"), dexscreener: count("dexscreener") }, { coingecko: 100, defillama_coins: 100, defillama: 24, dexscreener: 63 });
+  assert.deepEqual({ coingecko: count("coingecko"), defillama_coins: count("defillama_coins"), defillama: count("defillama"), dexscreener: count("dexscreener") }, { coingecko: 238, defillama_coins: 238, defillama: 24, dexscreener: 63 });
   assert.equal(dexScreenerTokenMappings.filter((mapping) => mapping.tokenAddress && WRAPPED_ADDRESSES.has(mapping.tokenAddress.toLowerCase())).map((mapping) => mapping.tokenId).join(), "ethereum-wbtc", "only the WBTC record (its own asset) uses a wrapped address");
 });
 

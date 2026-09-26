@@ -50,8 +50,8 @@ test("1. the 50 Phase 15 tokens have explicit, unique CoinGecko IDs and chain-sc
   assert.notEqual(coingeckoTokenIds["bitcoin-cash-bch"], coingeckoTokenIds["bitcoin-btc"]);
 });
 
-test("2. universe diversity: 46 chains and 22 categories, with no chain holding a native asset twice", () => {
-  assert.equal(new Set(canonicalTokens.map((token) => token.chainId)).size, 46);
+test("2. universe diversity: 104 chains and 22 categories, with no chain holding a native asset twice", () => {
+  assert.equal(new Set(canonicalTokens.map((token) => token.chainId)).size, 104);
   assert.equal(new Set(canonicalTokens.map((token) => token.category)).size, 22);
   for (const category of ["Restaking", "RWA", "Privacy", "DePIN", "AI & compute", "Interoperability", "Derivatives", "Gaming", "Exchange token", "Identity"]) {
     assert.ok(canonicalTokens.some((token) => token.category === category), `${category} is represented`);
@@ -165,7 +165,7 @@ test("8. logos for new tokens are accepted only for their own CoinGecko ID", () 
   assert.equal(logos["dydx-dydx"], undefined, "the legacy ethDYDX record (CoinGecko dydx) is not the native dYdX Chain asset (dydx-chain)");
 });
 
-test("9. refresh budgets fit the 100-token universe inside the cron route's 300 s limit", async () => {
+test("9. refresh budgets fit the 238-token universe inside the cron route's 300 s limit", async () => {
   const { REFRESH_POLICY, METRICS_TIMEOUT_MS } = await import("../src/lib/refresh/config.ts");
   const { readFileSync } = await import("node:fs");
   const maxDuration = Number(readFileSync("src/app/api/cron/refresh/route.ts", "utf8").match(/maxDuration = (\d+)/)[1]) * 1000;

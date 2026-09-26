@@ -37,14 +37,16 @@ function test(name, run) {
   cases.push({ name, run });
 }
 
-test("maps the 100 canonical token universe by chain and explicit address only", () => {
-  assert.equal(canonicalTokens.length, 100);
-  assert.equal(dexScreenerTokenMappings.length, 100);
-  assert.equal(new Set(dexScreenerTokenMappings.map((mapping) => mapping.tokenId)).size, 100);
-  assert.equal(new Set(canonicalTokens.map((token) => token.id)).size, 100);
+test("maps the 238 canonical token universe by chain and explicit address only", () => {
+  assert.equal(canonicalTokens.length, 238);
+  assert.equal(dexScreenerTokenMappings.length, 238);
+  assert.equal(new Set(dexScreenerTokenMappings.map((mapping) => mapping.tokenId)).size, 238);
+  assert.equal(new Set(canonicalTokens.map((token) => token.id)).size, 238);
   // 58 verified contracts + native SUI, APT, ICP, TON, and HYPE identifiers; wrapped proxies for natives are retired.
+  // Phase 16 (100 -> 238) adds no new DEX Screener mappings (no contract address is invented), so
+  // the mapped count is unchanged and every one of the 138 new tokens is unmapped.
   assert.equal(assets.length, 63);
-  assert.equal(getUnmappedDexScreenerTokens().length, 37);
+  assert.equal(getUnmappedDexScreenerTokens().length, 175);
   // Phase 15: a contract token's DEX address is exactly its canonical contract on the canonical chain.
   for (const token of canonicalTokens.filter((candidate) => !candidate.isNative && candidate.contractAddress)) {
     const asset = assets.find((item) => item.tokenId === token.id);
