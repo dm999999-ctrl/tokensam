@@ -81,6 +81,33 @@ export function researchColumns(rows: Row[]): { visible: Column[]; hidden: Colum
   return visibleColumns<Row, Column>(COLUMNS, rows);
 }
 
+/** Client-side pagination: the whole canonical universe (~238 tokens) is small enough to paginate in the browser. */
+export const PAGE_SIZE = 50;
+
+/** At least one page always exists, even for zero rows (an empty page 1 of 1), so callers never divide by zero. */
+export function pageCount(total: number, pageSize: number = PAGE_SIZE): number {
+  return Math.max(1, Math.ceil(total / pageSize));
+}
+
+/** Keeps a requested page within [1, pageCount] so a stale page number (after filtering shrinks the set) self-corrects. */
+export function clampPage(page: number, total: number, pageSize: number = PAGE_SIZE): number {
+  return Math.min(Math.max(1, Math.trunc(page) || 1), pageCount(total, pageSize));
+}
+
+export type Paginated<T> = { items: T[]; page: number; pageCount: number; pageSize: number; total: number };
+
+/**
+ * Slices already-filtered, already-sorted rows into one page. `page` is clamped, not just bounds-checked,
+ * so a page number left over from a larger result set never renders an out-of-range or empty slice.
+ */
+export function paginateRows<T>(rows: T[], page: number, pageSize: number = PAGE_SIZE): Paginated<T> {
+  const total = rows.length;
+  const count = pageCount(total, pageSize);
+  const current = clampPage(page, total, pageSize);
+  const start = (current - 1) * pageSize;
+  return { items: rows.slice(start, start + pageSize), page: current, pageCount: count, pageSize, total };
+}
+
 
 /** Why one cell is empty, for its tooltip. */
 export function missingReason(column: Column, token: DashboardToken): string {

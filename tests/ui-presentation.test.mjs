@@ -7,7 +7,7 @@ import { logosFromRecords, validatedLogoUrl } from "../src/lib/data/token-logos.
 import { formatChange, formatRatio, formatShare, formatUsd, intervalBetween } from "../src/lib/ui/format.ts";
 import { metricSection, presentMetric } from "../src/lib/ui/calculated.ts";
 import { buildProfileModel } from "../src/lib/ui/profile-model.ts";
-import { COLUMNS, EMPTY_FILTERS, filterRows, missingReason, researchColumns, sortRows, toRow, universeSummary } from "../src/lib/ui/dashboard-model.ts";
+import { COLUMNS, EMPTY_FILTERS, PAGE_SIZE, clampPage, filterRows, missingReason, pageCount, paginateRows, researchColumns, sortRows, toRow, universeSummary } from "../src/lib/ui/dashboard-model.ts";
 import { reportedFdvFromRecords } from "../src/lib/data/token-logos.ts";
 import { datasetLabel, namesProvider, plainLanguage } from "../src/lib/ui/data-language.ts";
 import { buildDatasetFreshness } from "../src/lib/refresh/freshness.ts";
@@ -356,6 +356,81 @@ test("14. 7D volume sums seven non-overlapping 24-hour observations; gaps and in
   assert.equal(bands.length, 14);
   assert.deepEqual(bands[0].tokenIds, ["a", "b"]);
   assert.equal(Date.parse(bands[6].from), NOW.getTime() - 6 * 24 * H - H);
+});
+
+// ---- Dashboard pagination: client-side, applied after filtering and sorting ----
+
+test("15. pagination slices the full 238-token universe into 50-per-page pages, 5 pages (50/50/50/50/38)", () => {
+  const rows = canonicalTokens.map((token) => toRow(dashboardToken(token.id)));
+  assert.equal(rows.length, 238);
+  assert.equal(PAGE_SIZE, 50);
+  assert.equal(pageCount(rows.length), 5);
+  const sizes = [1, 2, 3, 4, 5].map((page) => paginateRows(rows, page).items.length);
+  assert.deepEqual(sizes, [50, 50, 50, 50, 38]);
+  // Pages tile the sorted set exactly once each: no row skipped, none duplicated, order preserved.
+  const sorted = sortRows(rows, "name", "asc");
+  const reassembled = [1, 2, 3, 4, 5].flatMap((page) => paginateRows(sorted, page).items);
+  assert.deepEqual(reassembled.map((row) => row.token.id), sorted.map((row) => row.token.id));
+});
+
+test("16. filtering narrows the set before pagination slices it", () => {
+  const rows = canonicalTokens.map((token) => toRow(dashboardToken(token.id)));
+  const ethereumOnly = filterRows(rows, { ...EMPTY_FILTERS, chain: "Ethereum" });
+  const page1 = paginateRows(ethereumOnly, 1);
+  assert.equal(page1.total, ethereumOnly.length, "pagination totals reflect the filtered set, not the whole universe");
+  assert.ok(page1.total > PAGE_SIZE, "Ethereum alone already exceeds one page after the Phase 16 expansion");
+  assert.equal(page1.pageCount, pageCount(ethereumOnly.length));
+  assert.ok(page1.items.every((row) => row.token.chain === "Ethereum"), "every paginated row still matches the filter");
+  const page2 = paginateRows(ethereumOnly, 2);
+  const seen = new Set([...page1.items, ...page2.items].map((row) => row.token.id));
+  assert.equal(seen.size, page1.items.length + page2.items.length, "consecutive pages of a filtered set never overlap");
+});
+
+test("17. sorting is applied before pagination: page boundaries follow sort order, not filter/insertion order", () => {
+  const rows = canonicalTokens.map((token) => toRow(dashboardToken(token.id, { marketCapUsd: null })));
+  // Give three tokens distinct market caps; the rest stay null (unavailable, sorts last per sortRows).
+  const withCaps = rows.map((row) => row.token.id === "bitcoin-btc" ? { ...row, marketCapUsd: 3 }
+    : row.token.id === "ethereum-eth" ? { ...row, marketCapUsd: 2 }
+    : row.token.id === "solana-sol" ? { ...row, marketCapUsd: 1 } : row);
+  const sortedDesc = sortRows(withCaps, "marketCapUsd", "desc");
+  const firstPage = paginateRows(sortedDesc, 1, 2);
+  assert.deepEqual(firstPage.items.map((row) => row.token.id), ["bitcoin-btc", "ethereum-eth"], "page 1 holds the two highest market caps, not the first two by insertion order");
+  const secondPage = paginateRows(sortedDesc, 2, 2);
+  assert.equal(secondPage.items[0].token.id, "solana-sol");
+});
+
+test("18. first/last page behavior: bounds, clamping, and Previous/Next disable points", () => {
+  const rows = canonicalTokens.map((token) => toRow(dashboardToken(token.id)));
+  const first = paginateRows(rows, 1);
+  assert.equal(first.page, 1, "page 1 is the first page (Previous would be disabled)");
+  const last = paginateRows(rows, pageCount(rows.length));
+  assert.equal(last.page, 5, "page 5 is the last page (Next would be disabled)");
+  assert.equal(last.items.length, 38);
+  // Requesting past either end clamps to a valid page instead of returning an empty or out-of-range slice.
+  assert.equal(paginateRows(rows, 0).page, 1);
+  assert.equal(paginateRows(rows, -5).page, 1);
+  assert.equal(paginateRows(rows, 999).page, 5);
+  assert.equal(clampPage(0, rows.length), 1);
+  assert.equal(clampPage(999, rows.length), 5);
+  assert.equal(clampPage(3, rows.length), 3);
+  // A page left over from a larger (unfiltered) result set self-corrects against a smaller filtered one.
+  const narrowed = rows.slice(0, 12);
+  const staleOnPage5 = paginateRows(narrowed, 5);
+  assert.equal(staleOnPage5.page, 1, "12 rows makes exactly one page, so a stale page 5 clamps back to page 1");
+  assert.equal(staleOnPage5.items.length, 12);
+});
+
+test("19. empty results: zero rows still produce a valid, non-throwing page 1 of 1", () => {
+  const empty = paginateRows([], 1);
+  assert.deepEqual(empty, { items: [], page: 1, pageCount: 1, pageSize: PAGE_SIZE, total: 0 });
+  assert.equal(pageCount(0), 1, "zero rows is one (empty) page, never zero pages");
+  assert.equal(clampPage(1, 0), 1);
+  assert.equal(clampPage(50, 0), 1, "an arbitrary stale page against zero rows still clamps to page 1");
+  // A filter that matches nothing produces the same empty-but-valid page.
+  const rows = canonicalTokens.map((token) => toRow(dashboardToken(token.id)));
+  const noMatches = filterRows(rows, { ...EMPTY_FILTERS, query: "this-string-matches-no-token-xyz" });
+  assert.equal(noMatches.length, 0);
+  assert.deepEqual(paginateRows(noMatches, 1), { items: [], page: 1, pageCount: 1, pageSize: PAGE_SIZE, total: 0 });
 });
 
 let failures = 0;

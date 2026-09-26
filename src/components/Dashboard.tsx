@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { DashboardToken } from "@/types/token";
 import type { RefreshStatusView } from "@/lib/refresh/freshness";
 import {
-  DEFAULT_SORT_KEY, EMPTY_FILTERS, SCOPE_NOTE, filterRows, missingReason, researchColumns, sortRows, toRow, universeSummary,
+  DEFAULT_SORT_KEY, EMPTY_FILTERS, PAGE_SIZE, SCOPE_NOTE, filterRows, missingReason, paginateRows, researchColumns, sortRows, toRow, universeSummary,
   type Column, type Filters, type Row, type SortKey,
 } from "@/lib/ui/dashboard-model";
 import { formatChange, formatRatio, formatShare, formatUsd } from "@/lib/ui/format";
@@ -56,6 +56,7 @@ export default function Dashboard({ tokens, error, dataUpdatedAt, refreshStatus,
 }) {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [sort, setSort] = useState<SortState>({ key: DEFAULT_SORT_KEY, direction: "desc" });
+  const [page, setPage] = useState(1);
 
   const rows = useMemo(() => tokens.map(toRow), [tokens]);
   const summary = useMemo(() => universeSummary(tokens), [tokens]);
@@ -67,12 +68,15 @@ export default function Dashboard({ tokens, error, dataUpdatedAt, refreshStatus,
   const sortKey: SortKey = sort.key === "name" || columns.some((column) => column.key === sort.key) ? sort.key : "name";
   const direction = sortKey === sort.key ? sort.direction : "asc";
   const displayed = useMemo(() => sortRows(filtered, sortKey, direction), [filtered, sortKey, direction]);
+  // Filtering and sorting happen first; pagination only slices the resulting list. `page` is clamped
+  // (never just bounds-checked), so a page left over from a larger result set self-corrects.
+  const pagination = useMemo(() => paginateRows(displayed, page, PAGE_SIZE), [displayed, page]);
   const hasFilters = JSON.stringify(filters) !== JSON.stringify(EMPTY_FILTERS);
 
-  const update = (patch: Partial<Filters>) => setFilters((current) => ({ ...current, ...patch }));
-  const handleSort = (key: SortKey) => setSort((current) => current.key === key
+  const update = (patch: Partial<Filters>) => { setFilters((current) => ({ ...current, ...patch })); setPage(1); };
+  const handleSort = (key: SortKey) => { setSort((current) => current.key === key
     ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
-    : { key, direction: key === "name" ? "asc" : "desc" });
+    : { key, direction: key === "name" ? "asc" : "desc" }); setPage(1); };
   const sortOptions: { key: SortKey; label: string }[] = [{ key: "name", label: "Asset" }, ...columns.map((column) => ({ key: column.key, label: column.label }))];
   const breadthTotal = summary.withChange;
   const momentum = formatChange(summary.medianChange24hPct);
@@ -154,17 +158,21 @@ export default function Dashboard({ tokens, error, dataUpdatedAt, refreshStatus,
             <option value="protocol">Has protocol data</option>
             <option value="dex">Has DEX data</option>
           </select>
-          <select className="mobile-sort" value={`${sortKey}:${direction}`} onChange={(event) => { const [key, dir] = event.target.value.split(":"); setSort({ key: key as SortKey, direction: dir as "asc" | "desc" }); }} aria-label="Sort tokens">
+          <select className="mobile-sort" value={`${sortKey}:${direction}`} onChange={(event) => { const [key, dir] = event.target.value.split(":"); setSort({ key: key as SortKey, direction: dir as "asc" | "desc" }); setPage(1); }} aria-label="Sort tokens">
             {sortOptions.flatMap((option) => [
               <option key={`${option.key}:desc`} value={`${option.key}:desc`}>{option.label} {option.key === "name" ? "Z–A" : "high → low"}</option>,
               <option key={`${option.key}:asc`} value={`${option.key}:asc`}>{option.label} {option.key === "name" ? "A–Z" : "low → high"}</option>,
             ])}
           </select>
-          {hasFilters ? <button className="text-button reset" type="button" onClick={() => setFilters(EMPTY_FILTERS)}>Reset</button> : null}
+          {hasFilters ? <button className="text-button reset" type="button" onClick={() => { setFilters(EMPTY_FILTERS); setPage(1); }}>Reset</button> : null}
         </div>
 
         <div className="table-meta">
-          <span><b>{displayed.length}</b> of {tokens.length} assets</span>
+          <span>
+            {displayed.length > 0
+              ? <><b>{(pagination.page - 1) * PAGE_SIZE + 1}–{(pagination.page - 1) * PAGE_SIZE + pagination.items.length}</b> of <b>{displayed.length}</b> assets</>
+              : <><b>0</b> assets</>}
+          </span>
           <span className="muted-copy"><span className="cell-missing" aria-hidden="true">—</span> Data unavailable; the reason is on each dash</span>
           {hidden.length > 0 && displayed.length > 0 ? <span className="muted-copy">Hidden, no data for these assets: {hidden.map((column) => column.label).join(", ")}</span> : null}
         </div>
@@ -191,7 +199,7 @@ export default function Dashboard({ tokens, error, dataUpdatedAt, refreshStatus,
               </tr>
             </thead>
             <tbody>
-              {displayed.map((row) => (
+              {pagination.items.map((row) => (
                 <tr key={row.token.id} data-testid="token-row">
                   <td className="asset-col"><AssetCell token={row.token} /></td>
                   {columns.map((column) => (
@@ -204,13 +212,24 @@ export default function Dashboard({ tokens, error, dataUpdatedAt, refreshStatus,
                   <td colSpan={columns.length + 1} className="empty-state">
                     <strong>{error ? "Live data could not be loaded" : "No assets match these filters"}</strong>
                     <span>{error ? "No demonstration values are shown." : "Try a different search or reset the filters."}</span>
-                    {hasFilters ? <button type="button" className="text-button" onClick={() => setFilters(EMPTY_FILTERS)}>Clear filters</button> : null}
+                    {hasFilters ? <button type="button" className="text-button" onClick={() => { setFilters(EMPTY_FILTERS); setPage(1); }}>Clear filters</button> : null}
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
+        {displayed.length > 0 ? (
+          <nav className="pagination" aria-label="Research Universe pages">
+            <button type="button" className="pagination-button" onClick={() => setPage(pagination.page - 1)} disabled={pagination.page <= 1} data-testid="pagination-prev">
+              Previous
+            </button>
+            <span className="pagination-status" aria-live="polite" data-testid="pagination-status">Page {pagination.page} of {pagination.pageCount}</span>
+            <button type="button" className="pagination-button" onClick={() => setPage(pagination.page + 1)} disabled={pagination.page >= pagination.pageCount} data-testid="pagination-next">
+              Next
+            </button>
+          </nav>
+        ) : null}
         <p className="table-foot">
           Market: token-level data <i aria-hidden="true" /> Protocol: associated-protocol data, not token data <i aria-hidden="true" /> DEX: on-chain markets for the exact token address <i aria-hidden="true" /> Ratios: Token Samurai calculations
         </p>

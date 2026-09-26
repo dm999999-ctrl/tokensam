@@ -259,6 +259,11 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .empty-state span { color: var(--muted); }
 .table-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; padding: 12px 2px 0; color: var(--subtle); font-size: 12px; }
 .table-foot i { display: inline-block; width: 4px; height: 4px; margin: 0 10px; background: var(--bronze); transform: rotate(45deg); }
+.pagination { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 14px 0 0; }
+.pagination-button { min-height: 34px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-inset); color: var(--ink); font-size: 13px; font-weight: 550; }
+.pagination-button:hover:not(:disabled) { border-color: var(--gold); color: var(--ink-strong); }
+.pagination-button:disabled { color: var(--subtle); opacity: .55; cursor: not-allowed; }
+.pagination-status { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* Token Profile */
 .crumbs { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; color: var(--subtle); font-size: 13px; }
