@@ -104,11 +104,19 @@ test("7. the evidence validator (evidence-rules.ts, schema.ts, profile-contract.
   const diffNames = execSync("git diff --name-only HEAD", { cwd: process.cwd() }).toString().trim().split("\n").filter(Boolean);
   const validatorFiles = ["src/lib/analysis/evidence-rules.ts", "src/lib/analysis/schema.ts", "src/lib/analysis/profile-contract.ts", "src/lib/analysis/ai/router.ts"];
   for (const file of validatorFiles) assert.ok(!diffNames.includes(file), `${file} must not appear in the diff for this change`);
-  assert.equal(PROFILE_PROMPT_VERSION, "profile-4", "the prompt version was bumped so stored analyses record which instructions produced them");
+  assert.equal(PROFILE_PROMPT_VERSION, "profile-5", "the prompt version was bumped so stored analyses record which instructions produced them");
 });
 
 test("8. the provider priority list and default order are unchanged by this change", () => {
   assert.deepEqual(DEFAULT_PROVIDER_PRIORITY, ["qwen", "hunyuan", "glm", "mistral", "groq", "siliconflow", "gemini", "openrouter"]);
+});
+
+test("9. Production run gdj2hhww: the prompt now explicitly covers overview-writing order, history-metadata-is-not-evidence, source-naming-is-not-evidence, and period-inference bans", () => {
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /write that section's statements first\. Then write the overview describing only which topics those statements cover/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /A hist: field is historical evidence only when it actually appears in fields\[\]/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /The existence of a metric name or a window label in these instructions is not by itself evidence that this token has that history/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Naming a provider, metric, or period anywhere in these instructions or in the response schema does not make it available for this token/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never infer a period from a metric's name.*from a history-series definition, from an API or schema naming convention, or from general knowledge/);
 });
 
 let passed = 0;

@@ -256,6 +256,55 @@ test("C4. after attachment, an invented ID fails the constrained schema; the unc
   assert.ok(violations(namedPeriod, uniPayload).some((item) => /"30 days" is not a period established/.test(item)), "period words in text are still checked");
 });
 
+// ---- Regression: Production run gdj2hhww (GLM overview digits; Mistral unsupported 24/24-hour/30-day
+// and a DEX Screener mention with no mapping). The generation prompt was strengthened (prompt.ts P7,
+// 4g, U0, and rule 6) to stop these at the source; these tests prove the unchanged validator already
+// rejects every one of them as a second line of defense, so the fix is generation-side only.
+
+test("P11. an overview containing a number or date is rejected, even when every statement below it is properly sourced", () => {
+  const found = violations(report({
+    executiveSummary: { overview: "The price is $9.33 as of today.", statements: [st("observed", "The profile shows a price of $9.33.", ["obs:price"])] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /executiveSummary\.overview: contains numbers or dates; state evidence-derived facts as sourced statements\./.test(item)));
+});
+
+test("P12. a period is never inferred from a metric's name: citing a field with no period text still fails when the statement names a period anyway", () => {
+  const found = violations(report({
+    marketPerformance: { overview: "Market capitalization is shown.", statements: [
+      st("observed", "Market capitalization increased over the past 24 hours.", ["obs:market_cap"]),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /"24 hours" is not a period established by the cited sources/.test(item)), "\"market cap\" is not itself a 24-hour metric just because 24-hour metrics commonly exist elsewhere");
+});
+
+test("P13. a historical/trend claim is rejected when no hist: evidence is cited for it (the case behind a series with no usable stored points)", () => {
+  const found = violations(report({
+    marketPerformance: { overview: "The price is shown.", statements: [
+      st("observed", "The price has trended upward over the past 90 days.", ["obs:price"]),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /"90 days" is not a period established by the cited sources/.test(item)), "obs:price alone establishes no history, regardless of how many hist: series the payload defines elsewhere");
+});
+
+test("P14. a DEX Screener mention with no mapping is rejected exactly as GLM/Mistral's gdj2hhww failure", () => {
+  const found = violations(report({
+    liquidityMarketStructure: { overview: "DEX Screener does not cover this token.", statements: [] },
+  }), btcPayload);
+  assert.ok(found.some((item) => /refers to DEX Screener data without stating the context's reason \(no DEX Screener mapping for this token\)/.test(item)));
+});
+
+test("P15. valid numeric and period claims inside properly sourced statements still pass (the fix does not over-tighten the validator)", () => {
+  const change = field(uniPayload, "obs:change_24h");
+  const hist = uniPayload.fields.find((item) => item.id.startsWith("hist:price_") && item.periodRequired);
+  const found = violations(report({
+    marketPerformance: { overview: "Price changes are shown over their stated periods.", statements: [
+      st("observed", `CoinGecko reported a 24-hour price change of ${change.value}.`, [change.id], change.period),
+      ...(hist ? [st("observed", `Price history shows ${hist.value}.`, [hist.id], hist.period)] : []),
+    ] },
+  }), uniPayload);
+  assert.deepEqual(found, []);
+});
+
 let failures = 0;
 for (const { name, run } of cases) {
   try {
