@@ -6,6 +6,7 @@ import {
   acquireGeckoTerminalSyncLock,
   finishGeckoTerminalSyncLock,
   lastSuccessfulGeckoTerminalSync,
+  resolveGeckoTerminalStartTokenId,
   withGeckoTerminalSyncLock,
 } from "../src/lib/providers/geckoterminal-sync-lock.ts";
 import { createFakeSupabase } from "./support/fake-supabase.mjs";
@@ -263,6 +264,126 @@ test("runGeckoTerminalCollection (manual) refuses to run while a scheduled run h
     runGeckoTerminalCollection(db.client, { tokenIds: ["aave-aave"], fetchImpl: fixedResponse({ data: [] }), sleep: noSleep }),
     /already running/,
   );
+});
+
+// ---- Rotation: fair, resumable scheduling across successive runs ----
+
+test("startTokenId rotates the processing order and wraps around at the end of the list", async () => {
+  const requests = [];
+  const fetchImpl = async (url) => { requests.push(String(url)); return new Response(JSON.stringify({ data: [] }), { status: 200 }); };
+  const { outcomes, nextTokenId } = await fetchGeckoTerminalSnapshotsTolerant([aave, jupiter, uni], {
+    fetchImpl, sleep: noSleep, startTokenId: jupiter.tokenId,
+  });
+  assert.deepEqual(outcomes.map((o) => o.tokenId), [jupiter.tokenId, uni.tokenId, aave.tokenId], "processing starts at jupiter and wraps back through the list");
+  assert.equal(requests[0].includes(encodeURIComponent(jupiter.tokenAddress)), true);
+  assert.equal(nextTokenId, jupiter.tokenId, "a full, uninterrupted pass wraps the cursor back to where it started");
+});
+
+test("an unknown or omitted startTokenId starts at index 0, same as before rotation existed", async () => {
+  const { outcomes } = await fetchGeckoTerminalSnapshotsTolerant([aave, jupiter, uni], { fetchImpl: fixedResponse({ data: [] }), sleep: noSleep, startTokenId: "not-a-real-token" });
+  assert.deepEqual(outcomes.map((o) => o.tokenId), [aave.tokenId, jupiter.tokenId, uni.tokenId]);
+});
+
+test("a time-budget-limited run reports nextTokenId as the first token it had to skip", async () => {
+  const times = [new Date("2026-01-01T00:00:00.000Z"), new Date("2026-01-01T00:00:01.000Z"), new Date("2026-01-01T00:00:02.000Z")];
+  let call = 0;
+  const now = () => times[Math.min(call, times.length - 1)];
+  const fetchImpl = async () => { call += 1; return new Response(JSON.stringify({ data: [] }), { status: 200 }); };
+  const deadlineAt = times[0].getTime() + 500; // only the first (rotated) token fits inside the budget
+  const { outcomes, nextTokenId } = await fetchGeckoTerminalSnapshotsTolerant([aave, jupiter, uni], {
+    fetchImpl, sleep: noSleep, now, deadlineAt, startTokenId: jupiter.tokenId,
+  });
+  assert.deepEqual(outcomes.map((o) => o.status), ["succeeded", "skipped_time_budget", "skipped_time_budget"]);
+  assert.equal(nextTokenId, uni.tokenId, "the next run must resume at the first token this run could not reach, not restart at jupiter");
+  // Existing time-budget behavior is otherwise unchanged: skipped tokens make no request and keep no snapshot.
+  assert.equal(outcomes[1].attempts, 0);
+});
+
+test("a token that fails every time is retried on every cycle, never permanently skipped by the rotation", async () => {
+  const fetchImpl = async (url) => {
+    if (String(url).includes(encodeURIComponent(aave.tokenAddress))) return new Response("", { status: 500 });
+    return new Response(JSON.stringify({ data: [] }), { status: 200 });
+  };
+  const run1 = await fetchGeckoTerminalSnapshotsTolerant([aave, jupiter, uni], { fetchImpl, sleep: noSleep });
+  assert.equal(run1.outcomes.find((o) => o.tokenId === aave.tokenId).status, "failed");
+  assert.equal(run1.nextTokenId, aave.tokenId, "a completed pass wraps back to the start even though aave failed in it");
+
+  const run2 = await fetchGeckoTerminalSnapshotsTolerant([aave, jupiter, uni], { fetchImpl, sleep: noSleep, startTokenId: run1.nextTokenId });
+  assert.equal(run2.outcomes[0].tokenId, aave.tokenId, "the previously failed token is presented again, not permanently excluded");
+  assert.equal(run2.outcomes[0].status, "failed", "it keeps failing (the fixture never changes), which is expected — the point is that it is retried at all");
+});
+
+test("resolveGeckoTerminalStartTokenId returns null when no run has ever recorded a cursor", async () => {
+  const db = createFakeSupabase({ seed: { geckoterminal_sync_runs: [] } });
+  assert.equal(await resolveGeckoTerminalStartTokenId(db.client), null);
+});
+
+test("resolveGeckoTerminalStartTokenId skips rows with no recorded cursor (running/manual/pre-rotation runs) to find the last real one", async () => {
+  const db = createFakeSupabase({ seed: { geckoterminal_sync_runs: [
+    { id: 1, trigger: "scheduled", status: "succeeded", started_at: "2026-09-28T00:00:00Z", finished_at: "2026-09-28T00:05:00Z", lease_expires_at: "2026-09-28T00:10:00Z", summary: { nextTokenId: "token-a" } },
+    { id: 2, trigger: "manual", status: "succeeded", started_at: "2026-09-29T00:00:00Z", finished_at: "2026-09-29T00:05:00Z", lease_expires_at: "2026-09-29T00:10:00Z", summary: {} },
+    { id: 3, trigger: "scheduled", status: "running", started_at: "2026-09-30T00:00:00Z", lease_expires_at: "2026-09-30T00:10:00Z" },
+  ] } });
+  assert.equal(await resolveGeckoTerminalStartTokenId(db.client), "token-a", "the manual run and the still-running row carry no cursor, so the search must look past them");
+});
+
+test("rotation does not weaken the sync lock: an overlapping scheduled run is still refused", async () => {
+  const db = createFakeSupabase({ seed: baseSeed({
+    geckoterminal_sync_runs: [{ id: 1, trigger: "scheduled", status: "running", started_at: new Date().toISOString(), lease_expires_at: new Date(Date.now() + 60_000).toISOString() }],
+  }) });
+  const runId = await acquireGeckoTerminalSyncLock(db.client, "scheduled", new Date(), 60_000);
+  assert.equal(runId, null, "an overlapping run must still be refused regardless of cursor state");
+});
+
+test("integration: successive scheduled runs resume after the previous stop, reach every token, and wrap around", async () => {
+  const db = createFakeSupabase({ seed: baseSeed() });
+  const tokenIds = [aave.tokenId, jupiter.tokenId, uni.tokenId];
+  const fetchImpl = fixedResponse({ data: [] });
+
+  async function runOnce(baseMs) {
+    let calls = 0;
+    const now = () => new Date(baseMs + (calls++) * 1_000);
+    const runId = await acquireGeckoTerminalSyncLock(db.client, "scheduled", new Date(baseMs), 15 * 60 * 1000);
+    assert.equal(typeof runId, "number", "the lock must be free between successive scheduled runs");
+    const result = await runGeckoTerminalScheduledCollection(db.client, {
+      tokenIds, fetchImpl, sleep: noSleep, now,
+      deadlineAt: baseMs + 1_500, // wide enough for exactly one token's request+snapshot timestamp, not a second
+    });
+    const status = result.failed.length === 0 && result.skipped.length === 0 ? "succeeded" : result.succeeded.length > 0 ? "partial" : "failed";
+    await finishGeckoTerminalSyncLock(db.client, runId, status, new Date(baseMs + 3_000), result, null);
+    return result;
+  }
+
+  const day1 = Date.parse("2026-10-01T00:00:00.000Z");
+  const run1 = await runOnce(day1);
+  assert.equal(run1.startTokenId, null, "run 1 has no prior history, so it starts at the first token");
+  assert.equal(run1.succeeded.length, 1, "run 1's time budget only fits one token");
+  assert.equal(run1.skipped.length, 2);
+
+  const day2 = Date.parse("2026-10-02T00:00:00.000Z");
+  const run2 = await runOnce(day2);
+  assert.equal(run2.startTokenId, run1.nextTokenId, "run 2 must resume exactly where run 1 stopped");
+  assert.notEqual(run2.succeeded[0], run1.succeeded[0], "run 2 must not just repeat run 1's token while the others stay stale");
+
+  const day3 = Date.parse("2026-10-03T00:00:00.000Z");
+  const run3 = await runOnce(day3);
+  assert.equal(run3.startTokenId, run2.nextTokenId);
+
+  // Across three runs, every mapped token was reached exactly once — none starved.
+  const processed = [run1.succeeded[0], run2.succeeded[0], run3.succeeded[0]];
+  assert.equal(new Set(processed).size, 3, "all three tokens must have been processed, not just the first one repeatedly");
+  assert.deepEqual([...processed].sort(), [...tokenIds].sort());
+
+  const day4 = Date.parse("2026-10-04T00:00:00.000Z");
+  const run4 = await runOnce(day4);
+  assert.equal(run4.startTokenId, run3.nextTokenId);
+  assert.equal(run4.succeeded[0], run1.succeeded[0], "the rotation wraps back to the first token once the whole universe has been covered");
+
+  // Every token now has at least one stored historical observation from this rotation.
+  for (const tokenId of tokenIds) {
+    const rows = db.rows("token_metric_observations").filter((row) => row.token_id === tokenId && row.provider_id === "geckoterminal");
+    assert.ok(rows.length > 0, `${tokenId} must have received an observation somewhere across the rotation`);
+  }
 });
 
 let failures = 0;

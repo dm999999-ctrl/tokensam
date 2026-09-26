@@ -373,6 +373,16 @@ export type GeckoTerminalCollectionOutcome = {
 export type GeckoTerminalTolerantResult = {
   snapshots: ProviderSnapshot[];
   outcomes: GeckoTerminalCollectionOutcome[];
+  /**
+   * The token id the *next* run should start from, so successive scheduled
+   * runs rotate through the universe instead of always restarting at index 0
+   * (which would starve later tokens whenever a run doesn't fit everyone
+   * inside its time budget). Advances past every token this run *attempted*
+   * (succeeded or failed), never past a token skipped only for lack of time,
+   * so a skipped tail is exactly where the next run resumes. `null` when the
+   * asset list is empty.
+   */
+  nextTokenId: string | null;
 };
 
 /**
@@ -387,6 +397,13 @@ export type GeckoTerminalTolerantResult = {
  * same as `fetchSnapshots`; `minRequestIntervalMs` may only raise the pacing
  * above `MIN_REQUEST_INTERVAL_MS`, never lower it, so scheduling can be made
  * more conservative but never weaker.
+ *
+ * `startTokenId` rotates the processing order to begin at that token (wrapping
+ * around the end of the list), instead of always starting at index 0. This is
+ * what lets successive scheduled runs make fair progress across the whole
+ * universe instead of only ever reaching the first tokens that fit inside one
+ * run's time budget. An unknown or omitted `startTokenId` starts at index 0,
+ * same as before this option existed.
  */
 export async function fetchGeckoTerminalSnapshotsTolerant(
   assets: ProviderAsset[] = configuredGeckoTerminalAssets(),
@@ -397,6 +414,8 @@ export async function fetchGeckoTerminalSnapshotsTolerant(
     /** Epoch ms after which no further tokens are attempted; already-collected snapshots are still returned. */
     deadlineAt?: number;
     minRequestIntervalMs?: number;
+    /** Token id to start this run's rotation from; unknown/omitted means start at index 0. */
+    startTokenId?: string | null;
   } = {},
 ): Promise<GeckoTerminalTolerantResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -404,11 +423,15 @@ export async function fetchGeckoTerminalSnapshotsTolerant(
   const now = options.now ?? (() => new Date());
   const requestInterval = Math.max(MIN_REQUEST_INTERVAL_MS, options.minRequestIntervalMs ?? 0);
   const requested = resolveConfiguredAssets(assets);
+  const startIndex = options.startTokenId
+    ? Math.max(0, requested.findIndex((asset) => asset.tokenId === options.startTokenId))
+    : 0;
+  const rotated = startIndex > 0 ? [...requested.slice(startIndex), ...requested.slice(0, startIndex)] : requested;
 
   const snapshots: ProviderSnapshot[] = [];
   const outcomes: GeckoTerminalCollectionOutcome[] = [];
-  for (let index = 0; index < requested.length; index += 1) {
-    const asset = requested[index];
+  for (let index = 0; index < rotated.length; index += 1) {
+    const asset = rotated[index];
     if (options.deadlineAt !== undefined && now().getTime() >= options.deadlineAt) {
       outcomes.push({ tokenId: asset.tokenId, status: "skipped_time_budget", attempts: 0, rateLimited: false });
       continue;
@@ -429,5 +452,11 @@ export async function fetchGeckoTerminalSnapshotsTolerant(
       });
     }
   }
-  return { snapshots, outcomes };
+  // Advance past every token actually attempted this run (succeeded or failed),
+  // never past one only skipped for lack of time — so a partial run resumes
+  // exactly where it left off, and modulo wraps back to the start once a full
+  // cycle of the universe completes.
+  const attemptedCount = outcomes.filter((outcome) => outcome.status !== "skipped_time_budget").length;
+  const nextTokenId = rotated.length > 0 ? rotated[attemptedCount % rotated.length].tokenId : null;
+  return { snapshots, outcomes, nextTokenId };
 }

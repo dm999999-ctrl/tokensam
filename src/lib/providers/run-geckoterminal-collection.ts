@@ -5,7 +5,7 @@ import {
   GeckoTerminalMarketDataProvider,
   getUnmappedGeckoTerminalTokens,
 } from "./geckoterminal.ts";
-import { geckoTerminalSyncLockTableExists, withGeckoTerminalSyncLock } from "./geckoterminal-sync-lock.ts";
+import { geckoTerminalSyncLockTableExists, resolveGeckoTerminalStartTokenId, withGeckoTerminalSyncLock } from "./geckoterminal-sync-lock.ts";
 import { persistProviderSnapshots } from "./persist-snapshots.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
@@ -125,6 +125,16 @@ export type GeckoTerminalScheduledResult = {
   rateLimitEvents: number;
   retries: number;
   durationMs: number;
+  /** Token id this run started its rotation from (null means index 0). */
+  startTokenId: string | null;
+  /**
+   * Token id the *next* scheduled run should start from. The caller (the cron
+   * route) persists this in `geckoterminal_sync_runs.summary` via
+   * `finishGeckoTerminalSyncLock`; `resolveGeckoTerminalStartTokenId` reads it
+   * back on the next run. This is what makes rotation resumable across
+   * invocations without a dedicated cursor table.
+   */
+  nextTokenId: string | null;
 };
 
 /**
@@ -139,6 +149,14 @@ export type GeckoTerminalScheduledResult = {
  * route) acquires and releases it, since it needs the run id to report a
  * precise status. It also does not decide scheduling (cadence, whether the
  * run is due, or the deadline) — that is entirely the caller's job.
+ *
+ * Rotation: by default, this function resolves where to resume from by
+ * reading `geckoterminal_sync_runs` for the previous run's `nextTokenId` (see
+ * `resolveGeckoTerminalStartTokenId`), so a run that only reaches part of the
+ * universe before its deadline picks up exactly where the last one stopped
+ * instead of restarting at the first token every time. Pass `startTokenId`
+ * explicitly (including `null`, meaning "start at index 0") to override this,
+ * which tests use to make rotation deterministic.
  */
 export async function runGeckoTerminalScheduledCollection(
   client: SupabaseAdminClient,
@@ -149,17 +167,20 @@ export async function runGeckoTerminalScheduledCollection(
     now?: () => Date;
     deadlineAt?: number;
     minRequestIntervalMs?: number;
+    startTokenId?: string | null;
   } = {},
 ): Promise<GeckoTerminalScheduledResult> {
   const startedAt = Date.now();
   await verifySchema(client);
   const assets = configuredGeckoTerminalAssets().filter((asset) => !options.tokenIds || options.tokenIds.includes(asset.tokenId));
-  const { snapshots, outcomes } = await fetchGeckoTerminalSnapshotsTolerant(assets, {
+  const startTokenId = options.startTokenId !== undefined ? options.startTokenId : await resolveGeckoTerminalStartTokenId(client);
+  const { snapshots, outcomes, nextTokenId } = await fetchGeckoTerminalSnapshotsTolerant(assets, {
     fetchImpl: options.fetchImpl,
     sleep: options.sleep,
     now: options.now,
     deadlineAt: options.deadlineAt,
     minRequestIntervalMs: options.minRequestIntervalMs,
+    startTokenId,
   });
 
   // Only tokens that actually returned a snapshot this run get their mapping refreshed;
@@ -190,5 +211,7 @@ export async function runGeckoTerminalScheduledCollection(
     rateLimitEvents: outcomes.filter((outcome) => outcome.rateLimited).length,
     retries: outcomes.reduce((sum, outcome) => sum + Math.max(0, outcome.attempts - 1), 0),
     durationMs: Date.now() - startedAt,
+    startTokenId: startTokenId ?? null,
+    nextTokenId,
   };
 }

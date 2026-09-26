@@ -83,6 +83,32 @@ export async function lastSuccessfulGeckoTerminalSync(client: SupabaseAdminClien
 }
 
 /**
+ * Where the next scheduled collection should resume the token rotation (see
+ * `fetchGeckoTerminalSnapshotsTolerant`'s `startTokenId`/`nextTokenId`).
+ * Reuses this same lock table rather than a dedicated cursor table: each run's
+ * `summary.nextTokenId` (written by the caller via `finishGeckoTerminalSyncLock`)
+ * already records exactly where the *next* run should begin.
+ *
+ * Looks back through recent runs (any trigger or status) for the newest one
+ * that actually recorded a `nextTokenId` — a manual sync or a run that failed
+ * before making any progress writes no cursor, so its row is skipped rather
+ * than resetting the rotation to the start. Returns null (start at index 0)
+ * when no run has ever recorded one.
+ */
+export async function resolveGeckoTerminalStartTokenId(client: SupabaseAdminClient): Promise<string | null> {
+  const { data, error } = await client.from("geckoterminal_sync_runs")
+    .select("summary")
+    .order("id", { ascending: false })
+    .limit(20);
+  fail(error, "read GeckoTerminal sync cursor");
+  for (const row of (data ?? []) as { summary?: { nextTokenId?: unknown } | null }[]) {
+    const nextTokenId = row.summary?.nextTokenId;
+    if (typeof nextTokenId === "string" && nextTokenId.length > 0) return nextTokenId;
+  }
+  return null;
+}
+
+/**
  * Runs `work` while holding the lock, releasing it on success or failure.
  * Throws immediately (before calling `work`) if another run already holds it.
  */
