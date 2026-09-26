@@ -56,9 +56,11 @@ export function SourcesMethodology({ methodology, open, onToggle }: {
 
           <section aria-labelledby="sources-freshness">
             <h3 id="sources-freshness">Data freshness</h3>
-            {methodology.freshness.length > 0 ? (
+            {(() => {
+              const visibleFreshness = methodology.freshness.filter((item) => item.state !== "stale");
+              return visibleFreshness.length > 0 ? (
               <ul className="freshness-list" aria-label="Data freshness for this token">
-                {methodology.freshness.map((item) => (
+                {visibleFreshness.map((item) => (
                   <li key={item.label} className={`freshness-row ${item.state ?? "neutral"}`}>
                     <span className="freshness-dot" aria-hidden="true" />
                     <span className="freshness-label">{item.label}</span>
@@ -70,12 +72,19 @@ export function SourcesMethodology({ methodology, open, onToggle }: {
                       ].filter(Boolean).join(" · ")}
                     >
                       {item.ageLabel}
-                      {item.state === "stale" ? <b> · Stale</b> : item.state === "current" ? " · Current" : null}
+                      {item.state === "current" ? " · Current" : null}
                     </span>
                   </li>
                 ))}
               </ul>
-            ) : <p className="muted-copy">No data has been collected for this token yet.</p>}
+              ) : (
+                <p className="muted-copy">
+                  {methodology.freshness.length > 0
+                    ? "No current data is available for this token yet."
+                    : "No data has been collected for this token yet."}
+                </p>
+              );
+            })()}
             {methodology.referencePrice ? (
               <p className="methodology-note">
                 Reference token price <b className="numeric">{methodology.referencePrice.value}</b>

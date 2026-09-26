@@ -417,6 +417,13 @@ test("Sources & methodology: 'Data provenance' with providers; raw collection no
   for (const internal of [/stored observations/i, /backfill/i, /raw record/i, /ingestion/i, /payload/i]) assert.doesNotMatch(source.replace(/\/\*\*[\s\S]*?\*\//g, ""), internal);
 });
 
+test("Sources & methodology: stale data-freshness rows are hidden, not flagged", () => {
+  const source = readFileSync(new URL("../src/components/SourcesMethodology.tsx", import.meta.url), "utf8");
+  assert.match(source, /methodology\.freshness\.filter\(\(item\) => item\.state !== "stale"\)/, "stale rows are filtered out before rendering");
+  assert.doesNotMatch(source, /Stale/, "no stale label or placeholder is rendered in its place");
+  assert.match(source, /visibleFreshness\.map/, "only the filtered, non-stale rows are mapped to list items");
+});
+
 test("readings format by unit", () => {
   assert.equal(formatReading({ label: "x", value: 12.345, unit: "percent_change" }), "+12.35%");
   assert.equal(formatReading({ label: "x", value: -0.5, unit: "percent_per_day" }), "-0.50% / day");
