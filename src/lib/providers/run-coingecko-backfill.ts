@@ -20,7 +20,8 @@ export type BackfillTokenResult = {
   error?: string;
 };
 
-async function existingKeys(client: SupabaseAdminClient, tokenId: string, since: Date): Promise<Set<string>> {
+/** Exported for reuse by the automated daily-history step (run-coingecko-daily-history.ts). */
+export async function existingKeys(client: SupabaseAdminClient, tokenId: string, since: Date): Promise<Set<string>> {
   const keys = new Set<string>();
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await client.from("token_metric_observations")

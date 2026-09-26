@@ -29,12 +29,17 @@ export async function GET(request: Request): Promise<Response> {
       trigger: request.headers.get("x-vercel-cron-schedule") ? "scheduled" : "manual",
       force: url.searchParams.get("force") === "1",
       only: requested as ProviderStep[] | undefined,
+      // Also collect the newest genuine daily-close observations (once per UTC
+      // day, past their provider's safe hour) so Technical Analysis keeps
+      // advancing without a manually-run backfill; see docs/automated-refresh.md.
+      includeDailyHistory: true,
     });
     const status = result.status === "busy" ? 409 : result.status === "failed" ? 500 : 200;
     return Response.json({
       status: result.status,
       runId: result.runId,
       due: result.due,
+      dailyHistoryDue: result.dailyHistoryDue,
       steps: result.steps.map(({ step, status: stepStatus, finishedAt, error }) => ({ step, status: stepStatus, finishedAt, error })),
     }, { status });
   } catch (error) {

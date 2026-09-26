@@ -30,13 +30,14 @@ try {
   const { runDataRefresh } = await import("../src/lib/refresh/orchestrator.ts");
   const { SupabaseRefreshStore } = await import("../src/lib/refresh/store.ts");
   const client = createSupabaseAdminClient();
-  const result = await runDataRefresh(client, new SupabaseRefreshStore(client), { trigger: "manual", force, only });
+  const result = await runDataRefresh(client, new SupabaseRefreshStore(client), { trigger: "manual", force, only, includeDailyHistory: true });
 
   if (result.status === "busy") {
     console.log("Another refresh run is in progress; nothing was started.");
   } else {
     console.log(`Refresh run ${result.runId}: ${result.status}.`);
     console.log(result.due.length ? `Due providers: ${result.due.join(", ")}.` : "No provider was due. Use --force to collect anyway.");
+    console.log(result.dailyHistoryDue.length ? `Due daily-history steps: ${result.dailyHistoryDue.join(", ")}.` : "No daily-history step was due yet.");
     for (const step of result.steps) {
       const detail = Object.entries(step.detail).map(([key, value]) => `${key}=${value}`).join(", ");
       console.log(`- ${step.step}: ${step.status}${detail ? ` (${detail})` : ""}${step.error ? ` — ${step.error}` : ""}`);

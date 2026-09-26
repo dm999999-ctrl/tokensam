@@ -62,6 +62,21 @@ Intervals and thresholds live in [`src/lib/refresh/config.ts`](../src/lib/refres
 
 Vercel doesn't retry failed cron invocations and may occasionally skip or duplicate one. The due check and the lock make both safe.
 
+## Daily-history steps (`coingecko_daily`, `defillama_daily`)
+
+The steps above only ever refresh the *current* snapshot (CoinGecko's live price, DeFiLlama's live TVL). Technical Analysis and the cross-metric (Price vs TVL) indicators instead need a genuine, UTC-midnight-aligned daily close (`dailySamples()`, `src/lib/indicators/series.ts`), and previously that only came from the manual `pnpm backfill:coingecko` / `pnpm backfill:defillama --history` scripts — so the daily series stayed stuck at whatever day someone last ran a backfill, while the current snapshot kept advancing every refresh.
+
+`runDataRefresh` now also runs two more steps, `coingecko_daily` and `defillama_daily`, whenever `includeDailyHistory: true` is passed (the cron route and `pnpm refresh` both pass it; the raw `runDataRefresh` function itself defaults to `false` so every other caller, including the test suite, is unaffected). Unlike the providers above:
+
+- They are due **at most once per UTC calendar day**, not on a rolling interval, and only from a per-provider "safe hour" onward (`DAILY_HISTORY_POLICY`, `src/lib/refresh/config.ts`) — a documented assumption about when each provider has likely published the newly completed day, not a value confirmed against live provider behavior.
+- A run that finds nothing new yet is recorded as **`skipped`** ("not yet available"), not `succeeded`, so it stays due and retries later the same day (bounded by `retryIntervalMs`, never every refresh tick) until a genuine new day appears.
+- Both steps explicitly drop any provider point dated the *current* UTC day before persisting, however the provider timestamps it — the current day is never treated as a completed daily close.
+- CoinGecko's step uses a small 7-day `interval=daily` lookback (one request per token, no hourly reconciliation call), not the manual backfill's 90-day pull. DeFiLlama's `/protocol/{slug}` has no date-range parameter, so its step still fetches the same payload the explicit `--history` backfill does, just once per day instead of only on request.
+- Persistence reuses the same normalization/storage functions as the manual backfills (`coingecko-history.ts`, `persist-snapshots.ts`, `DefiLlamaFundamentalsProvider.fetchHistorySnapshots`), so the stored rows are identical to what a manual backfill produces and to what `dailySamples()` already consumes.
+- The two steps are independent: one failing or finding nothing new never rolls back the other's persisted result.
+
+The manual backfill scripts (`pnpm backfill:coingecko`, `pnpm backfill:defillama --history`) still exist for one-time recovery of a gap that predates this change (for example, days missed before this fix was deployed); the daily steps only keep the series moving forward from whatever is already stored.
+
 Nothing is deployed by this phase.
 
 ## Manual refresh (development)

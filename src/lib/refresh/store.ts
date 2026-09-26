@@ -24,10 +24,12 @@ export interface RefreshStore {
   recordStep(runId: number, step: StepRecord): Promise<void>;
   finishRun(runId: number, status: Exclude<RunStatus, "running">, finishedAt: Date, summary: Record<string, unknown>, error: string | null): Promise<void>;
   lastSuccessfulSteps(): Promise<Partial<Record<RefreshStep, string>>>;
+  /** The most recent recorded step of each kind, whatever its outcome (used to pace daily-history retries). */
+  latestAttempts(): Promise<Partial<Record<RefreshStep, { status: StepStatus; finishedAt: string }>>>;
   latestRun(): Promise<LatestRun | null>;
 }
 
-const STEPS: RefreshStep[] = ["coingecko", "defillama", "dexscreener", "defillama_coins", "metrics"];
+const STEPS: RefreshStep[] = ["coingecko", "defillama", "dexscreener", "defillama_coins", "coingecko_daily", "defillama_daily", "metrics"];
 const UNIQUE_VIOLATION = "23505";
 
 // TEMPORARY diagnostic logging for the acquireRun 500 investigation. Logs only the

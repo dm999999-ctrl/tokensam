@@ -3,13 +3,18 @@ import { runCoinGeckoCollection } from "../providers/run-coingecko-collection.ts
 import { runDefiLlamaCollection } from "../providers/run-defillama-collection.ts";
 import { runDexScreenerCollection } from "../providers/run-dexscreener-collection.ts";
 import { runDefiLlamaCoinsCollection } from "../providers/run-defillama-coins-collection.ts";
+import { runCoinGeckoDailyHistory } from "../providers/run-coingecko-daily-history.ts";
+import { runDefiLlamaDailyHistory } from "../providers/run-defillama-daily-history.ts";
 import { runMetricsCalculation } from "../metrics/run-calculation.ts";
 import {
+  DAILY_HISTORY_POLICY,
+  DAILY_HISTORY_STEPS,
   DUE_TOLERANCE_MS,
   METRICS_TIMEOUT_MS,
   PROVIDER_STEPS,
   REFRESH_POLICY,
   RUN_LEASE_MS,
+  type DailyHistoryStep,
   type ProviderStep,
   type RefreshStep,
 } from "./config.ts";
@@ -54,6 +59,22 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
   },
 };
 
+export const defaultDailyHistoryCollectors: Record<DailyHistoryStep, CollectorDefinition> = {
+  coingecko_daily: { collect: (client, options) => runCoinGeckoDailyHistory(client, options) },
+  defillama_daily: {
+    // Same written-permission gate as the routine and explicit-backfill DeFiLlama paths.
+    skipReason: () => {
+      try {
+        getDefiLlamaConfig();
+        return null;
+      } catch (error) {
+        return errorMessage(error);
+      }
+    },
+    collect: (client, options) => runDefiLlamaDailyHistory(client, options),
+  },
+};
+
 export class RefreshTimeoutError extends Error {
   constructor(label: string, timeoutMs: number) {
     super(`${label} exceeded its ${Math.round(timeoutMs / 1000)} s refresh budget.`);
@@ -69,6 +90,14 @@ export type RefreshOptions = {
   only?: ProviderStep[];
   now?: () => Date;
   collectors?: Partial<Record<ProviderStep, CollectorDefinition>>;
+  /**
+   * Also run the scheduled daily-history steps (coingecko_daily,
+   * defillama_daily) when due. Off by default so every existing caller (and
+   * test) keeps its exact current behavior; the cron route turns it on. When
+   * on, `force` also bypasses the safe-hour/once-per-UTC-day gating.
+   */
+  includeDailyHistory?: boolean;
+  dailyHistoryCollectors?: Partial<Record<DailyHistoryStep, CollectorDefinition>>;
   calculateMetrics?: (client: SupabaseAdminClient) => Promise<Record<string, unknown>>;
   timeouts?: Partial<Record<RefreshStep, number>>;
   fetchImpl?: typeof fetch;
@@ -79,6 +108,8 @@ export type RefreshResult = {
   status: RunStatus | "busy";
   runId: number | null;
   due: ProviderStep[];
+  /** Daily-history steps that were due and attempted this run; empty unless includeDailyHistory is set. */
+  dailyHistoryDue: DailyHistoryStep[];
   steps: StepRecord[];
 };
 
@@ -136,6 +167,27 @@ export function isProviderDue(step: ProviderStep, lastSuccessAt: string | undefi
   return now.getTime() - Date.parse(lastSuccessAt) >= REFRESH_POLICY[step].intervalMs - DUE_TOLERANCE_MS;
 }
 
+/**
+ * A daily-history step is due at most once per UTC calendar day, only from its
+ * safe hour onward (so it does not run at 00:00 UTC and find nothing, before
+ * the provider has published the newly completed day), and — if an earlier
+ * attempt today already found nothing new ("not yet available") — no more
+ * often than its retryIntervalMs. See DAILY_HISTORY_POLICY (config.ts).
+ */
+export function isDailyHistoryDue(
+  step: DailyHistoryStep,
+  lastSuccessAt: string | undefined,
+  lastAttemptAt: string | undefined,
+  now: Date,
+): boolean {
+  const policy = DAILY_HISTORY_POLICY[step];
+  if (now.getUTCHours() < policy.safeHourUtc) return false;
+  const today = now.toISOString().slice(0, 10);
+  if (lastSuccessAt && lastSuccessAt.slice(0, 10) === today) return false;
+  if (lastAttemptAt && now.getTime() - Date.parse(lastAttemptAt) < policy.retryIntervalMs) return false;
+  return true;
+}
+
 export function overallStatus(steps: StepRecord[]): Exclude<RunStatus, "running"> {
   const providers = steps.filter((step) => step.step !== "metrics");
   const attempted = providers.filter((step) => step.status !== "skipped");
@@ -158,16 +210,64 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
   const now = options.now ?? (() => new Date());
   const collectors = { ...defaultCollectors, ...options.collectors };
   const calculateMetrics = options.calculateMetrics ?? ((db: SupabaseAdminClient) => runMetricsCalculation(db));
-  const timeoutFor = (step: RefreshStep) => options.timeouts?.[step]
+  const timeoutFor = (step: ProviderStep | "metrics") => options.timeouts?.[step]
     ?? (step === "metrics" ? METRICS_TIMEOUT_MS : REFRESH_POLICY[step].timeoutMs);
 
   const runId = await store.acquireRun(options.trigger, now(), RUN_LEASE_MS);
-  if (runId === null) return { status: "busy", runId: null, due: [], steps: [] };
+  if (runId === null) return { status: "busy", runId: null, due: [], dailyHistoryDue: [], steps: [] };
 
   const steps: StepRecord[] = [];
   const record = async (step: StepRecord) => {
     steps.push(step);
     await store.recordStep(runId, step);
+  };
+
+  /**
+   * Run one step with its own deadline, recording the outcome. `classify`
+   * turns a successful result into "succeeded" or "skipped" (for example, a
+   * daily-history step that ran fine but found no new completed day yet is
+   * "skipped", not "succeeded", so it stays due for a later retry today).
+   */
+  const runStep = async (
+    step: RefreshStep,
+    definition: CollectorDefinition,
+    timeoutMs: number,
+    label: string,
+    classify: (result: Record<string, unknown>) => { status: "succeeded" | "skipped"; error: string | null } = () => ({ status: "succeeded", error: null }),
+  ) => {
+    const startedAt = now().toISOString();
+    const skipReason = definition.skipReason?.() ?? null;
+    if (skipReason) {
+      await record({ step, status: "skipped", startedAt, finishedAt: now().toISOString(), detail: {}, error: skipReason });
+      return;
+    }
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(new RefreshTimeoutError(label, timeoutMs)), timeoutMs);
+    try {
+      const result = await withTimeout(
+        definition.collect(client, {
+          fetchImpl: deadlineFetch(deadline.signal, options.fetchImpl),
+          sleep: deadlineSleep(deadline.signal, options.sleep),
+        }),
+        // Small grace period so an in-flight abort surfaces as the collector's own error first.
+        timeoutMs + 5_000,
+        label,
+      );
+      const classified = classify(result);
+      await record({ step, status: classified.status, startedAt, finishedAt: now().toISOString(), detail: summarize(result), error: classified.error });
+    } catch (error) {
+      const timedOut = deadline.signal.aborted || error instanceof RefreshTimeoutError;
+      await record({
+        step,
+        status: timedOut ? "timed_out" : "failed",
+        startedAt,
+        finishedAt: now().toISOString(),
+        detail: {},
+        error: timedOut ? new RefreshTimeoutError(label, timeoutMs).message : errorMessage(error),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   try {
@@ -177,45 +277,31 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
 
     // Different providers have independent rate limits, so they run concurrently;
     // each collector still serializes and paces its own requests.
-    await Promise.all(due.map(async (step) => {
-      const startedAt = now().toISOString();
-      const definition = collectors[step];
-      const skipReason = definition.skipReason?.() ?? null;
-      if (skipReason) {
-        await record({ step, status: "skipped", startedAt, finishedAt: now().toISOString(), detail: {}, error: skipReason });
-        return;
-      }
-      const timeoutMs = timeoutFor(step);
-      const deadline = new AbortController();
-      const timer = setTimeout(() => deadline.abort(new RefreshTimeoutError(REFRESH_POLICY[step].label, timeoutMs)), timeoutMs);
-      try {
-        const result = await withTimeout(
-          definition.collect(client, {
-            fetchImpl: deadlineFetch(deadline.signal, options.fetchImpl),
-            sleep: deadlineSleep(deadline.signal, options.sleep),
-          }),
-          // Small grace period so an in-flight abort surfaces as the collector's own error first.
-          timeoutMs + 5_000,
-          REFRESH_POLICY[step].label,
-        );
-        await record({ step, status: "succeeded", startedAt, finishedAt: now().toISOString(), detail: summarize(result), error: null });
-      } catch (error) {
-        const timedOut = deadline.signal.aborted || error instanceof RefreshTimeoutError;
-        await record({
-          step,
-          status: timedOut ? "timed_out" : "failed",
-          startedAt,
-          finishedAt: now().toISOString(),
-          detail: {},
-          error: timedOut ? new RefreshTimeoutError(REFRESH_POLICY[step].label, timeoutMs).message : errorMessage(error),
-        });
-      } finally {
-        clearTimeout(timer);
-      }
-    }));
+    await Promise.all(due.map((step) => runStep(step, collectors[step], timeoutFor(step), REFRESH_POLICY[step].label)));
+
+    let dailyHistoryDue: DailyHistoryStep[] = [];
+    if (options.includeDailyHistory) {
+      const dailyHistoryCollectors = { ...defaultDailyHistoryCollectors, ...options.dailyHistoryCollectors };
+      const lastAttempts = await store.latestAttempts();
+      dailyHistoryDue = DAILY_HISTORY_STEPS.filter((step) => options.force || isDailyHistoryDue(step, lastSuccess[step], lastAttempts[step]?.finishedAt, now()));
+
+      // Independent of the current-data providers above: a genuine failure or
+      // "not yet available" result here never touches the other provider's
+      // already-persisted observations (each step, like the ones above, fetches
+      // and validates before writing anything).
+      await Promise.all(dailyHistoryDue.map((step) => runStep(
+        step,
+        dailyHistoryCollectors[step],
+        options.timeouts?.[step] ?? DAILY_HISTORY_POLICY[step].timeoutMs,
+        DAILY_HISTORY_POLICY[step].label,
+        (result) => (result.notYetAvailable
+          ? { status: "skipped" as const, error: String(result.notYetAvailable) }
+          : { status: "succeeded" as const, error: null }),
+      )));
+    }
 
     const refreshed = steps.filter((step) => step.status === "succeeded").map((step) => step.step);
-    if (due.length > 0) {
+    if (due.length > 0 || dailyHistoryDue.length > 0) {
       const startedAt = now().toISOString();
       if (refreshed.length === 0) {
         await record({
@@ -244,10 +330,11 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
     const status = overallStatus(steps);
     const summary = {
       due,
+      dailyHistoryDue,
       steps: Object.fromEntries(steps.map((step) => [step.step, step.status])),
     };
     await store.finishRun(runId, status, now(), summary, null);
-    return { status, runId, due, steps };
+    return { status, runId, due, dailyHistoryDue, steps };
   } catch (error) {
     // Status bookkeeping failed; release the lock and surface the error.
     await store.finishRun(runId, "failed", now(), { steps: Object.fromEntries(steps.map((step) => [step.step, step.status])) }, errorMessage(error))

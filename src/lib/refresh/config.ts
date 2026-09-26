@@ -1,7 +1,10 @@
 export type ProviderStep = "coingecko" | "defillama" | "dexscreener" | "defillama_coins";
-export type RefreshStep = ProviderStep | "metrics";
+/** Daily-history steps fetch the newest genuine completed-UTC-day observation, not the current snapshot. */
+export type DailyHistoryStep = "coingecko_daily" | "defillama_daily";
+export type RefreshStep = ProviderStep | DailyHistoryStep | "metrics";
 
 export const PROVIDER_STEPS: ProviderStep[] = ["coingecko", "dexscreener", "defillama", "defillama_coins"];
+export const DAILY_HISTORY_STEPS: DailyHistoryStep[] = ["coingecko_daily", "defillama_daily"];
 
 const MINUTE = 60 * 1000;
 
@@ -40,6 +43,34 @@ export const REFRESH_POLICY: Record<ProviderStep, { label: string; intervalMs: n
 
 /** Cron delivery can be late or early by minutes; treat a provider as due slightly early. */
 export const DUE_TOLERANCE_MS = 10 * MINUTE;
+
+/**
+ * Daily-history policy: separate from REFRESH_POLICY above, which governs the
+ * *current* snapshot. These steps fetch the newest genuine UTC-midnight-aligned
+ * observation that `dailySamples()` (src/lib/indicators/series.ts) requires for
+ * Technical Analysis and the cross-metric (Price vs TVL) indicators.
+ *
+ * - intervalMs is intentionally not used here: "due every 24h since last
+ *   success" would fire at an arbitrary time of day and could run before the
+ *   provider has published the newly completed day. Instead each step runs at
+ *   most once per UTC calendar day, and only from safeHourUtc onward:
+ *     - CoinGecko's market_chart daily point is derived from data it already
+ *       holds close to live, so the newly completed day is expected to be
+ *       queryable shortly after midnight; a 1-hour buffer is conservative.
+ *     - DeFiLlama aggregates TVL across many protocols/chains through its own
+ *       indexing pipeline, which the app's other timings already treat as
+ *       slower (see REFRESH_POLICY.defillama's 24h staleAfterMs), so a longer
+ *       buffer is used before the first same-day attempt.
+ *   These buffers are a documented assumption, not a value confirmed against
+ *   live provider behavior; see docs/automated-refresh.md.
+ * - retryIntervalMs bounds retries for the same UTC day when a step ran but
+ *   found nothing new yet ("not yet available"): the orchestrator only
+ *   re-attempts after this interval, never every refresh tick.
+ */
+export const DAILY_HISTORY_POLICY: Record<DailyHistoryStep, { label: string; safeHourUtc: number; retryIntervalMs: number; timeoutMs: number }> = {
+  coingecko_daily: { label: "CoinGecko daily history", safeHourUtc: 1, retryIntervalMs: 30 * MINUTE, timeoutMs: 60_000 },
+  defillama_daily: { label: "DeFiLlama daily TVL history", safeHourUtc: 3, retryIntervalMs: 30 * MINUTE, timeoutMs: 150_000 },
+};
 
 /** Metrics read Supabase only; bound them so a slow database cannot hang the run. */
 export const METRICS_TIMEOUT_MS = 90_000;
