@@ -401,14 +401,6 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .analysis-invite > div { display: grid; gap: 6px; max-width: 640px; }
 .ai-panel { padding: 24px 26px; border: 1px solid var(--line); border-top: 2px solid var(--crimson); border-radius: var(--radius-lg); background: var(--surface); }
 .ai-panel[hidden] { display: none; }
-/* Local AI proof of concept: a separate, clearly labelled path inside the panel */
-.ai-local { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
-.ai-local-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 6px 16px; margin-bottom: 6px; }
-.ai-local-head h3 { color: var(--ink-strong); font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: .02em; text-transform: none; }
-.ai-local-model { color: var(--subtle); font-size: 12px; }
-.ai-progress { display: block; width: 100%; height: 6px; margin: 8px 0 6px; accent-color: var(--gold); }
-.ai-local-stats { margin-top: 12px; }
-.ai-local-violations { display: grid; gap: 4px; margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .ai-head { margin-bottom: 12px; }
 .ai-disclaimer { max-width: 860px; margin-bottom: 16px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .ai-disclaimer .ai-kind { margin: 0 3px; }

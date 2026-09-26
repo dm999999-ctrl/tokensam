@@ -4,8 +4,6 @@ import { useState, useTransition } from "react";
 import { requestTokenAnalysis } from "@/app/tokens/[id]/actions";
 import type { AnalysisState } from "@/lib/analysis/service";
 import type { AnalysisSection, AnalysisStatement, SectionKey, TokenAnalysis } from "@/lib/analysis/schema";
-import type { ProfilePayload } from "@/lib/analysis/profile-payload";
-import { LocalAnalysisPanel } from "@/components/LocalAnalysisPanel";
 
 const SECTIONS: { key: SectionKey; letter: string; title: string }[] = [
   { key: "executiveSummary", letter: "A", title: "Executive summary" },
@@ -118,7 +116,7 @@ export function deepAnalysisButtonHint(state: AnalysisState): string {
   return state.latest ? `Generated ${utc(state.latest.metadata.generatedAt)}` : "Gemini · generate on request";
 }
 
-export function DeepAnalysisPanel({ tokenId, initialState, hidden, payload }: { tokenId: string; initialState: AnalysisState; hidden: boolean; payload?: ProfilePayload }) {
+export function DeepAnalysisPanel({ tokenId, initialState, hidden }: { tokenId: string; initialState: AnalysisState; hidden: boolean }) {
   const [state, setState] = useState(initialState);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -174,8 +172,6 @@ export function DeepAnalysisPanel({ tokenId, initialState, hidden, payload }: { 
           {latest && <AnalysisBody analysis={latest} />}
         </>
       )}
-      {/* Separate local path: runs in this browser only, never falls back to the server providers above. */}
-      {payload && !hidden ? <LocalAnalysisPanel payload={payload} Report={AnalysisBody} /> : null}
     </section>
   );
 }

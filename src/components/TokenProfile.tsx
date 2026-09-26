@@ -82,7 +82,6 @@ function Signals({ items, title = "Divergence signals" }: { items: Card[]; title
 export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileData; analysisState: AnalysisState }) {
   const { token } = data;
   const model = useMemo(() => buildProfileModel(data), [data]);
-  // One canonical payload: "Copy data" and the local-AI analysis both use it.
   const payload = useMemo(() => buildProfilePayload(data), [data]);
   const copyData = useMemo(() => formatProfilePayloadText(payload), [payload]);
   // A stored analysis is shown by default; otherwise the panel opens on request.
@@ -264,7 +263,7 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
             </button>
           </div>
         )}
-        <DeepAnalysisPanel tokenId={token.id} initialState={analysisState} hidden={!showAnalysis} payload={payload} />
+        <DeepAnalysisPanel tokenId={token.id} initialState={analysisState} hidden={!showAnalysis} />
       </section>
 
       <SourcesMethodology
