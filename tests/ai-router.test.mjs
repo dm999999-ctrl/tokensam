@@ -390,11 +390,12 @@ test("23E. GLM JSON that does not match the report schema is rejected, then fall
 });
 
 test("23F. GLM output failing the evidence contract is rejected (no retry) and falls back to Mistral", async () => {
-  const { result, health } = await route({ glm: [chatOk(invalidReport())], mistral: [chatOk()] }, { env: GLM_ENV });
+  const { result, calls, health } = await route({ glm: [chatOk(invalidReport())], mistral: [chatOk()] }, { env: GLM_ENV });
   assert.deepEqual(attempted(result.attempts), ["glm:validation", "mistral:ok"]);
   const glmAttempt = result.attempts.find((item) => item.providerId === "glm");
   assert.equal(glmAttempt.validationPassed, false);
   assert.ok(glmAttempt.validationViolations >= 2);
+  assert.equal(calls.glm.length, 1, "requirement A: a JSON/schema-valid but evidence-rejected response is never retried against the same provider");
   assert.equal(health.get("glm", Date.now()).status, "healthy", "the provider answered; validation is not an availability failure");
 });
 
@@ -581,6 +582,54 @@ test("26. worst case — every provider fully consumes its own allocated budget,
   assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope", "gemini"]);
   assert.deepEqual(attempted.map((item) => item.timeoutMs), expected, "each budget matches the reservation formula exactly, and none is starved to zero");
   assert.equal(now, 240_000, "the full 240s budget is used, exactly, with nothing left over and nothing exceeded");
+});
+
+// ---- Requirements A-F: the reported cardano-ada cascade (GLM's real 102.555s evidence-rejected
+// generation was reportedly followed by a second GLM attempt, starving ModelScope and Gemini to
+// "skipped:deadline"). Verified against the current code: an evidence-contract rejection ("validation"
+// category) is not one of the two categories the retry loop's `if (category === "structured_output"
+// && !retry) continue;` condition matches, so it can never trigger a same-provider retry — only a
+// genuinely transient/structured-output failure can (requirements B-D, covered in tests 6, 23D,
+// 23G-23I). These tests reproduce the reported scenario's real timing to prove requirements A, E, and
+// F hold today, with no code change: a slow-but-rejected GLM response is a single attempt, and later
+// providers still receive their reserved opportunity.
+
+test("30A. requirement A/E: GLM's real 102.555s evidence-rejected response (cardano-ada) is a single attempt — never retried — and does not starve ModelScope or Gemini", async () => {
+  let now = 0;
+  const clock = () => now;
+  const deadlineAt = now + 240_000;
+  const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
+  const { result, calls } = await route(
+    {
+      glm: [advanceBy(102_555, chatOk(invalidReport()))],
+      mistral: [advanceBy(5_000, chatOk(invalidReport()))],
+      openrouter: [advanceBy(5_000, () => json({ error: { code: 500 } }, 500))],
+      siliconflow: [advanceBy(5_000, chatOk(invalidReport()))],
+      modelscope: [advanceBy(5_000, chatOk(invalidReport()))],
+      gemini: [advanceBy(5_000, geminiOk())],
+    },
+    { env: SIX_ENV, clock, deadlineAt },
+  );
+  assert.equal(calls.glm.length, 1, "requirement A: GLM's evidence-rejected response is never retried, regardless of how long it took to generate");
+  const attempted = result.attempts.filter((item) => item.action === "attempted");
+  assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope", "gemini"], "requirement F: ModelScope and Gemini are attempted, not \"skipped:deadline\" as in the reported cascade");
+  assert.equal(result.provider.id, "gemini");
+  assert.equal(now, 127_555, "102.555s (GLM, once) + 5 * 5s (Mistral/OpenRouter/SiliconFlow/ModelScope/Gemini) — well inside the 240s deadline, with no retry inflating it");
+});
+
+test("30B. requirement F, quantified: after GLM's real 102.555s single (unretried) attempt, Mistral's reserved budget alone (57,445ms) is already larger than its own observed ~41.5s completion time", async () => {
+  let now = 0;
+  const clock = () => now;
+  const deadlineAt = now + 240_000;
+  const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
+  const { result } = await route(
+    { glm: [advanceBy(102_555, chatOk(invalidReport()))], mistral: [chatOk()] },
+    { env: SIX_ENV, clock, deadlineAt },
+  );
+  assert.equal(result.provider.id, "mistral");
+  const mistralAttempt = result.attempts.find((item) => item.providerId === "mistral");
+  assert.equal(mistralAttempt.timeoutMs, 57_445, "min(120_000 cap, max(20_000, (240_000-102_555) - 4*20_000 reserved for openrouter/siliconflow/modelscope/gemini))");
+  assert.ok(mistralAttempt.timeoutMs > 41_500, "comfortably above Mistral's own observed ~41.5s completion time");
 });
 
 let failures = 0;
