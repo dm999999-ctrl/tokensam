@@ -3,6 +3,7 @@ import { runCoinGeckoCollection } from "../providers/run-coingecko-collection.ts
 import { runDefiLlamaCollection } from "../providers/run-defillama-collection.ts";
 import { runDexScreenerCollection } from "../providers/run-dexscreener-collection.ts";
 import { runDefiLlamaCoinsCollection } from "../providers/run-defillama-coins-collection.ts";
+import { runGeckoTerminalCollection } from "../providers/run-geckoterminal-collection.ts";
 import { runMetricsCalculation } from "../metrics/run-calculation.ts";
 import {
   DUE_TOLERANCE_MS,
@@ -52,6 +53,8 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
     },
     collect: (client, options) => runDefiLlamaCoinsCollection(client, options),
   },
+  // Standalone GeckoTerminal Public API; no permission gate and no API key required.
+  geckoterminal: { collect: (client, options) => runGeckoTerminalCollection(client, options) },
 };
 
 export class RefreshTimeoutError extends Error {

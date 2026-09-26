@@ -1,7 +1,16 @@
-export type ProviderStep = "coingecko" | "defillama" | "dexscreener" | "defillama_coins";
+export type ProviderStep = "coingecko" | "defillama" | "dexscreener" | "defillama_coins" | "geckoterminal";
 export type RefreshStep = ProviderStep | "metrics";
 
-export const PROVIDER_STEPS: ProviderStep[] = ["coingecko", "dexscreener", "defillama", "defillama_coins"];
+export const PROVIDER_STEPS: ProviderStep[] = ["coingecko", "dexscreener", "defillama", "defillama_coins", "geckoterminal"];
+
+/**
+ * Providers shown in the dashboard/Token Profile freshness UI (see
+ * DataStatus.tsx, UniverseHero.tsx). GeckoTerminal is intentionally excluded:
+ * this integration only establishes and verifies its data pipeline (see
+ * docs/geckoterminal-integration.md) and does not change the Token Profile
+ * UI yet. It still runs in the refresh pipeline via PROVIDER_STEPS.
+ */
+export const DISPLAYED_PROVIDER_STEPS: ProviderStep[] = PROVIDER_STEPS.filter((step) => step !== "geckoterminal");
 
 const MINUTE = 60 * 1000;
 
@@ -36,6 +45,12 @@ export const REFRESH_POLICY: Record<ProviderStep, { label: string; intervalMs: n
   defillama: { label: "DeFiLlama", intervalMs: 6 * 60 * MINUTE, staleAfterMs: 24 * 60 * MINUTE, timeoutMs: 150_000 },
   // Token-level DeFiLlama prices: small batched requests (25 keys each; four for 100 tokens).
   defillama_coins: { label: "DeFiLlama (token prices)", intervalMs: 60 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 30_000 },
+  // Standalone GeckoTerminal Public API (never CoinGecko's /onchain endpoints; a
+  // separate provider with its own quota). Its public rate limit is treated
+  // conservatively as ~10 requests/minute (6.5 s minimum pacing). Per-token DEX
+  // pool lookups are not batchable, so each run is capped to a small token
+  // subset (see run-geckoterminal-collection.ts) and refreshed infrequently.
+  geckoterminal: { label: "GeckoTerminal", intervalMs: 6 * 60 * MINUTE, staleAfterMs: 24 * 60 * MINUTE, timeoutMs: 150_000 },
 };
 
 /** Cron delivery can be late or early by minutes; treat a provider as due slightly early. */

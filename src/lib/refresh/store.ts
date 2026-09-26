@@ -27,7 +27,7 @@ export interface RefreshStore {
   latestRun(): Promise<LatestRun | null>;
 }
 
-const STEPS: RefreshStep[] = ["coingecko", "defillama", "dexscreener", "defillama_coins", "metrics"];
+const STEPS: RefreshStep[] = ["coingecko", "defillama", "dexscreener", "defillama_coins", "geckoterminal", "metrics"];
 const UNIQUE_VIOLATION = "23505";
 
 // TEMPORARY diagnostic logging for the acquireRun 500 investigation. Logs only the

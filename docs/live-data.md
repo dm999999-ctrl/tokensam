@@ -44,10 +44,14 @@ pnpm dexscreener:sync
 ```
 
 ```bash
+pnpm geckoterminal:sync
+```
+
+```bash
 pnpm metrics:calculate
 ```
 
-Pages pick up new rows on the next request.
+Pages pick up new rows on the next request. GeckoTerminal (see [geckoterminal-integration.md](geckoterminal-integration.md)) is collected and stored but intentionally not read by any page yet; it is not in the sources table above.
 
 ## Legacy demo files
 

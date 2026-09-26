@@ -1,4 +1,4 @@
-import { PROVIDER_STEPS, REFRESH_POLICY, type ProviderStep, type RefreshStep } from "./config.ts";
+import { DISPLAYED_PROVIDER_STEPS, PROVIDER_STEPS, REFRESH_POLICY, type ProviderStep, type RefreshStep } from "./config.ts";
 
 export type FreshnessState = "current" | "stale" | "unavailable";
 
@@ -42,7 +42,7 @@ export function buildRefreshStatus(input: {
   latestRunStatus: string | null;
   now: Date;
 }): RefreshStatusView {
-  const providers = PROVIDER_STEPS.map((id) => {
+  const providers = DISPLAYED_PROVIDER_STEPS.map((id) => {
     const policy = REFRESH_POLICY[id];
     const refreshedAt = newest(input.lastSuccess[id], input.latestCollected[id]);
     const state: FreshnessState = !refreshedAt

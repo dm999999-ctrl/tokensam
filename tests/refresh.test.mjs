@@ -49,13 +49,17 @@ function providerFetch(mode, calls = []) {
   return async (input, init = {}) => {
     const url = new URL(String(input));
     calls.push(url.hostname);
-    const behaviour = url.hostname.includes("coingecko") ? mode.coingecko : url.hostname.includes("dexscreener") ? mode.dexscreener : "unexpected";
+    const behaviour = url.hostname.includes("coingecko") ? mode.coingecko
+      : url.hostname.includes("dexscreener") ? mode.dexscreener
+      : url.hostname.includes("geckoterminal") ? (mode.geckoterminal ?? "ok")
+      : "unexpected";
     if (behaviour === "unexpected") throw new Error(`Unexpected provider host ${url.hostname}`);
     if (behaviour === "error") return new Response("{}", { status: 500 });
     if (behaviour === "hang") {
       return new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal.reason), { once: true }));
     }
     if (url.hostname.includes("coingecko")) return Response.json(url.searchParams.get("ids").split(",").map(marketItem));
+    if (url.hostname.includes("geckoterminal")) return Response.json({ data: [] }); // GeckoTerminal: no pools/dexes/attributes.
     return Response.json([]); // DEX Screener: mapped tokens with no pools.
   };
 }
@@ -72,7 +76,7 @@ test("1-2. a full refresh runs the real collectors, persists observations, then 
   });
 
   assert.equal(result.status, "succeeded");
-  assert.deepEqual(new Set(result.due), new Set(["coingecko", "dexscreener", "defillama", "defillama_coins"]));
+  assert.deepEqual(new Set(result.due), new Set(["coingecko", "dexscreener", "defillama", "defillama_coins", "geckoterminal"]));
   const byStep = Object.fromEntries(result.steps.map((step) => [step.step, step]));
   assert.equal(byStep.coingecko.status, "succeeded");
   assert.equal(byStep.coingecko.detail.returnedAssets, 100);
@@ -80,6 +84,8 @@ test("1-2. a full refresh runs the real collectors, persists observations, then 
   assert.equal(byStep.defillama.status, "skipped", "the DeFiLlama written-permission gate is enforced, not bypassed");
   assert.match(byStep.defillama.error, /written permission/i);
   assert.ok(!hosts.some((host) => host.includes("llama")), "no DeFiLlama request without permission");
+  assert.equal(byStep.geckoterminal.status, "succeeded", "GeckoTerminal needs no permission gate and no API key");
+  assert.ok(hosts.some((host) => host === "api.geckoterminal.com"), "GeckoTerminal requests go to its own standalone host, independent of CoinGecko");
   assert.equal(byStep.metrics.status, "succeeded");
   assert.equal(result.steps.at(-1).step, "metrics", "metrics run after provider synchronization");
 
@@ -92,7 +98,7 @@ test("1-2. a full refresh runs the real collectors, persists observations, then 
   assert.equal(run.status, "succeeded");
   assert.ok(run.finished_at, "the lock is released when the run finishes");
   assert.equal(byStep.defillama_coins.status, "skipped", "token-level DeFiLlama prices share the written-permission gate");
-  assert.equal(db.rows("data_refresh_steps").length, 5);
+  assert.equal(db.rows("data_refresh_steps").length, 6);
 });
 
 test("6. unavailable provider values and metrics stay null, never zero", async () => {
@@ -144,7 +150,7 @@ test("3-4. when every provider fails, metrics are skipped and stored results are
   const calculated = [{ id: 1, token_id: BTC.id, chain_id: BTC.chainId, metric_id: "volume_to_market_cap", value: 0.05, status: "available", calculated_at: ago(HOUR), input_fingerprint: "x" }];
   const db = createFakeSupabase({ seed: baseSeed({ calculated_metric_observations: calculated }) });
   const result = await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "scheduled", fetchImpl: providerFetch({ coingecko: "error", dexscreener: "error" }), sleep: noSleep,
+    trigger: "scheduled", fetchImpl: providerFetch({ coingecko: "error", dexscreener: "error", geckoterminal: "error" }), sleep: noSleep,
   });
   assert.equal(result.status, "failed");
   assert.equal(result.steps.find((step) => step.step === "metrics").status, "skipped");
@@ -173,6 +179,7 @@ test("5. metrics run once after providers and are skipped when nothing is due", 
     coingecko: { collect: async () => { order.push("coingecko"); return { observations: 1 }; } },
     dexscreener: { collect: async () => { order.push("dexscreener"); return { observations: 1 }; } },
     defillama: { collect: async () => { order.push("defillama"); return { observations: 1 }; } },
+    geckoterminal: { collect: async () => { order.push("geckoterminal"); return { observations: 1 }; } },
   };
   const db = createFakeSupabase({ seed: baseSeed() });
   const store = new SupabaseRefreshStore(db.client);
@@ -217,6 +224,7 @@ test("9. overlapping runs are prevented and abandoned locks expire", async () =>
     coingecko: { collect: async () => { calls.push("coingecko"); await gate; return {}; } },
     dexscreener: { collect: async () => ({}) },
     defillama: { collect: async () => ({}) },
+    geckoterminal: { collect: async () => ({}) },
   };
   const db = createFakeSupabase({ seed: baseSeed() });
   const store = new SupabaseRefreshStore(db.client);

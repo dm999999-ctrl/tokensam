@@ -23,7 +23,15 @@ const CONTEXT_COVERAGE_PERIODS = ["24H", "7D", "30D"] as const;
 /** History supplied to the model: one point per UTC day for this many days. */
 export const CONTEXT_HISTORY_DAYS = 30;
 const HOUR_MS = 60 * 60 * 1000;
-const PROVIDER_LABEL: Record<ProviderStep, string> = { coingecko: "CoinGecko", defillama: "DeFiLlama", dexscreener: "DEX Screener", defillama_coins: "DeFiLlama (token prices)" };
+const PROVIDER_LABEL: Record<ProviderStep, string> = { coingecko: "CoinGecko", defillama: "DeFiLlama", dexscreener: "DEX Screener", defillama_coins: "DeFiLlama (token prices)", geckoterminal: "GeckoTerminal" };
+/**
+ * GeckoTerminal is being established as a data pipeline only (see
+ * docs/geckoterminal-integration.md); its observations are not yet surfaced
+ * to the Deep AI Analysis evidence context or the Token Profile. Excluded
+ * here, not in the refresh pipeline, so this is the single place to remove
+ * once GeckoTerminal fields are intentionally added to the product surface.
+ */
+const EVIDENCE_PROVIDER_STEPS = PROVIDER_STEPS.filter((step) => step !== "geckoterminal");
 const HISTORY_SERIES = [
   { providerId: "coingecko", metricId: "price_usd" },
   { providerId: "coingecko", metricId: "market_cap_usd" },
@@ -235,7 +243,7 @@ function dailySample(rows: ContextObservationRow[]): ContextObservationRow[] {
 }
 
 function freshness(input: ContextInput): ContextFreshness[] {
-  return PROVIDER_STEPS.map((provider) => {
+  return EVIDENCE_PROVIDER_STEPS.map((provider) => {
     const policy = REFRESH_POLICY[provider];
     const label = PROVIDER_LABEL[provider];
     const collected = input.latestObservations
@@ -275,6 +283,7 @@ export function buildResearchContext(input: ContextInput): ResearchContext {
   const tokenRows = (rows: ContextObservationRow[]) => rows.filter((row) => row.token_id === input.token.id);
 
   const observations: ContextObservation[] = tokenRows(input.latestObservations)
+    .filter((row) => row.provider_id !== "geckoterminal")
     .sort((a, b) => a.provider_id.localeCompare(b.provider_id) || a.metric_id.localeCompare(b.metric_id))
     .map((row) => {
       const definition = definitions.get(row.metric_id);
