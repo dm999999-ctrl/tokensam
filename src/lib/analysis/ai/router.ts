@@ -2,11 +2,15 @@
  * AIProviderRouter: walks the configured priority list and, for each
  * provider, decides without any request whether it is eligible (configured,
  * allowed free tier, capable, not cooling down, enough deadline left). An
- * eligible provider gets one attempt bounded by the remaining overall
- * deadline; its result must pass the schema check and the evidence validator
- * (via `validate`). Failures are classified, recorded in provider health, and
- * the router moves on. Structured-output failures may be retried once on the
- * same provider if the budget allows; nothing else is retried.
+ * eligible provider gets one attempt bounded by its own attemptTimeoutMs, the
+ * remaining overall deadline, AND an equal share of that remaining deadline
+ * split across itself and every other provider still eligible to be tried
+ * (`remainingCandidates`) — so one slow provider can never leave nothing for
+ * the rest of the priority list. Its result must pass the schema check and
+ * the evidence validator (via `validate`). Failures are classified, recorded
+ * in provider health, and the router moves on. Structured-output failures
+ * may be retried once on the same provider if the budget allows; nothing
+ * else is retried.
  */
 
 import { emitDiagnostic, type DiagnosticsOptions } from "../diagnostics.ts";
@@ -91,6 +95,20 @@ export function ineligibility(provider: AIProvider | undefined, request: ReportR
   return null;
 }
 
+/**
+ * How many entries from `fromIndex` onward (inclusive) would actually be attempted given enough
+ * time — i.e. `ineligibility()` for reasons other than the deadline itself (that check is what
+ * this count feeds into, so it is deliberately left out here). Used to divide the remaining
+ * deadline fairly, so one slow provider can never consume the whole budget: see `routeReport`.
+ */
+function remainingCandidates(priority: string[], fromIndex: number, providers: Map<string, AIProvider>, request: ReportRequest, allowedTiers: Set<FreeTierStatus>, health: ProviderHealthStore, now: number, minOutputTokens: number | undefined): number {
+  let count = 0;
+  for (let i = fromIndex; i < priority.length; i++) {
+    if (!ineligibility(providers.get(priority[i]), request, allowedTiers, health, now, minOutputTokens)) count++;
+  }
+  return count;
+}
+
 export async function routeReport<T>(input: {
   request: ReportRequest;
   providers: Map<string, AIProvider>;
@@ -128,7 +146,8 @@ export async function routeReport<T>(input: {
     validationPassed: null, validationViolations: null,
   });
 
-  for (const id of input.priority) {
+  for (let priorityIndex = 0; priorityIndex < input.priority.length; priorityIndex++) {
+    const id = input.priority[priorityIndex];
     const provider = input.providers.get(id);
     const skip = ineligibility(provider, input.request, input.allowedTiers, input.health, clock(), input.minOutputTokens);
     if (skip) {
@@ -142,7 +161,13 @@ export async function routeReport<T>(input: {
         log({ ...base(provider, id), skipReason: "deadline", retry });
         break;
       }
-      const timeoutMs = Math.min(provider!.attemptTimeoutMs, remaining);
+      // Bounded fair share: split what's left of the deadline evenly across this provider and
+      // every later one that would still be attempted, so a slow provider (up to its own
+      // attemptTimeoutMs) can never leave nothing for the rest of the priority list. With only
+      // one candidate left this reduces to the previous behavior (min(cap, remaining)).
+      const candidates = Math.max(1, remainingCandidates(input.priority, priorityIndex, input.providers, input.request, input.allowedTiers, input.health, clock(), input.minOutputTokens));
+      const fairShareMs = Math.floor(remaining / candidates);
+      const timeoutMs = Math.min(provider!.attemptTimeoutMs, remaining, Math.max(fairShareMs, minAttemptMs));
       attemptNumber += 1;
       const started = clock();
       const outcome = await provider!.generateStructuredReport(input.request, { timeoutMs, fetchImpl: input.fetchImpl, diagnostics: input.diagnostics });

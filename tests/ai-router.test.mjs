@@ -73,7 +73,7 @@ const http = (code, message = `upstream ${RAW_ERROR} ${Object.values(KEYS).join(
 const timeout = () => () => { throw Object.assign(new Error("aborted"), { name: "TimeoutError" }); };
 const network = () => () => { throw new TypeError("fetch failed"); };
 
-const HOSTS = { qwen: "dashscope-intl.aliyuncs.com", mistral: "api.mistral.ai", gemini: "generativelanguage.googleapis.com", openrouter: "openrouter.ai", groq: "api.groq.com", glm: "api.z.ai" };
+const HOSTS = { qwen: "dashscope-intl.aliyuncs.com", mistral: "api.mistral.ai", gemini: "generativelanguage.googleapis.com", openrouter: "openrouter.ai", groq: "api.groq.com", glm: "api.z.ai", siliconflow: "api.siliconflow.com", modelscope: "api-inference.modelscope.cn" };
 function scripted(script) {
   const calls = Object.fromEntries(Object.keys(HOSTS).map((id) => [id, []]));
   const fetchImpl = async (url, init) => {
@@ -248,7 +248,10 @@ test("17. one overall deadline: each attempt gets only the remaining budget; not
   const slow = () => { now += 85_000; return json({ error: { code: 503 } }, 503); };
   const { error } = await route({ qwen: [slow], mistral: [chatOk()] }, { clock, deadlineAt, events });
   const [qwenAttempt] = error.attempts.filter((item) => item.action === "attempted");
-  assert.equal(qwenAttempt.timeoutMs, 100_000, "the first provider gets min(its cap, remaining)");
+  // Four providers are actually eligible here (qwen, mistral, gemini, openrouter; hunyuan/glm/groq/siliconflow
+  // are all unconfigured in this env): the first provider gets min(its cap, remaining, a fair 1/4 share),
+  // not the whole 100s remaining — see test 25 for the full starvation scenario this prevents.
+  assert.equal(qwenAttempt.timeoutMs, 25_000, "the first provider gets an equal share of the remaining deadline, not all of it");
   const mistral = error.attempts.find((item) => item.providerId === "mistral");
   assert.equal(mistral.skipReason, "deadline", "15 s left is below the minimum attempt window");
   assert.ok(events.some((event) => event.type === "ai.router_attempt" && event.skipReason === "deadline"));
@@ -420,6 +423,69 @@ test("24. SiliconFlow and ModelScope are eligible json_object providers, but sta
   const skips = Object.fromEntries(routed.error.attempts.map((item) => [item.providerId, item.skipReason]));
   assert.equal(skips.siliconflow, "not_configured", "eligible capability, but still no model");
   assert.equal(skips.modelscope, "not_configured");
+});
+
+// ---- 25-26: bounded per-provider timeout budgeting (production incident: GLM alone used 118.7s
+// of a 240s deadline, and OpenRouter's later attempt was cut off, so SiliconFlow/ModelScope/Gemini
+// never even got skipped-for-real-eligibility — they were starved to zero) ----
+
+const SIX_ENV = {
+  ZHIPU_API_KEY: "zk", MISTRAL_API_KEY: "mk", MISTRAL_MODEL: "mistral-medium-2604",
+  OPENROUTER_API_KEY: "ok", OPENROUTER_MODEL: "openrouter/free",
+  SILICONFLOW_API_KEY: "sk", SILICONFLOW_MODEL: "some-model",
+  MODELSCOPE_API_TOKEN: "mt", MODELSCOPE_MODEL: "some-model",
+  GEMINI_API_KEY: "gk",
+  AI_PROVIDER_PRIORITY: "glm,mistral,openrouter,siliconflow,modelscope,gemini",
+};
+
+test("25. with all six providers eligible, the first attempt gets an equal share of the 240s deadline, not the whole thing, and every provider reaches an actual attempt (none pre-emptively starved)", async () => {
+  let now = 0;
+  const clock = () => now;
+  const deadlineAt = now + 240_000;
+  // Each mock fails (or, for the last, succeeds) near-instantly: this isolates the allocation
+  // formula itself from real request latency, so remaining stays ~240s throughout.
+  const { result, calls } = await route(
+    { glm: [http(500)], mistral: [http(500)], openrouter: [http(500)], siliconflow: [http(500)], modelscope: [http(500)], gemini: [geminiOk()] },
+    { env: SIX_ENV, clock, deadlineAt },
+  );
+  assert.equal(result.provider.id, "gemini", "the chain reaches the last provider and succeeds");
+  const attempted = result.attempts.filter((item) => item.action === "attempted");
+  assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope", "gemini"], "every provider is actually attempted, none skipped for \"deadline\"");
+  assert.ok(result.attempts.every((item) => item.skipReason !== "deadline"), "none of the six is starved before it even gets a turn");
+  // At the very first attempt, before any clock advance, remaining is exactly 240_000 and all six
+  // are candidates: the fair share is 240_000 / 6 = 40_000, well below GLM's own 120_000 cap —
+  // proving the cap actually engaged instead of handing GLM the whole remaining budget.
+  const glmAttempt = attempted.find((item) => item.providerId === "glm");
+  assert.equal(glmAttempt.timeoutMs, 40_000, "GLM's allocation is bounded to its fair share, not min(cap, remaining) alone");
+  assert.equal(calls.gemini.length, 1);
+});
+
+test("26. worst case — every provider fully consumes its own allocated share, every time — still leaves every later provider a genuine, non-zero window (the exact production starvation is fixed)", async () => {
+  let now = 0;
+  const clock = () => now;
+  const deadlineAt = now + 240_000;
+  // With 6 equally-weighted candidates and a 240_000ms budget, an even split gives each one
+  // exactly 40_000ms, and — critically — consuming exactly that share still leaves the same even
+  // split for whoever is left, so the allocation is 40_000ms for all six, every single time.
+  const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
+  const { result } = await route(
+    {
+      glm: [advanceBy(40_000, http(500))],
+      mistral: [advanceBy(40_000, http(500))],
+      openrouter: [advanceBy(40_000, http(500))],
+      siliconflow: [advanceBy(40_000, http(500))],
+      modelscope: [advanceBy(40_000, http(500))],
+      gemini: [advanceBy(40_000, geminiOk())],
+    },
+    { env: SIX_ENV, clock, deadlineAt },
+  );
+  assert.equal(result.provider.id, "gemini", "even in the worst case, the last provider in priority still gets attempted and succeeds");
+  const attempted = result.attempts.filter((item) => item.action === "attempted");
+  assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope", "gemini"]);
+  // Every attempt got exactly the same 40_000ms share: no earlier provider's full-share consumption
+  // ever reduces a later one's guaranteed slice below its fair portion of what remains.
+  assert.deepEqual(attempted.map((item) => item.timeoutMs), [40_000, 40_000, 40_000, 40_000, 40_000, 40_000]);
+  assert.equal(now, 240_000, "all six providers, including Gemini, each got and used their full 40s share of the 240s budget");
 });
 
 let failures = 0;
