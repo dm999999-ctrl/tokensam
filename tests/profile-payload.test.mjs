@@ -293,6 +293,51 @@ test("P14. a DEX Screener mention with no mapping is rejected exactly as GLM/Mis
   assert.ok(found.some((item) => /refers to DEX Screener data without stating the context's reason \(no DEX Screener mapping for this token\)/.test(item)));
 });
 
+// ---- Regression: Production run svtndn2v (profile-5 cut GLM 3→1 and Mistral 9→5 violations, but
+// left two patterns: DEX Screener named in overview/research-question text with no mapping, and a
+// period/number inferred from a metric — including a calculated metric — that does not itself state
+// it). prompt.ts U1a and the extended rule 6 target these; the unchanged validator already rejects
+// every one of them, proving the fix is generation-side only.
+
+test("P16. a DEX Screener mention in a research question's rationale with no mapping is rejected, exactly as Mistral's svtndn2v furtherResearchQuestions[3] failure", () => {
+  const found = violations(report({
+    furtherResearchQuestions: [{ question: "What is the on-chain market structure for this token?", rationale: "DEX Screener does not report pairs for this token.", sourceIds: [] }],
+  }), btcPayload);
+  assert.ok(found.some((item) => /furtherResearchQuestions\[0\]: refers to DEX Screener data without stating the context's reason \(no DEX Screener mapping for this token\)/.test(item)));
+});
+
+test("P17. an unsupported '30 days' in a risk detail is rejected, exactly as Mistral's svtndn2v risks[3].detail failure", () => {
+  const ratio = field(uniPayload, "calc:market_cap_to_tvl");
+  const found = violations(report({
+    risks: [{ title: "Valuation ratio risk", basis: "evidence", detail: "The market-cap-to-TVL ratio has moved over the past 30 days.", sourceIds: [ratio.id] }],
+  }), uniPayload);
+  assert.ok(found.some((item) => /"30 days" is not a period established by the cited sources/.test(item)), "a point-in-time ratio (no period) does not establish a 30-day window just because 30-day comparisons are common");
+});
+
+test("P18. a period and number are never inferred from the mere existence of a calculated metric, exactly as Mistral's svtndn2v marketPerformance.statements[5] failure (number 24 and \"24-hour\")", () => {
+  // A field with no clock-derived note text (deterministic across test runs, unlike a "Measured … UTC" note).
+  const ratio = field(btcPayload, "calc:circulating_of_max_supply");
+  assert.equal(ratio.period, null, "a composition ratio is a point-in-time calculated metric with no period of its own");
+  const found = violations(report({
+    marketPerformance: { overview: "The circulating share is shown.", statements: [
+      st("calculated", "The circulating share changed by 24% over the past 24 hours.", [ratio.id]),
+    ] },
+  }), btcPayload);
+  assert.ok(found.some((item) => /number\(s\) 24, 24 do not match any value in the cited sources/.test(item)), "the invented number 24");
+  assert.ok(found.some((item) => /"24 hours" is not a period established by the cited sources/.test(item)), "a calculated ratio existing at all does not establish a 24-hour period");
+});
+
+test("P19. a properly evidence-established period (including a calculated metric's own real interval) remains valid", () => {
+  const growth = field(uniPayload, "calc:price_growth_pct");
+  assert.match(growth.period, /1 hour/, "a snapshot change states its own real interval, not a rounded 24-hour convention");
+  const found = violations(report({
+    marketPerformance: { overview: "Price changes are shown over their stated periods.", statements: [
+      st("calculated", `Price decreased by about ${Math.abs(growth.raw).toFixed(1)}% between the two most recent stored observations.`, [growth.id], growth.period),
+    ] },
+  }), uniPayload);
+  assert.deepEqual(found, []);
+});
+
 test("P15. valid numeric and period claims inside properly sourced statements still pass (the fix does not over-tighten the validator)", () => {
   const change = field(uniPayload, "obs:change_24h");
   const hist = uniPayload.fields.find((item) => item.id.startsWith("hist:price_") && item.periodRequired);

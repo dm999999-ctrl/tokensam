@@ -104,7 +104,7 @@ test("7. the evidence validator (evidence-rules.ts, schema.ts, profile-contract.
   const diffNames = execSync("git diff --name-only HEAD", { cwd: process.cwd() }).toString().trim().split("\n").filter(Boolean);
   const validatorFiles = ["src/lib/analysis/evidence-rules.ts", "src/lib/analysis/schema.ts", "src/lib/analysis/profile-contract.ts", "src/lib/analysis/ai/router.ts"];
   for (const file of validatorFiles) assert.ok(!diffNames.includes(file), `${file} must not appear in the diff for this change`);
-  assert.equal(PROFILE_PROMPT_VERSION, "profile-5", "the prompt version was bumped so stored analyses record which instructions produced them");
+  assert.equal(PROFILE_PROMPT_VERSION, "profile-6", "the prompt version was bumped so stored analyses record which instructions produced them");
 });
 
 test("8. the provider priority list and default order are unchanged by this change", () => {
@@ -117,6 +117,15 @@ test("9. Production run gdj2hhww: the prompt now explicitly covers overview-writ
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /The existence of a metric name or a window label in these instructions is not by itself evidence that this token has that history/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /Naming a provider, metric, or period anywhere in these instructions or in the response schema does not make it available for this token/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never infer a period from a metric's name.*from a history-series definition, from an API or schema naming convention, or from general knowledge/);
+});
+
+test("10. Production run svtndn2v: the prompt now flatly bars naming an unmapped provider in an overview or research question, and bars inferring a period from a calculated metric's mere existence", () => {
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never name DeFiLlama or DEX Screener in a section overview or in a research question\/rationale unless that provider is mapped/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Being a well-known data provider, being normally useful for that section, appearing in this schema or these instructions, or being something you know about from general knowledge never justifies naming it there/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /describe that section's gap generically instead \("this section's data is unavailable for this token"\) without naming the provider/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /from the mere existence of a calculated metric \(a calc: field carries only the period its own period\/label states, never a commonly-associated one like 24 hours\)/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /A metric that would normally be a 24-hour, 7-day, or 30-day change elsewhere does not make that period available here unless this statement's own cited field states it/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /never write the number without its period, or the period without a matching number/);
 });
 
 let passed = 0;
