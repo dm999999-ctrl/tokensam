@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { canonicalTokens, additionalCanonicalTokens } from "../src/data/canonical-tokens.ts";
+import { canonicalTokens, additionalCanonicalTokens, phase15CanonicalTokens } from "../src/data/canonical-tokens.ts";
 import { coingeckoTokenIds, nativeTokenIds } from "../src/data/coingecko-token-mappings.ts";
 import { defillamaProtocolMappings } from "../src/data/defillama-protocol-mappings.ts";
 import { dexScreenerTokenMappings } from "../src/data/dexscreener-token-mappings.ts";
@@ -10,11 +10,24 @@ import { persistProviderSnapshots } from "../src/lib/providers/persist-snapshots
 const cases = [];
 function test(name, run) { cases.push({ name, run }); }
 
-test("the canonical set grows from 20 to 50 with unique chain-scoped identities", () => {
-  assert.equal(canonicalTokens.length, 50);
+// The verified 50-token baseline (Phase 10). Phase 15 may only append after it.
+const BASELINE_50 = [
+  "ethereum-eth", "bitcoin-btc", "solana-sol", "bnb-bnb", "xrp-xrp", "avalanche-avax", "arbitrum-arb", "optimism-op", "aave-aave", "uniswap-uni",
+  "lido-ldo", "maker-mkr", "chainlink-link", "sui-sui", "aptos-apt", "polygon-pol", "near-near", "celestia-tia", "render-render", "jupiter-jup",
+  "ethereum-usdt", "ethereum-usdc", "ethereum-wbtc", "dogecoin-doge", "tron-trx", "cardano-ada", "polkadot-dot", "cosmos-atom", "litecoin-ltc", "stellar-xlm",
+  "monero-xmr", "internet-computer-icp", "filecoin-fil", "ethereum-crv", "ethereum-comp", "ethereum-pendle", "ethereum-dai", "ethereum-ena", "ethereum-ondo", "ethereum-shib",
+  "ethereum-pepe", "solana-bonk", "solana-ray", "solana-jto", "solana-pyth", "base-aero", "ethereum-morpho", "ethereum-grt", "arweave-ar", "ethereum-mnt",
+];
+
+test("the canonical set grows from 50 to 100 with unique chain-scoped identities; the baseline 50 are unchanged", () => {
+  assert.equal(canonicalTokens.length, 100);
   assert.equal(additionalCanonicalTokens.length, 30);
-  assert.equal(new Set(canonicalTokens.map((token) => token.id)).size, 50);
-  assert.equal(new Set(canonicalTokens.map((token) => `${token.chainId}:${token.contractAddress?.toLowerCase() ?? "native"}`)).size, 50);
+  assert.equal(phase15CanonicalTokens.length, 50);
+  assert.deepEqual(canonicalTokens.slice(0, 50).map((token) => token.id), BASELINE_50, "existing canonical IDs are neither removed nor reordered");
+  assert.equal(coingeckoTokenIds["maker-mkr"], "sky");
+  assert.equal(coingeckoTokenIds["avalanche-avax"], "avalanche-2");
+  assert.equal(new Set(canonicalTokens.map((token) => token.id)).size, 100);
+  assert.equal(new Set(canonicalTokens.map((token) => `${token.chainId}:${token.contractAddress?.toLowerCase() ?? "native"}`)).size, 100);
   assert.equal(new Set(canonicalTokens.filter((token) => token.isNative).map((token) => token.chainId)).size, canonicalTokens.filter((token) => token.isNative).length);
   assert.ok(canonicalTokens.every((token) => token.id && token.chainId && token.symbol && token.name));
 });
@@ -22,9 +35,9 @@ test("the canonical set grows from 20 to 50 with unique chain-scoped identities"
 test("provider mappings are unique, explicit, chain-consistent, and leave unsupported assets unmapped", () => {
   const ids = new Set(canonicalTokens.map((token) => token.id));
   const coinIds = canonicalTokens.map((token) => coingeckoTokenIds[token.id]);
-  assert.equal(coinIds.filter(Boolean).length, 50);
-  assert.equal(new Set(coinIds).size, 50);
-  assert.equal(new Set(dexScreenerTokenMappings.map((mapping) => mapping.tokenId)).size, 50);
+  assert.equal(coinIds.filter(Boolean).length, 100);
+  assert.equal(new Set(coinIds).size, 100);
+  assert.equal(new Set(dexScreenerTokenMappings.map((mapping) => mapping.tokenId)).size, 100);
   const dexAssetsByToken = new Map(configuredDexScreenerAssets().map((asset) => [asset.tokenId, asset]));
   for (const mapping of dexScreenerTokenMappings) {
     assert.ok(ids.has(mapping.tokenId));
@@ -40,7 +53,8 @@ test("provider mappings are unique, explicit, chain-consistent, and leave unsupp
   }
   assert.equal(new Set(defillamaProtocolMappings.map((mapping) => mapping.tokenId)).size, defillamaProtocolMappings.length);
   assert.ok(defillamaProtocolMappings.every((mapping) => ids.has(mapping.tokenId) && mapping.externalAssetId && mapping.relationship));
-  assert.ok(nativeTokenIds.size < 50);
+  assert.equal(nativeTokenIds.size, 42);
+  assert.ok(canonicalTokens.every((token) => token.isNative === nativeTokenIds.has(token.id)), "native flags agree with the native set");
 });
 
 test("provider observation persistence is idempotent while raw snapshots remain append-only", async () => {

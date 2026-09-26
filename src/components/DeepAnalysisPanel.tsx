@@ -4,6 +4,8 @@ import { useState, useTransition } from "react";
 import { requestTokenAnalysis } from "@/app/tokens/[id]/actions";
 import type { AnalysisState } from "@/lib/analysis/service";
 import type { AnalysisSection, AnalysisStatement, SectionKey, TokenAnalysis } from "@/lib/analysis/schema";
+import type { ProfilePayload } from "@/lib/analysis/profile-payload";
+import { LocalAnalysisPanel } from "@/components/LocalAnalysisPanel";
 
 const SECTIONS: { key: SectionKey; letter: string; title: string }[] = [
   { key: "executiveSummary", letter: "A", title: "Executive summary" },
@@ -116,7 +118,7 @@ export function deepAnalysisButtonHint(state: AnalysisState): string {
   return state.latest ? `Generated ${utc(state.latest.metadata.generatedAt)}` : "Gemini · generate on request";
 }
 
-export function DeepAnalysisPanel({ tokenId, initialState, hidden }: { tokenId: string; initialState: AnalysisState; hidden: boolean }) {
+export function DeepAnalysisPanel({ tokenId, initialState, hidden, payload }: { tokenId: string; initialState: AnalysisState; hidden: boolean; payload?: ProfilePayload }) {
   const [state, setState] = useState(initialState);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -139,11 +141,10 @@ export function DeepAnalysisPanel({ tokenId, initialState, hidden }: { tokenId: 
   const coolingDown = state.status === "ready" && state.nextAllowedAt !== null;
 
   return (
-    <section className="research-panel ai-panel" id="deep-ai-analysis" aria-labelledby="deep-ai-title" hidden={hidden}>
-      <div className="profile-section-header">
-        <div><div className="eyebrow">AI RESEARCH INTERPRETATION</div><h2 id="deep-ai-title">Deep AI Analysis</h2></div>
-        <span className="panel-index">AI</span>
-      </div>
+    <section className="ai-panel" id="deep-ai-analysis" aria-labelledby="deep-ai-title" hidden={hidden}>
+      <header className="section-head ai-head">
+        <div><p className="eyebrow">Research report · AI interpretation</p><h2 id="deep-ai-title">Deep AI Analysis</h2></div>
+      </header>
       <p className="ai-disclaimer">
         An AI reading of this profile&apos;s stored evidence only. It is not investment advice and makes no price predictions.
         Labels separate <b className="ai-kind observed">Observed data</b> <b className="ai-kind calculated">Calculated metric</b> <b className="ai-kind interpretation">AI interpretation</b> <b className="ai-kind uncertainty">Uncertainty</b>.
@@ -173,6 +174,8 @@ export function DeepAnalysisPanel({ tokenId, initialState, hidden }: { tokenId: 
           {latest && <AnalysisBody analysis={latest} />}
         </>
       )}
+      {/* Separate local path: runs in this browser only, never falls back to the server providers above. */}
+      {payload && !hidden ? <LocalAnalysisPanel payload={payload} Report={AnalysisBody} /> : null}
     </section>
   );
 }

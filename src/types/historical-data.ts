@@ -1,6 +1,8 @@
 import type { MetricSource } from "@/types/token";
 
-export type HistoricalMetric = "priceUsd" | "tvlUsd" | "volumeUsd";
+export type HistoricalMetric = "priceUsd" | "tvlUsd" | "volumeUsd" | "marketCapUsd";
+/** A Market History chart: a stored series, or the risk profile derived from `priceUsd` at page load. */
+export type HistoryChartKey = HistoricalMetric | "riskProfile";
 export type HistoricalPeriod = "24H" | "7D" | "30D" | "90D";
 
 /** One actual stored observation. Charts connect these; nothing is interpolated or synthesized. */
@@ -50,4 +52,5 @@ export type TokenHistoricalData = {
   priceUsd: HistoricalSeries;
   tvlUsd: HistoricalSeries;
   volumeUsd: HistoricalSeries;
+  marketCapUsd: HistoricalSeries;
 };

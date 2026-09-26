@@ -18,18 +18,23 @@ const MINUTE = 60 * 1000;
  *   writing, so a timeout aborts before any Supabase change.
  *
  * Quota notes (see docs/*-integration.md): one CoinGecko run is one
- * /coins/markets call (50 IDs < 250 per call), so hourly is ~744 calls/month
- * against the documented 10,000/month Demo allowance. DEX Screener uses a few
+ * /coins/markets call (100 IDs < 250 per call), so hourly is ~744 calls/month
+ * against the documented 10,000/month Demo allowance. DEX Screener uses ~13
  * requests per run against its documented 300/minute. DeFiLlama publishes no
  * numeric free-tier limit, so it is refreshed least often.
+ *
+ * Providers run in parallel, then metrics (METRICS_TIMEOUT_MS). The longest
+ * provider budget plus the metrics budget must stay below the cron route's
+ * 300 s maxDuration: 150 s + 90 s = 240 s.
  */
 export const REFRESH_POLICY: Record<ProviderStep, { label: string; intervalMs: number; staleAfterMs: number; timeoutMs: number }> = {
   coingecko: { label: "CoinGecko", intervalMs: 60 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 90_000 },
   dexscreener: { label: "DEX Screener", intervalMs: 60 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 90_000 },
-  // Current TVL + fees + revenue: three small requests per protocol (~33 for 11), paced 1.1 s apart.
+  // Current TVL + fees + revenue: three small requests per protocol (72 for 24), paced 1.1 s apart.
+  // Measured 2026-09-25 at 109 s for 24 protocols, so the budget is 150 s (pacing is unchanged).
   // Dated TVL history (/protocol, up to ~69 MB per record) is a separate explicit backfill.
-  defillama: { label: "DeFiLlama", intervalMs: 6 * 60 * MINUTE, staleAfterMs: 24 * 60 * MINUTE, timeoutMs: 120_000 },
-  // Token-level DeFiLlama prices: one small batched request per run (two for 50 tokens).
+  defillama: { label: "DeFiLlama", intervalMs: 6 * 60 * MINUTE, staleAfterMs: 24 * 60 * MINUTE, timeoutMs: 150_000 },
+  // Token-level DeFiLlama prices: small batched requests (25 keys each; four for 100 tokens).
   defillama_coins: { label: "DeFiLlama (token prices)", intervalMs: 60 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 30_000 },
 };
 

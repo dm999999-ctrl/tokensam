@@ -37,14 +37,27 @@ function test(name, run) {
   cases.push({ name, run });
 }
 
-test("maps the 50 canonical token universe by chain and explicit address only", () => {
-  assert.equal(canonicalTokens.length, 50);
-  assert.equal(dexScreenerTokenMappings.length, 50);
-  assert.equal(new Set(dexScreenerTokenMappings.map((mapping) => mapping.tokenId)).size, 50);
-  assert.equal(new Set(canonicalTokens.map((token) => token.id)).size, 50);
-  // 28 verified contracts + native SUI, APT, and ICP identifiers; wrapped proxies for natives are retired.
-  assert.equal(assets.length, 31);
-  assert.equal(getUnmappedDexScreenerTokens().length, 19);
+test("maps the 100 canonical token universe by chain and explicit address only", () => {
+  assert.equal(canonicalTokens.length, 100);
+  assert.equal(dexScreenerTokenMappings.length, 100);
+  assert.equal(new Set(dexScreenerTokenMappings.map((mapping) => mapping.tokenId)).size, 100);
+  assert.equal(new Set(canonicalTokens.map((token) => token.id)).size, 100);
+  // 58 verified contracts + native SUI, APT, ICP, TON, and HYPE identifiers; wrapped proxies for natives are retired.
+  assert.equal(assets.length, 63);
+  assert.equal(getUnmappedDexScreenerTokens().length, 37);
+  // Phase 15: a contract token's DEX address is exactly its canonical contract on the canonical chain.
+  for (const token of canonicalTokens.filter((candidate) => !candidate.isNative && candidate.contractAddress)) {
+    const asset = assets.find((item) => item.tokenId === token.id);
+    if (asset) assert.equal(asset.tokenAddress.toLowerCase(), token.contractAddress.toLowerCase(), `${token.id} DEX address is its canonical contract`);
+  }
+  assert.equal(assets.find((asset) => asset.tokenId === "bnb-chain-cake")?.dexChainId, "bsc");
+  assert.equal(assets.find((asset) => asset.tokenId === "zksync-zk")?.dexChainId, "zksync");
+  assert.equal(assets.find((asset) => asset.tokenId === "ton-gram")?.tokenAddress, "EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c");
+  assert.equal(assets.find((asset) => asset.tokenId === "hyperliquid-hype")?.tokenAddress, "0x0d01dc56dcaaca66ad901c959b4011ec");
+  for (const native of ["sonic-s", "cronos-cro", "hedera-hbar", "sei-sei", "ethereum-classic-etc", "bittensor-tao", "injective-inj", "zcash-zec"]) {
+    assert.equal(assets.some((asset) => asset.tokenId === native), false, `${native} has no DEX mapping and no wrapped substitute`);
+    assert.ok(getUnmappedDexScreenerTokens().find((item) => item.tokenId === native)?.reason, `${native} records why it is unmapped`);
+  }
   for (const native of ["ethereum-eth", "solana-sol", "bnb-bnb", "avalanche-avax"]) {
     assert.equal(assets.some((asset) => asset.tokenId === native), false, `${native} is not mapped to a wrapped asset`);
   }

@@ -117,3 +117,7 @@ At hourly cadence the database grows by roughly **1–1.5 GB a month**, mostly f
 3. Keep raw payloads for 30 days, retaining one per token per day after that.
 
 Each option trades away some audit detail and should be chosen deliberately.
+
+## Phase 15 (2026-09-25): history for the 50 added tokens
+
+`runCoinGeckoBackfill` ran for the 50 new tokens only (`--tokens`; the existing 50 were not re-backfilled). It made 100 requests, all HTTP 200, with no rate limits, in 358 s. It stored 37,812 observations, 753 to 759 per token. A separate DeFiLlama history run covered only the 13 newly mapped protocols: 13 requests in 70 s, storing 1,180 dated TVL points, with every record matching its pinned ID. All 100 tokens now have at least 85 of 90 days of stored price history. The per-token spans are in [provider-coverage.md](provider-coverage.md). Nothing was interpolated. The 8 newly mapped protocols had only one fees/revenue observation after the first collection, so their growth metrics stay unavailable until the next DeFiLlama run.

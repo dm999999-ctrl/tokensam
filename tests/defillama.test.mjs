@@ -32,13 +32,13 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
 test("sync requires written permission before network or database access", () => {
   assert.throws(() => getDefiLlamaConfig({}), /written permission/);
   assert.equal(getDefiLlamaConfig({ DEFILLAMA_WRITTEN_PERMISSION_REFERENCE: "agreement-123" }).baseUrl, "https://api.llama.fi");
-  assert.equal(defillamaProtocolMappings.length, 11);
-  assert.equal(new Set(defillamaProtocolMappings.map((row) => row.tokenId)).size, 11);
-  assert.equal(new Set(defillamaProtocolMappings.map((row) => `${row.chainId}:${row.externalAssetId}`)).size, 11);
+  assert.equal(defillamaProtocolMappings.length, 24);
+  assert.equal(new Set(defillamaProtocolMappings.map((row) => row.tokenId)).size, 24);
+  assert.equal(new Set(defillamaProtocolMappings.map((row) => `${row.chainId}:${row.externalAssetId}`)).size, 24);
 });
 
 test("every mapping pins its verified DeFiLlama record, and parent records are labelled as parents", () => {
-  assert.equal(new Set(defillamaProtocolMappings.map((row) => row.recordId)).size, 11);
+  assert.equal(new Set(defillamaProtocolMappings.map((row) => row.recordId)).size, 24);
   for (const row of defillamaProtocolMappings) {
     assert.ok(row.recordId, `${row.tokenId} has a record ID`);
     assert.equal(row.recordKind === "parent", row.recordId.startsWith("parent#"), `${row.tokenId} record kind matches its record ID`);

@@ -57,8 +57,8 @@ export type ModelAnalysis = Record<SectionKey, AnalysisSection> & {
 
 export type AnalysisMetadata = {
   tokenId: string;
-  /** The provider that actually generated this analysis. */
-  provider: "Google Gemini" | "OpenRouter";
+  /** Display name of the provider that actually generated this analysis (e.g. "Google Gemini", "OpenRouter"). */
+  provider: string;
   /** The model that actually generated it (for OpenRouter, the routed model it reported). */
   model: string;
   /** The requested model identifier (for OpenRouter, e.g. "openrouter/free"). Absent on analyses stored before fallback existed. */
@@ -67,6 +67,18 @@ export type AnalysisMetadata = {
   upstreamProvider?: string | null;
   /** Whether Gemini was temporarily unavailable and OpenRouter produced this result. */
   fallback?: { used: boolean; reason: string | null };
+  /** Provider-router record (Phase 2): every provider considered, in order, with sanitized outcomes. */
+  routing?: {
+    runId: string;
+    providerId: string;
+    freeTier: string;
+    fallbackReason: string | null;
+    attempts: {
+      provider: string; model: string; action: "attempted" | "skipped"; skipReason: string | null; category: string | null;
+      httpStatus: number | null; latencyMs: number | null; inputTokens: number | null; outputTokens: number | null; reasoningTokens: number | null;
+      validationPassed: boolean | null; validationViolations: number | null;
+    }[];
+  };
   promptVersion: string;
   schemaVersion: string;
   contextVersion: string;

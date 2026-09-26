@@ -1,26 +1,44 @@
 import "server-only";
 
 import { createSupabaseAdminClient } from "../supabase/admin.ts";
-import { latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
+import { OBSERVATION_COLUMNS, latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
+import { selectMovers, type Movers } from "../ui/movers.ts";
+import { buildTechnicalIndicators } from "../indicators/build.ts";
+import type { TechnicalIndicatorsView } from "../../types/technical-indicators.ts";
 import { PROVIDER_STEPS, type ProviderStep, type RefreshStep } from "../refresh/config.ts";
-import { buildRefreshStatus, type RefreshStatusView } from "../refresh/freshness.ts";
+import { buildDatasetFreshness, buildRefreshStatus, type RefreshStatusView } from "../refresh/freshness.ts";
 import { buildHistoricalSeries } from "./historical-series.ts";
+import { sevenDayVolume, sevenDayVolumeBands, type VolumePoint } from "./seven-day-volume.ts";
 import { canonicalTokens } from "../../data/canonical-tokens.ts";
+import { defillamaProtocolMappings } from "../../data/defillama-protocol-mappings.ts";
 import { tokenCoverage } from "../../data/provider-coverage.ts";
 import { SupabaseRefreshStore } from "../refresh/store.ts";
+import { COINGECKO_MARKETS_ENDPOINT, logosFromRecords, reportedFdvFromRecords, type LogoRecord, type MarketFieldRecord } from "./token-logos.ts";
 import type { HistoricalMetric, TokenHistoricalData } from "../../types/historical-data.ts";
-import type {
-  CalculatedMetricView,
-  DashboardMetricKey,
-  DashboardToken,
-  LiveTokenProfileData,
-  MetricSource,
+import {
+  DASHBOARD_CALCULATED_METRICS,
+  type CalculatedMetricView,
+  type DashboardCalculatedKey,
+  type DashboardMetricKey,
+  type DashboardToken,
+  type LiveTokenProfileData,
+  type MetricSource,
 } from "../../types/token.ts";
 
 const OBSERVED_METRICS = [
   "price_usd", "price_change_24h_pct", "price_change_7d_pct", "market_cap_usd", "volume_24h_usd",
   "tvl_usd", "fees_24h_usd", "revenue_24h_usd", "circulating_supply", "total_supply", "maximum_supply",
+  // DEX Screener exact-address transaction counts (market scope), shown in Market Structure.
+  "transactions_24h_count", "buys_24h_count", "sells_24h_count",
 ];
+/** Dashboard calculated metrics that need an associated protocol / a DEX mapping to be meaningful. */
+const PROTOCOL_DEPENDENT: DashboardCalculatedKey[] = ["market_cap_to_tvl", "market_cap_to_revenue_24h"];
+const DEX_DEPENDENT: DashboardCalculatedKey[] = [
+  "dex_aggregate_liquidity_usd", "dex_aggregate_volume_24h_usd", "dex_aggregate_liquidity_to_market_cap_pct",
+  "dex_volume_to_liquidity", "dex_buy_sell_ratio",
+];
+/** Rows of the newest metrics run are read within this span of its newest calculated_at. */
+const CALCULATION_RUN_SPAN_MS = 2 * 60 * 60 * 1000;
 const HISTORY_DAYS = 90;
 const TVL_CHANGE_DAYS = 30;
 const TVL_BASELINE_TOLERANCE_DAYS = 3;
@@ -146,6 +164,9 @@ export function buildDashboardTokens(tokens: DbToken[], chains: DbChain[], obser
       change7dPct: valueFor("price_change_7d_pct", "coingecko", "change7dPct"),
       marketCapUsd: valueFor("market_cap_usd", "coingecko", "marketCapUsd"),
       volume24hUsd: valueFor("volume_24h_usd", "coingecko", "volume24hUsd"),
+      fdvUsd: null,
+      circulatingSupply: valueFor("circulating_supply", "coingecko", "circulatingSupply"),
+      maximumSupply: valueFor("maximum_supply", "coingecko", "maximumSupply"),
       tvlUsd: valueFor("tvl_usd", "defillama", "tvlUsd"),
       tvlChange30dPct,
       fees24hUsd: valueFor("fees_24h_usd", "defillama", "fees24hUsd"),
@@ -176,6 +197,7 @@ export function buildTokenHistory(
       unmappedReason: "No curated DeFiLlama protocol mapping exists for this token, so protocol TVL is unavailable by design.",
     },
     { key: "volumeUsd", metricId: "volume_24h_usd", providerId: "coingecko", scope: "token" },
+    { key: "marketCapUsd", metricId: "market_cap_usd", providerId: "coingecko", scope: "token" },
   ];
   const sources: TokenHistoricalData["sources"] = {};
   const series = Object.fromEntries(definitions.map(({ key, metricId, providerId, scope, unmappedReason }) => {
@@ -190,7 +212,7 @@ export function buildTokenHistory(
       ? unmappedReason
       : `No stored ${providerId === "coingecko" ? "CoinGecko" : "DeFiLlama"} observations in the last ${HISTORY_DAYS} days.`;
     return [key, buildHistoricalSeries({ metric: key, providerId, scope, points, asOf: now, unavailableReason: reason })];
-  })) as Pick<TokenHistoricalData, "priceUsd" | "tvlUsd" | "volumeUsd">;
+  })) as Pick<TokenHistoricalData, "priceUsd" | "tvlUsd" | "volumeUsd" | "marketCapUsd">;
   const observedAt = observations.filter((row) => row.token_id === tokenId)
     .map((row) => row.observed_at).sort().at(-1) ?? now.toISOString();
   return { tokenId, asOf: now.toISOString(), observedAt, sources, ...series };
@@ -230,7 +252,181 @@ const HISTORY_SERIES = [
   { providerId: "coingecko", metricId: "price_usd" },
   { providerId: "defillama", metricId: "tvl_usd" },
   { providerId: "coingecko", metricId: "volume_24h_usd" },
+  { providerId: "coingecko", metricId: "market_cap_usd" },
 ];
+/** Extra history read only for technical indicators (price, volume, market cap and TVL come from HISTORY_SERIES). */
+const INDICATOR_EXTRA_SERIES = [{ providerId: "coingecko", metricId: "circulating_supply" }];
+
+type DbCalculatedValue = {
+  id: number;
+  token_id: string;
+  metric_id: string;
+  value: number | string | null;
+  status: CalculatedMetricView["status"];
+  calculated_at: string;
+};
+
+/** Latest stored value per token for each dashboard calculated metric; unavailable/invalid stay null. */
+export function latestCalculatedValues(rows: DbCalculatedValue[]): Map<string, Partial<Record<DashboardCalculatedKey, number | null>>> {
+  const known = new Set<string>(DASHBOARD_CALCULATED_METRICS);
+  const seen = new Set<string>();
+  const byToken = new Map<string, Partial<Record<DashboardCalculatedKey, number | null>>>();
+  for (const row of [...rows].sort((a, b) => Date.parse(b.calculated_at) - Date.parse(a.calculated_at) || b.id - a.id)) {
+    const key = `${row.token_id}|${row.metric_id}`;
+    if (!known.has(row.metric_id) || seen.has(key)) continue;
+    seen.add(key);
+    const values = byToken.get(row.token_id) ?? {};
+    values[row.metric_id as DashboardCalculatedKey] = row.status === "available" ? numberValue(row.value) : null;
+    byToken.set(row.token_id, values);
+  }
+  return byToken;
+}
+
+/**
+ * Presentation extras for dashboard rows: logo, stored calculated values, and
+ * coverage. Protocol- and DEX-dependent values are kept only when the curated
+ * mapping exists, so no unmapped (e.g. wrapped-proxy) value can surface.
+ */
+export function attachDashboardExtras(
+  tokens: DashboardToken[],
+  extras: {
+    logos: Record<string, string>;
+    calculated: Map<string, Partial<Record<DashboardCalculatedKey, number | null>>>;
+    fdv?: Record<string, { value: number; collectedAt: string }>;
+    /** 7D volume (sum of seven non-overlapping 24-hour observations); absent = unavailable. */
+    volume7d?: Record<string, number>;
+  },
+): DashboardToken[] {
+  return tokens.map((token) => {
+    const canonical = canonicalTokens.find((candidate) => candidate.id === token.id);
+    const coverage = canonical ? tokenCoverage(canonical) : [];
+    const protocolMapped = coverage.some((item) => item.provider === "defillama" && item.status === "mapped");
+    const dexMapped = coverage.some((item) => item.provider === "dexscreener" && item.status === "mapped");
+    const stored = extras.calculated.get(token.id) ?? {};
+    const calculated: Partial<Record<DashboardCalculatedKey, number | null>> = {};
+    for (const key of DASHBOARD_CALCULATED_METRICS) {
+      const allowed = (!PROTOCOL_DEPENDENT.includes(key) || protocolMapped) && (!DEX_DEPENDENT.includes(key) || dexMapped);
+      calculated[key] = allowed ? stored[key] ?? null : null;
+    }
+    const valid = (value: number | null | undefined) => typeof value === "number" && Number.isFinite(value);
+    const fdv = extras.fdv?.[token.id] ?? null;
+    return {
+      ...token,
+      fdvUsd: fdv?.value ?? null,
+      volume7dUsd: extras.volume7d?.[token.id] ?? null,
+      metricSources: fdv
+        ? { ...token.metricSources, fdvUsd: { providerId: "coingecko", collectedAt: fdv.collectedAt, note: "Token-level FDV as reported in the stored market-data record." } }
+        : token.metricSources,
+      logoUrl: extras.logos[token.id] ?? null,
+      calculated,
+      coverage: {
+        isNative: canonical?.isNative ?? false,
+        protocolMapped,
+        dexMapped,
+        hasProtocolData: protocolMapped && [token.tvlUsd, token.fees24hUsd, token.revenue24hUsd].some(valid),
+        hasDexData: dexMapped && DEX_DEPENDENT.some((key) => valid(calculated[key])),
+      },
+    };
+  });
+}
+
+/**
+ * 7D volume per token from stored CoinGecko 24-hour volume observations (see
+ * seven-day-volume.ts). Reads only the seven narrow bands around each token's
+ * latest volume observation; optional, so a failed read leaves 7D volume
+ * unavailable rather than failing the dashboard.
+ */
+async function readSevenDayVolumes(client: SupabaseAdminClient, latest: DbObservation[]): Promise<Record<string, number>> {
+  try {
+    const anchors = latest
+      .filter((row) => row.provider_id === "coingecko" && row.metric_id === "volume_24h_usd")
+      .map((row) => ({ tokenId: row.token_id, observedAt: row.observed_at }));
+    const bandRows = await Promise.all(sevenDayVolumeBands(anchors).map(async (band) => {
+      const rows: (VolumePoint & { id: number; token_id: string })[] = [];
+      for (let offset = 0; ; offset += 1000) {
+        const { data, error } = await client.from("token_metric_observations")
+          .select("id,token_id,value,status,observed_at")
+          .eq("provider_id", "coingecko").eq("metric_id", "volume_24h_usd").in("token_id", band.tokenIds)
+          .is("excluded_reason", null).gte("observed_at", band.from).lte("observed_at", band.to)
+          .order("id", { ascending: true }).range(offset, offset + 999);
+        if (error) throw error;
+        rows.push(...((data ?? []) as (VolumePoint & { id: number; token_id: string })[]));
+        if ((data ?? []).length < 1000) return rows;
+      }
+    }));
+    const byToken = new Map<string, VolumePoint[]>();
+    for (const row of mergeById(...bandRows)) byToken.set(row.token_id, [...(byToken.get(row.token_id) ?? []), row]);
+    const result: Record<string, number> = {};
+    for (const [tokenId, points] of byToken) {
+      const volume = sevenDayVolume(points);
+      if (volume) result[tokenId] = volume.valueUsd;
+    }
+    return result;
+  } catch (error) {
+    console.error("7D volume read failed (shown as unavailable):", error);
+    return {};
+  }
+}
+
+/** Token-level FDV from the latest stored /coins/markets payloads; optional, so a failed read leaves FDV unavailable. */
+async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]): Promise<Record<string, { value: number; collectedAt: string }>> {
+  try {
+    const { data, error } = await client.from("latest_raw_provider_records")
+      .select("token_id,collected_at,endpoint_label,payload_id:payload->>id,fdv:payload->fully_diluted_valuation")
+      .eq("provider_id", "coingecko").in("token_id", tokenIds);
+    if (error) throw error;
+    return reportedFdvFromRecords((data ?? []) as unknown as MarketFieldRecord[]);
+  } catch (error) {
+    console.error("Reported FDV read failed (FDV shown as unavailable):", error);
+    return {};
+  }
+}
+
+/** Logos from stored CoinGecko /coins/markets payloads; cosmetic, so failures yield no logos. */
+async function readTokenLogos(client: SupabaseAdminClient, tokenIds: string[]): Promise<Record<string, string>> {
+  try {
+    const columns = "token_id,collected_at,endpoint_label,image:payload->>image,payload_id:payload->>id";
+    const latest = await client.from("latest_raw_provider_records").select(columns)
+      .eq("provider_id", "coingecko").in("token_id", tokenIds);
+    if (latest.error) throw latest.error;
+    const logos = logosFromRecords((latest.data ?? []) as unknown as LogoRecord[]);
+    // The newest CoinGecko record can be a history backfill (no image); look back for a markets record.
+    const missing = tokenIds.filter((id) => !logos[id]);
+    if (missing.length > 0) {
+      const since = new Date(Date.now() - 14 * DAY_MS).toISOString();
+      const older = await client.from("raw_provider_records").select(columns)
+        .eq("provider_id", "coingecko").eq("endpoint_label", COINGECKO_MARKETS_ENDPOINT).in("token_id", missing)
+        .is("excluded_reason", null).gte("collected_at", since)
+        .order("collected_at", { ascending: false }).limit(missing.length * 48);
+      if (!older.error) Object.assign(logos, logosFromRecords((older.data ?? []) as unknown as LogoRecord[]));
+    }
+    return logos;
+  } catch (error) {
+    console.error("Token logo read failed (logos fall back to monograms):", error);
+    return {};
+  }
+}
+
+/** Latest rows of the newest metrics run for the dashboard's calculated metrics (read-only). */
+async function readDashboardCalculated(client: SupabaseAdminClient, tokenIds: string[]): Promise<DbCalculatedValue[]> {
+  const metricIds = [...DASHBOARD_CALCULATED_METRICS];
+  const newest = await client.from("calculated_metric_observations").select("calculated_at")
+    .in("metric_id", metricIds).order("calculated_at", { ascending: false }).limit(1);
+  if (newest.error) throw newest.error;
+  const newestAt = (newest.data?.[0] as { calculated_at?: string } | undefined)?.calculated_at;
+  if (!newestAt) return [];
+  const since = new Date(Date.parse(newestAt) - CALCULATION_RUN_SPAN_MS).toISOString();
+  const rows: DbCalculatedValue[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const page = await client.from("calculated_metric_observations")
+      .select("id,token_id,metric_id,value,status,calculated_at")
+      .in("metric_id", metricIds).in("token_id", tokenIds).gte("calculated_at", since)
+      .order("id", { ascending: true }).range(offset, offset + 999);
+    if (page.error) throw page.error;
+    rows.push(...((page.data ?? []) as DbCalculatedValue[]));
+    if ((page.data ?? []).length < 1000) return rows;
+  }
+}
 
 /** Latest value per displayed metric; history only where a view needs it. */
 async function readLatest(client: SupabaseAdminClient, tokenIds: string[]): Promise<DbObservation[]> {
@@ -274,13 +470,23 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
     const tokenIds = tokens.map((token) => token.id);
     // 30-day TVL change needs DeFiLlama TVL around 30 days ago (plus baseline tolerance).
     const tvlSince = new Date(Date.now() - (TVL_CHANGE_DAYS + TVL_BASELINE_TOLERANCE_DAYS + 1) * DAY_MS);
-    const [latest, tvlHistory] = await Promise.all([
-      readLatest(client, tokenIds),
+    const latestRead = readLatest(client, tokenIds);
+    const [latest, tvlHistory, logos, fdv, calculatedRows, volume7d] = await Promise.all([
+      latestRead,
       readObservationWindow<DbObservation>(client, tokenIds, [{ providerId: "defillama", metricId: "tvl_usd" }], tvlSince),
+      readTokenLogos(client, tokenIds),
+      readReportedFdv(client, tokenIds),
+      // Calculated columns are optional context: a failed read hides them instead of failing the page.
+      readDashboardCalculated(client, tokenIds).catch((error) => {
+        console.error("Dashboard calculated-metric read failed:", error);
+        return [] as DbCalculatedValue[];
+      }),
+      latestRead.then((rows) => readSevenDayVolumes(client, rows)),
     ]);
     const refreshStatus = await readRefreshStatus(client, latest);
+    const baseTokens = buildDashboardTokens(tokens, (chainResult.data ?? []) as DbChain[], mergeById(latest, tvlHistory));
     return {
-      tokens: buildDashboardTokens(tokens, (chainResult.data ?? []) as DbChain[], mergeById(latest, tvlHistory)),
+      tokens: attachDashboardExtras(baseTokens, { logos, calculated: latestCalculatedValues(calculatedRows), fdv, volume7d }),
       error: null,
       refreshStatus,
     };
@@ -290,15 +496,15 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
   }
 }
 
-export async function getLiveTokenProfile(tokenId: string): Promise<LiveTokenProfileData | null> {
-  const client = createSupabaseAdminClient();
+/** `client` is injectable so the AI analysis reads the same profile data through the caller's client. */
+export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdminClient = createSupabaseAdminClient()): Promise<LiveTokenProfileData | null> {
   const { data: tokenData, error: tokenError } = await client.from("tokens")
     .select("id,name,symbol,chain_id,contract_address,is_native,category,description")
     .eq("id", tokenId).maybeSingle();
   if (tokenError) throw tokenError;
   if (!tokenData) return null;
   const tokenRow = tokenData as DbToken;
-  const [chainResult, observations, calculatedResult, definitionResult, mappingResult] = await Promise.all([
+  const [chainResult, observations, calculatedResult, definitionResult, mappingResult, logos, supplyHistory, reportedFdv] = await Promise.all([
     client.from("chains").select("id,name").eq("id", tokenRow.chain_id).maybeSingle(),
     readLatest(client, [tokenId]).then(async (latest) => mergeById(latest,
       await readObservationWindow<DbObservation>(client, [tokenId], HISTORY_SERIES, new Date(Date.now() - HISTORY_DAYS * DAY_MS)))),
@@ -307,13 +513,23 @@ export async function getLiveTokenProfile(tokenId: string): Promise<LiveTokenPro
       .eq("token_id", tokenId).order("calculated_at", { ascending: false }).order("id", { ascending: false }).range(0, 999),
     client.from("calculated_metric_definitions").select("id,category,source_scopes"),
     client.from("provider_token_mappings").select("provider_id").eq("token_id", tokenId),
+    readTokenLogos(client, [tokenId]),
+    // Supply history is read only for technical indicators; a failed read just omits them.
+    readObservationWindow<DbObservation>(client, [tokenId], INDICATOR_EXTRA_SERIES, new Date(Date.now() - HISTORY_DAYS * DAY_MS))
+      .catch((error) => { console.error(`Indicator supply history read failed for ${tokenId}:`, error); return [] as DbObservation[]; }),
+    // Token-level FDV from the stored market-data record (Tokenomics); failures leave it unavailable.
+    readReportedFdv(client, [tokenId]),
   ]);
   if (chainResult.error) throw chainResult.error;
   if (calculatedResult.error) throw calculatedResult.error;
   if (definitionResult.error) throw definitionResult.error;
   if (mappingResult.error) throw mappingResult.error;
   const chain = chainResult.data as DbChain | null;
-  const token = buildDashboardTokens([tokenRow], chain ? [chain] : [], observations)[0];
+  const baseToken = buildDashboardTokens([tokenRow], chain ? [chain] : [], observations)[0];
+  const fdv = reportedFdv[tokenId] ?? null;
+  const token = fdv
+    ? { ...baseToken, fdvUsd: fdv.value, metricSources: { ...baseToken.metricSources, fdvUsd: { providerId: "coingecko" as const, collectedAt: fdv.collectedAt, note: "Token-level FDV as reported in the stored market-data record." } } }
+    : baseToken;
   const metricSources: Record<string, MetricSource> = {};
   const sourceMetric = (metricId: string, provider: DbObservation["provider_id"]) => {
     const source = sourceFor(observationFor(observations, tokenId, provider, metricId));
@@ -333,11 +549,27 @@ export async function getLiveTokenProfile(tokenId: string): Promise<LiveTokenPro
   // Freshness comes from the latest row per metric; backfilled history is collected later but is older data.
   const latestCollection = latestPerMetric(observations).map((row) => row.collected_at).sort().at(-1);
   if (latestCollection) metricSources.snapshot = { providerId: "calculated", collectedAt: latestCollection };
-  const refreshStatus = await readRefreshStatus(client, observations);
+  // Per-token freshness uses the latest row per metric only: history-window rows (e.g. a backfill) are
+  // collected later but hold older data, and a global refresh time would overstate this token's freshness.
+  const latestTokenRows = latestPerMetric(observations.filter((row) => row.token_id === tokenId));
   const canonicalToken = canonicalTokens.find((candidate) => candidate.id === tokenId);
+  const coverage = canonicalToken ? tokenCoverage(canonicalToken) : [];
   const tokenLevelPriceRow = observationFor(observations, tokenId, "defillama_coins", "price_usd");
+  const protocolMapping = defillamaProtocolMappings.find((mapping) => mapping.tokenId === tokenId);
+  const dexMapped = coverage.some((item) => item.provider === "dexscreener" && item.status === "mapped");
+  // Market-scope counts only for a curated exact-address mapping; never from a wrapped proxy.
+  const dexCount = (metricId: string) => dexMapped ? observationValue(observationFor(observations, tokenId, "dexscreener", metricId)) : null;
+  const protocolMapped = coverage.some((item) => item.provider === "defillama" && item.status === "mapped");
+  let technicalIndicators: TechnicalIndicatorsView | null = null;
+  try {
+    technicalIndicators = buildTechnicalIndicators(mergeById(observations, supplyHistory), { asOf: new Date(), protocolMapped });
+  } catch (error) {
+    // Indicators are optional context: a calculation failure hides the section, never the profile.
+    console.error(`Technical indicator calculation failed for ${tokenId}:`, error);
+  }
   return {
     token,
+    technicalIndicators,
     description: tokenRow.description,
     contractAddress: tokenRow.contract_address,
     isNative: tokenRow.is_native,
@@ -350,12 +582,53 @@ export async function getLiveTokenProfile(tokenId: string): Promise<LiveTokenPro
     dataNotes: notes,
     dexMapped: mappings.some((mapping) => mapping.provider_id === "dexscreener"),
     defiLlamaMapped: mappings.some((mapping) => mapping.provider_id === "defillama"),
-    refreshStatus,
-    coverage: canonicalToken ? tokenCoverage(canonicalToken) : [],
+    datasetFreshness: buildDatasetFreshness({
+      rows: latestTokenRows,
+      // Only datasets this token's profile actually shows; unmapped DEX/protocol rows never count.
+      relevant: ["coingecko", "defillama_coins", ...(dexMapped ? ["dexscreener" as const] : []), ...(protocolMapped && protocolMapping ? ["defillama" as const] : [])],
+      calculatedAt: calc.map((item) => item.calculatedAt).sort().at(-1) ?? null,
+      now: new Date(),
+    }),
+    coverage,
     tokenLevelPrice: tokenLevelPriceRow && tokenLevelPriceRow.status === "available" && numberValue(tokenLevelPriceRow.value) !== null
       ? { value: numberValue(tokenLevelPriceRow.value) as number, observedAt: tokenLevelPriceRow.observed_at, identifier: (tokenLevelPriceRow as { provider_asset_id?: string | null }).provider_asset_id ?? null, note: tokenLevelPriceRow.note }
       : null,
+    logoUrl: logos[tokenId] ?? null,
+    protocol: protocolMapping
+      ? { name: protocolMapping.protocolName.replace(/\s*\(parent record\)\s*$/i, ""), aggregatesVersions: protocolMapping.recordKind === "parent" }
+      : null,
+    dexActivity: {
+      transactions24h: dexCount("transactions_24h_count"),
+      buys24h: dexCount("buys_24h_count"),
+      sells24h: dexCount("sells_24h_count"),
+    },
   };
+}
+
+/**
+ * Sidebar 24H Movers for pages without dashboard rows. Reads only stored data:
+ * the latest CoinGecko 24h change per tracked token and stored logos. The
+ * sidebar is optional, so any failure hides it instead of failing the page.
+ */
+export async function getSidebarMovers(): Promise<Movers | null> {
+  try {
+    const client = createSupabaseAdminClient();
+    const tokenResult = await client.from("tokens").select("id,name,symbol,chain_id,contract_address,is_native,category,description");
+    if (tokenResult.error) throw tokenResult.error;
+    const tokens = (tokenResult.data ?? []) as DbToken[];
+    const tokenIds = tokens.map((token) => token.id);
+    const [changeResult, logos] = await Promise.all([
+      client.from("latest_token_metric_observations").select(OBSERVATION_COLUMNS)
+        .eq("provider_id", "coingecko").in("metric_id", ["price_change_24h_pct", "volume_24h_usd"]).in("token_id", tokenIds),
+      readTokenLogos(client, tokenIds),
+    ]);
+    if (changeResult.error) throw changeResult.error;
+    const rows = buildDashboardTokens(tokens, [], (changeResult.data ?? []) as unknown as DbObservation[]);
+    return selectMovers(rows.map((token) => ({ ...token, logoUrl: logos[token.id] ?? null })));
+  } catch (error) {
+    console.error("Sidebar movers read failed (section hidden):", error);
+    return null;
+  }
 }
 
 export function latestDashboardUpdate(tokens: DashboardToken[]): string | null {

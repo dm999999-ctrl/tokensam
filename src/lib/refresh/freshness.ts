@@ -52,3 +52,56 @@ export function buildRefreshStatus(input: {
   });
   return { providers, metricsCalculatedAt: input.lastSuccess.metrics ?? null, latestRunStatus: input.latestRunStatus };
 }
+
+/** Freshness of one dataset for one token: its own latest collection, never a global refresh time. */
+export type DatasetFreshness = {
+  id: ProviderStep | "metrics";
+  label: string;
+  /** When the latest available observation (or calculation) for this token was stored. */
+  collectedAt: string;
+  /** Provider-reported time of that observation; null for calculations. */
+  observedAt: string | null;
+  ageLabel: string;
+  /** Null when the application defines no freshness threshold (calculated metrics). */
+  state: Exclude<FreshnessState, "unavailable"> | null;
+};
+
+type FreshnessRow = { provider_id: string; status: string; observed_at: string; collected_at: string };
+
+/**
+ * Per-token dataset freshness for the Token Profile. `rows` must already be
+ * the latest row per token/provider/metric (backfilled history is collected
+ * later but is older data, so it must not count). Only datasets with an
+ * available observation for this token and listed in `relevant` are returned;
+ * stale/current uses the provider's own REFRESH_POLICY threshold.
+ */
+export function buildDatasetFreshness(input: {
+  rows: FreshnessRow[];
+  relevant: ProviderStep[];
+  calculatedAt: string | null;
+  now: Date;
+}): DatasetFreshness[] {
+  const datasets: DatasetFreshness[] = [];
+  for (const id of PROVIDER_STEPS) {
+    if (!input.relevant.includes(id)) continue;
+    const rows = input.rows.filter((row) => row.provider_id === id && row.status === "available");
+    const collectedAt = newest(...rows.map((row) => row.collected_at));
+    if (!collectedAt) continue;
+    const stale = input.now.getTime() - Date.parse(collectedAt) > REFRESH_POLICY[id].staleAfterMs;
+    datasets.push({
+      id,
+      label: REFRESH_POLICY[id].label,
+      collectedAt,
+      observedAt: newest(...rows.map((row) => row.observed_at)),
+      ageLabel: relativeAge(collectedAt, input.now),
+      state: stale ? "stale" : "current",
+    });
+  }
+  if (input.calculatedAt && Number.isFinite(Date.parse(input.calculatedAt))) {
+    datasets.push({
+      id: "metrics", label: "Calculated metrics", collectedAt: input.calculatedAt, observedAt: null,
+      ageLabel: relativeAge(input.calculatedAt, input.now), state: null,
+    });
+  }
+  return datasets;
+}

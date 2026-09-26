@@ -44,10 +44,11 @@ The cron fires hourly, and each run collects only the providers that are **due**
 
 | Provider | Interval | Shown stale after | Step budget | Basis |
 | --- | --- | --- | --- | --- |
-| CoinGecko | 1 hour | 3 hours | 90 s | One `/coins/markets` call per run (50 IDs, max 250 per call) ≈ 744 calls/month against the documented 10,000/month Demo allowance |
-| DEX Screener | 1 hour | 3 hours | 90 s | A few batched requests per run against the documented 300 requests/minute |
-| DeFiLlama | 6 hours | 24 hours | 120 s | No published numeric free-tier limit, so refreshed least often. Fees and revenue are 24-hour totals and TVL history is daily |
-| Metrics | After any successful provider step | n/a | 90 s | Reads Supabase only |
+| CoinGecko | 1 hour | 3 hours | 90 s | One `/coins/markets` call per run (100 IDs, max 250 per call) ≈ 744 calls/month against the documented 10,000/month Demo allowance |
+| DEX Screener | 1 hour | 3 hours | 90 s | About 13 batched requests per run (63 mapped tokens, up to 30 addresses per chain request) against the documented 300 requests/minute |
+| DeFiLlama | 6 hours | 24 hours | 150 s | No published numeric free-tier limit, so refreshed least often. Fees and revenue are 24-hour totals and TVL history is daily. 72 requests for 24 protocols took 109 s on 2026-09-25, so the budget rose from 120 s. Providers run in parallel, and 150 s plus 90 s for metrics stays below the route's 300 s limit |
+| DeFiLlama (token prices) | 1 hour | 3 hours | 30 s | Four batched requests (25 keys each) for 100 tokens |
+| Metrics | After any successful provider step | n/a | 90 s | Reads Supabase only; 2,800 rows for 100 tokens took 17 s |
 
 Intervals and thresholds live in [`src/lib/refresh/config.ts`](../src/lib/refresh/config.ts). The existing per-request pacing, `Retry-After` handling and bounded retries inside each collector are unchanged.
 

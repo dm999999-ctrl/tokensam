@@ -45,6 +45,9 @@ function item(id: string, type: EvidenceItem["type"], source: unknown, periodLab
   return { id, type, numbers, text: JSON.stringify(source).toLowerCase(), periodLabels, requiresPeriod };
 }
 
+/** The item constructor, shared with other evidence sources (the profile payload) so numbers and text are indexed identically. */
+export { item as evidenceItem };
+
 /** Build the evidence index for one research context. */
 export function buildEvidenceIndex(context: ResearchContext): EvidenceIndex {
   const items = new Map<string, EvidenceItem>();

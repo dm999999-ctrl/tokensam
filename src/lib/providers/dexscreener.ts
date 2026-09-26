@@ -13,7 +13,7 @@ const MAX_ADDRESSES_PER_REQUEST = 30;
 const MAX_ATTEMPTS = 3;
 // The official endpoint limit is 300 requests/minute. 300 ms leaves margin.
 const MIN_REQUEST_INTERVAL_MS = 300;
-const EVM_CHAINS = new Set(["ethereum", "base", "bsc", "avalanche", "arbitrum", "optimism"]);
+const EVM_CHAINS = new Set(["ethereum", "base", "bsc", "avalanche", "arbitrum", "optimism", "zksync"]);
 
 export type DexScreenerPair = {
   chainId?: string;

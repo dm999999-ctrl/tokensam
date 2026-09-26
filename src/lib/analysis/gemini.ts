@@ -6,7 +6,10 @@ import "server-only";
  * output. It follows the provider collectors' pattern: plain fetch with an
  * injectable fetchImpl, bounded retries, and errors that never include the key.
  * No tools are enabled, so the model cannot browse or call external URLs.
+ * Each attempt reports sanitized, observational diagnostics (diagnostics.ts).
  */
+
+import { attemptRecorder, byteLength, safeLabel, sanitizeUsage, type DiagnosticsOptions } from "./diagnostics.ts";
 
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 /** Current stable general-purpose model at the time of writing; override with GEMINI_MODEL. */
@@ -57,6 +60,7 @@ type GenerateContentResponse = {
   candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[];
   promptFeedback?: { blockReason?: string };
   modelVersion?: string;
+  usageMetadata?: unknown;
 };
 
 export async function generateStructuredJson(options: {
@@ -66,7 +70,13 @@ export async function generateStructuredJson(options: {
   responseSchema: unknown;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
-}): Promise<{ json: unknown; modelVersion: string | null }> {
+  diagnostics?: DiagnosticsOptions;
+  /** Router overrides: a single attempt and the router-assigned deadline. Defaults keep the standalone behavior. */
+  maxAttempts?: number;
+  timeoutMs?: number;
+}): Promise<{ json: unknown; modelVersion: string | null; usage: Record<string, number> | null }> {
+  const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const url = `${BASE_URL}/models/${encodeURIComponent(options.config.model)}:generateContent`;
@@ -82,27 +92,34 @@ export async function generateStructuredJson(options: {
     },
   });
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+  const requestBytes = byteLength(body);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // Observational only: records timings, status, sizes, and sanitized provider fields.
+    const record = attemptRecorder({ options: options.diagnostics, provider: "gemini", model: options.config.model, attempt, maxAttempts, requestBytes });
     let response: Response;
     try {
       response = await fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": options.config.apiKey },
         body,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
       const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-      if (attempt === MAX_ATTEMPTS) {
+      record.finish(timedOut ? "timeout" : "network");
+      if (attempt === maxAttempts) {
         throw new GeminiError(timedOut ? "timeout" : "network", timedOut ? "The Gemini request timed out." : "The Gemini request failed due to a network error.");
       }
       await sleep(1_000);
       continue;
     }
+    record.headers(response, !response.ok);
 
     if (!response.ok) {
+      record.finish("http_error");
       const retryable = response.status === 429 || response.status >= 500;
-      if (retryable && attempt < MAX_ATTEMPTS) {
+      if (retryable && attempt < maxAttempts) {
         const retryAfter = Number(response.headers.get("retry-after"));
         await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 10_000) : 2_000);
         continue;
@@ -117,23 +134,44 @@ export async function generateStructuredJson(options: {
     } catch (error) {
       // The request deadline also covers reading the body; an abort here is a timeout, not bad JSON.
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        record.finish("body_timeout");
         throw new GeminiError("timeout", "The Gemini request timed out while receiving the response.");
       }
+      record.finish("malformed_json");
       throw new GeminiError("malformed_json", "Gemini returned a response that was not valid JSON.");
     }
+    record.response({
+      finishReason: safeLabel(payload.candidates?.[0]?.finishReason),
+      nativeFinishReason: null,
+      servedModel: safeLabel(payload.modelVersion),
+      upstreamProvider: null,
+      generationId: null,
+      usage: sanitizeUsage(payload.usageMetadata),
+    });
     if (payload.promptFeedback?.blockReason) {
+      record.finish("blocked");
       throw new GeminiError("blocked", `Gemini blocked the request (${payload.promptFeedback.blockReason}).`);
     }
     const candidate = payload.candidates?.[0];
-    if (!candidate) throw new GeminiError("empty", "Gemini returned no candidates.");
+    if (!candidate) {
+      record.finish("empty");
+      throw new GeminiError("empty", "Gemini returned no candidates.");
+    }
     if (candidate.finishReason && candidate.finishReason !== "STOP") {
+      record.finish("incomplete");
       throw new GeminiError("incomplete", `Gemini did not finish normally (${candidate.finishReason}).`);
     }
     const textOut = (candidate.content?.parts ?? []).filter((part) => !part.thought).map((part) => part.text ?? "").join("");
-    if (!textOut.trim()) throw new GeminiError("empty", "Gemini returned an empty response.");
+    if (!textOut.trim()) {
+      record.finish("empty");
+      throw new GeminiError("empty", "Gemini returned an empty response.");
+    }
     try {
-      return { json: JSON.parse(textOut), modelVersion: payload.modelVersion ?? null };
+      const json = JSON.parse(textOut);
+      record.finish("success");
+      return { json, modelVersion: payload.modelVersion ?? null, usage: sanitizeUsage(payload.usageMetadata) };
     } catch {
+      record.finish("malformed_json");
       throw new GeminiError("malformed_json", "Gemini's structured output was not valid JSON.");
     }
   }

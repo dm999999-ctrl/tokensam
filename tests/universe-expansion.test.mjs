@@ -1,0 +1,189 @@
+import assert from "node:assert/strict";
+
+import { canonicalTokens, phase15CanonicalTokens } from "../src/data/canonical-tokens.ts";
+import { coingeckoTokenIds, nativeTokenIds } from "../src/data/coingecko-token-mappings.ts";
+import { defillamaProtocolMappings } from "../src/data/defillama-protocol-mappings.ts";
+import { dexScreenerTokenMappings } from "../src/data/dexscreener-token-mappings.ts";
+import { tokenCoverage } from "../src/data/provider-coverage.ts";
+import { normalizeCoinGeckoMarketItem } from "../src/lib/providers/coingecko.ts";
+import { addressEquals, configuredDexScreenerAssets, normalizeDexScreenerToken } from "../src/lib/providers/dexscreener.ts";
+import { calculateTokenMetrics } from "../src/lib/metrics/engine.ts";
+import { logosFromRecords, validatedLogoUrl } from "../src/lib/data/token-logos.ts";
+
+const cases = [];
+function test(name, run) { cases.push({ name, run }); }
+
+const NOW = "2026-09-25T12:00:00.000Z";
+const byId = (id) => canonicalTokens.find((token) => token.id === id);
+const dexAsset = (id) => configuredDexScreenerAssets().find((asset) => asset.tokenId === id);
+const protocolFor = (id) => defillamaProtocolMappings.find((mapping) => mapping.tokenId === id);
+// Wrapped/proxy representations that must never stand in for a native asset.
+const WRAPPED = new Set([
+  "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // WETH
+  "so11111111111111111111111111111111111111112", // wSOL
+  "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", // WBNB
+  "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7", // WAVAX
+  "0x5555555555555555555555555555555555555555", // WHYPE (HyperEVM)
+  "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38", // wS (Sonic)
+  "0x5c7f8a570d578ed84e63fdfa7b1ee72deae1ae23", // WCRO (Cronos)
+]);
+
+// ---- Identity ----
+
+test("1. the 50 Phase 15 tokens have explicit, unique CoinGecko IDs and chain-scoped identities", () => {
+  assert.equal(phase15CanonicalTokens.length, 50);
+  const expected = {
+    "ton-gram": "the-open-network", "hyperliquid-hype": "hyperliquid", "dydx-dydx": "dydx-chain", "stacks-stx": "blockstack",
+    "cronos-cro": "crypto-com-chain", "ethereum-strk": "starknet", "bnb-chain-cake": "pancakeswap-token", "ethereum-usde": "ethena-usde",
+    "solana-wif": "dogwifcoin", "ethereum-eigen": "eigenlayer", "ethereum-wld": "worldcoin-wld", "theta-theta": "theta-token",
+  };
+  for (const [tokenId, coingeckoId] of Object.entries(expected)) assert.equal(coingeckoTokenIds[tokenId], coingeckoId, tokenId);
+  for (const token of phase15CanonicalTokens) {
+    assert.ok(coingeckoTokenIds[token.id], `${token.id} has a CoinGecko ID`);
+    assert.ok(token.chainId && token.chainName && token.category && token.name && token.symbol && token.identityNote);
+    assert.equal(token.isNative, nativeTokenIds.has(token.id));
+    if (token.isNative) assert.equal(token.contractAddress, null, `${token.id}: a native asset has no contract address`);
+    else assert.match(token.contractAddress ?? "", /^(0x[0-9a-f]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/, `${token.id}: contract is a lowercase EVM address or a Solana mint`);
+  }
+  // Same ticker does not mean same asset: ETC is not ETH, BCH is not BTC.
+  assert.notEqual(byId("ethereum-classic-etc").chainId, byId("ethereum-eth").chainId);
+  assert.notEqual(coingeckoTokenIds["bitcoin-cash-bch"], coingeckoTokenIds["bitcoin-btc"]);
+});
+
+test("2. universe diversity: 46 chains and 22 categories, with no chain holding a native asset twice", () => {
+  assert.equal(new Set(canonicalTokens.map((token) => token.chainId)).size, 46);
+  assert.equal(new Set(canonicalTokens.map((token) => token.category)).size, 22);
+  for (const category of ["Restaking", "RWA", "Privacy", "DePIN", "AI & compute", "Interoperability", "Derivatives", "Gaming", "Exchange token", "Identity"]) {
+    assert.ok(canonicalTokens.some((token) => token.category === category), `${category} is represented`);
+  }
+  const natives = canonicalTokens.filter((token) => token.isNative);
+  assert.equal(new Set(natives.map((token) => token.chainId)).size, natives.length);
+});
+
+// ---- Native / wrapped separation ----
+
+test("3. natives map to DEX data only through their own-chain identifier; no wrapped representation is used anywhere", () => {
+  for (const mapping of dexScreenerTokenMappings) {
+    if (mapping.tokenAddress) assert.ok(!WRAPPED.has(mapping.tokenAddress.toLowerCase()) || mapping.tokenId === "ethereum-wbtc", `${mapping.tokenId} does not use a wrapped proxy`);
+  }
+  const mappedNatives = phase15CanonicalTokens.filter((token) => token.isNative && dexAsset(token.id)).map((token) => token.id).sort();
+  assert.deepEqual(mappedNatives, ["hyperliquid-hype", "ton-gram"]);
+  for (const token of phase15CanonicalTokens.filter((candidate) => candidate.isNative && !dexAsset(candidate.id))) {
+    const coverage = tokenCoverage(token).find((item) => item.provider === "dexscreener");
+    assert.equal(coverage.status, "unavailable");
+    assert.match(coverage.detail, /(not|no representation is) substituted|DEX Screener does not cover/, `${token.id} explains the gap without a proxy`);
+  }
+});
+
+// ---- Provider scope ----
+
+test("4. new protocol mappings are protocol-scoped, pinned to a verified record, and never chain-level", () => {
+  const added = ["bnb-chain-cake", "solana-orca", "arbitrum-gmx", "solana-kmno", "ethereum-syrup", "ethereum-ethfi", "dydx-dydx", "hyperliquid-hype", "ethereum-eigen", "ethereum-rpl", "ethereum-cvx", "thorchain-rune", "ethereum-zro"];
+  for (const tokenId of added) {
+    const mapping = protocolFor(tokenId);
+    assert.ok(mapping, `${tokenId} has a protocol mapping`);
+    assert.ok(mapping.recordId && mapping.relationship);
+    const coverage = tokenCoverage(byId(tokenId)).find((item) => item.provider === "defillama");
+    assert.equal(coverage.scope, "protocol");
+    assert.match(coverage.detail, /Not token-level data/);
+  }
+  // Native assets mapped to an exchange protocol say explicitly that it is not chain TVL.
+  for (const tokenId of ["hyperliquid-hype", "dydx-dydx", "thorchain-rune"]) assert.match(protocolFor(tokenId).relationship, /not .*chain-level TVL/);
+  assert.equal(protocolFor("ethereum-ethfi").externalAssetId, "ether.fi");
+  assert.equal(protocolFor("solana-kmno").recordId, "parent#kamino-finance");
+  // Reviewed and declined: bridge/module/fee-only records, and stablecoins without a governance relationship.
+  for (const tokenId of ["injective-inj", "solana-w", "ethereum-strk", "cronos-cro", "ethereum-imx", "ethereum-sand", "ethereum-ens", "base-virtual", "ethereum-ath", "solana-hnt", "solana-grass", "ethereum-usde", "ethereum-usds", "ethereum-pyusd", "ethereum-eurc", "ton-gram", "bittensor-tao"]) {
+    assert.equal(protocolFor(tokenId), undefined, `${tokenId} has no protocol mapping`);
+  }
+  for (const token of phase15CanonicalTokens) {
+    const scopes = Object.fromEntries(tokenCoverage(token).map((item) => [item.provider, item.scope]));
+    assert.deepEqual(scopes, { coingecko: "token", defillama_coins: "token", defillama: "protocol", dexscreener: "market" }, token.id);
+  }
+});
+
+// ---- DEX exact-address matching ----
+
+test("5. ZKsync addresses match case-insensitively like other EVM chains; TON and HyperCore IDs match exactly", () => {
+  assert.equal(addressEquals("zksync", "0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E", "0x5a7d6b2f92c77fad6ccabd7ee0624e64907eaf3e"), true);
+  assert.equal(addressEquals("bsc", "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82", "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82"), true);
+  assert.equal(addressEquals("ton", "EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c", "eqaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaam9c"), false);
+  const zk = { id: "zksync-zk", chain_id: "zksync", name: "ZKsync", symbol: "ZK" };
+  const raw = { id: 1, provider_id: "dexscreener", token_id: "zksync-zk", chain_id: "zksync", collected_at: NOW, endpoint_label: "GET /tokens/v1", payload: {
+    requestedChainId: "zksync", requestedTokenAddress: "0x5a7d6b2f92c77fad6ccabd7ee0624e64907eaf3e",
+    providerPairs: [{ chainId: "zksync", pairAddress: "0xpair", baseToken: { address: "0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E" }, quoteToken: { address: "0xquote" }, liquidity: { usd: 358_294 }, volume: { h24: 10 }, txns: { h24: { buys: 1, sells: 1 } } }],
+  } };
+  const liquidity = calculateTokenMetrics(zk, [], [raw], NOW).find((row) => row.metric_id === "dex_aggregate_liquidity_usd");
+  assert.equal(liquidity.status, "available");
+  assert.equal(liquidity.value, 358_294);
+});
+
+test("6. quote-only TON presence yields no DEX price, and HyperCore's missing pool liquidity stays unavailable (never zero)", () => {
+  const ton = normalizeDexScreenerToken(dexAsset("ton-gram"), [{
+    chainId: "ton", dexId: "stonfi", pairAddress: "EQpair", baseToken: { address: "EQjetton", symbol: "UTYA" },
+    quoteToken: { address: "EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c", symbol: "GRAM" }, priceUsd: "0.01", liquidity: { usd: 549_395 }, volume: { h24: 82_837 },
+  }], NOW);
+  const tonValue = (metricId) => ton.observations.find((row) => row.metricId === metricId);
+  assert.equal(tonValue("price_usd").status, "unavailable", "a quote-side pair is not token-price coverage; prices are not inverted");
+  assert.equal(tonValue("price_usd").value, null);
+  assert.equal(tonValue("fdv_usd").status, "unavailable");
+  const hype = normalizeDexScreenerToken(dexAsset("hyperliquid-hype"), [{
+    chainId: "hyperliquid", dexId: "hyperliquid", pairAddress: "0x13ba5fea7078ab3798fbce53b4d0721c",
+    baseToken: { address: "0x0d01dc56dcaaca66ad901c959b4011ec", symbol: "HYPE" }, quoteToken: { address: "0xusdc", symbol: "USDC" },
+    priceUsd: "91.33", volume: { h24: 104_093_494 }, txns: { h24: { buys: 36_458, sells: 69_319 } },
+  }], NOW);
+  const hypeValue = (metricId) => hype.observations.find((row) => row.metricId === metricId);
+  assert.equal(hypeValue("price_usd").value, 91.33);
+  assert.equal(hypeValue("liquidity_usd").status, "unavailable");
+  assert.equal(hypeValue("liquidity_usd").value, null, "an order book without pool liquidity is not a zero-liquidity market");
+  assert.equal(hypeValue("transactions_24h_count").value, 105_777);
+});
+
+// ---- CoinGecko and logos ----
+
+test("7. CoinGecko market items for new tokens keep missing supply unavailable, not zero", () => {
+  const snapshot = normalizeCoinGeckoMarketItem({ tokenId: "sonic-s", chainId: "sonic", externalAssetId: "sonic-3" }, {
+    id: "sonic-3", last_updated: NOW, current_price: 0.0404, market_cap: 156_885_180, total_volume: 1e7,
+    price_change_percentage_24h: 0, price_change_percentage_7d_in_currency: -3, circulating_supply: 3_885_497_663, total_supply: 3_885_497_663, max_supply: null,
+  }, NOW);
+  const value = (metricId) => snapshot.observations.find((row) => row.metricId === metricId);
+  assert.equal(value("maximum_supply").status, "unavailable");
+  assert.equal(value("maximum_supply").value, null);
+  assert.equal(value("price_change_24h_pct").value, 0, "a reported zero change stays zero");
+  assert.ok(snapshot.observations.every((row) => row.scope === "token"));
+});
+
+test("8. logos for new tokens are accepted only for their own CoinGecko ID", () => {
+  const url = "https://coin-images.coingecko.com/coins/images/17980/large/ton_symbol.png?1696517498";
+  assert.equal(validatedLogoUrl("ton-gram", "the-open-network", url), url);
+  assert.equal(validatedLogoUrl("ton-gram", "toncoin", url), null, "a record for a different CoinGecko ID is rejected");
+  assert.equal(validatedLogoUrl("ethereum-classic-etc", "ethereum", url), null, "a related chain's logo is not reused");
+  const logos = logosFromRecords([
+    { token_id: "hyperliquid-hype", collected_at: NOW, endpoint_label: "GET /coins/markets", image: "https://coin-images.coingecko.com/coins/images/50882/large/hyperliquid.jpg", payload_id: "hyperliquid" },
+    { token_id: "dydx-dydx", collected_at: NOW, endpoint_label: "GET /coins/markets", image: "https://coin-images.coingecko.com/coins/images/17500/large/dydx.png", payload_id: "dydx" },
+  ]);
+  assert.ok(logos["hyperliquid-hype"]);
+  assert.equal(logos["dydx-dydx"], undefined, "the legacy ethDYDX record (CoinGecko dydx) is not the native dYdX Chain asset (dydx-chain)");
+});
+
+test("9. refresh budgets fit the 100-token universe inside the cron route's 300 s limit", async () => {
+  const { REFRESH_POLICY, METRICS_TIMEOUT_MS } = await import("../src/lib/refresh/config.ts");
+  const { readFileSync } = await import("node:fs");
+  const maxDuration = Number(readFileSync("src/app/api/cron/refresh/route.ts", "utf8").match(/maxDuration = (\d+)/)[1]) * 1000;
+  const longestProvider = Math.max(...Object.values(REFRESH_POLICY).map((policy) => policy.timeoutMs));
+  assert.ok(longestProvider + METRICS_TIMEOUT_MS < maxDuration, "providers run in parallel, then metrics");
+  // DeFiLlama current mode: 3 requests per protocol at >= 1.1 s pacing must fit its budget.
+  assert.ok(defillamaProtocolMappings.length * 3 * 1_100 < REFRESH_POLICY.defillama.timeoutMs);
+});
+
+let failures = 0;
+for (const { name, run } of cases) {
+  try {
+    await run();
+    console.log(`PASS ${name}`);
+  } catch (error) {
+    failures += 1;
+    console.error(`FAIL ${name}: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+}
+console.log(`${cases.length - failures}/${cases.length} universe-expansion checks passed.`);
+if (failures > 0) process.exitCode = 1;
