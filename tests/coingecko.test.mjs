@@ -63,7 +63,7 @@ test("market item normalization maps metrics and preserves unavailable values", 
 test("every existing canonical demo token has one explicit, unique CoinGecko ID", () => {
   const tokenIds = canonicalTokens.map((token) => token.id);
   const providerIds = tokenIds.map((tokenId) => coingeckoTokenIds[tokenId]);
-  assert.equal(tokenIds.length, 100);
+  assert.equal(tokenIds.length, 238);
   assert.equal(providerIds.filter(Boolean).length, tokenIds.length);
   assert.equal(new Set(providerIds).size, providerIds.length);
 });

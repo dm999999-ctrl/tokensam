@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { canonicalTokens, additionalCanonicalTokens, phase15CanonicalTokens } from "../src/data/canonical-tokens.ts";
+import { canonicalTokens, additionalCanonicalTokens, phase15CanonicalTokens, phase16CanonicalTokens } from "../src/data/canonical-tokens.ts";
 import { coingeckoTokenIds, nativeTokenIds } from "../src/data/coingecko-token-mappings.ts";
 import { defillamaProtocolMappings } from "../src/data/defillama-protocol-mappings.ts";
 import { dexScreenerTokenMappings } from "../src/data/dexscreener-token-mappings.ts";
@@ -19,15 +19,22 @@ const BASELINE_50 = [
   "ethereum-pepe", "solana-bonk", "solana-ray", "solana-jto", "solana-pyth", "base-aero", "ethereum-morpho", "ethereum-grt", "arweave-ar", "ethereum-mnt",
 ];
 
-test("the canonical set grows from 50 to 100 with unique chain-scoped identities; the baseline 50 are unchanged", () => {
-  assert.equal(canonicalTokens.length, 100);
+test("the canonical set grows from 50 to 238 with unique chain-scoped identities; the baseline 50 are unchanged", () => {
+  assert.equal(canonicalTokens.length, 238);
   assert.equal(additionalCanonicalTokens.length, 30);
   assert.equal(phase15CanonicalTokens.length, 50);
+  assert.equal(phase16CanonicalTokens.length, 138);
   assert.deepEqual(canonicalTokens.slice(0, 50).map((token) => token.id), BASELINE_50, "existing canonical IDs are neither removed nor reordered");
   assert.equal(coingeckoTokenIds["maker-mkr"], "sky");
   assert.equal(coingeckoTokenIds["avalanche-avax"], "avalanche-2");
-  assert.equal(new Set(canonicalTokens.map((token) => token.id)).size, 100);
-  assert.equal(new Set(canonicalTokens.map((token) => `${token.chainId}:${token.contractAddress?.toLowerCase() ?? "native"}`)).size, 100);
+  assert.equal(new Set(canonicalTokens.map((token) => token.id)).size, 238);
+  // On-chain identity key: a real contract address, or "chain:native" for the chain's native asset.
+  // A non-native token with no curated contract address (Phase 16) makes no on-chain identity claim
+  // at all, so it cannot collide with anything and falls back to its already-unique token id.
+  const onChainIdentity = (token) => token.contractAddress
+    ? `${token.chainId}:${token.contractAddress.toLowerCase()}`
+    : token.isNative ? `${token.chainId}:native` : `id:${token.id}`;
+  assert.equal(new Set(canonicalTokens.map(onChainIdentity)).size, 238);
   assert.equal(new Set(canonicalTokens.filter((token) => token.isNative).map((token) => token.chainId)).size, canonicalTokens.filter((token) => token.isNative).length);
   assert.ok(canonicalTokens.every((token) => token.id && token.chainId && token.symbol && token.name));
 });
@@ -35,9 +42,9 @@ test("the canonical set grows from 50 to 100 with unique chain-scoped identities
 test("provider mappings are unique, explicit, chain-consistent, and leave unsupported assets unmapped", () => {
   const ids = new Set(canonicalTokens.map((token) => token.id));
   const coinIds = canonicalTokens.map((token) => coingeckoTokenIds[token.id]);
-  assert.equal(coinIds.filter(Boolean).length, 100);
-  assert.equal(new Set(coinIds).size, 100);
-  assert.equal(new Set(dexScreenerTokenMappings.map((mapping) => mapping.tokenId)).size, 100);
+  assert.equal(coinIds.filter(Boolean).length, 238);
+  assert.equal(new Set(coinIds).size, 238);
+  assert.equal(new Set(dexScreenerTokenMappings.map((mapping) => mapping.tokenId)).size, 238);
   const dexAssetsByToken = new Map(configuredDexScreenerAssets().map((asset) => [asset.tokenId, asset]));
   for (const mapping of dexScreenerTokenMappings) {
     assert.ok(ids.has(mapping.tokenId));
@@ -53,8 +60,22 @@ test("provider mappings are unique, explicit, chain-consistent, and leave unsupp
   }
   assert.equal(new Set(defillamaProtocolMappings.map((mapping) => mapping.tokenId)).size, defillamaProtocolMappings.length);
   assert.ok(defillamaProtocolMappings.every((mapping) => ids.has(mapping.tokenId) && mapping.externalAssetId && mapping.relationship));
-  assert.equal(nativeTokenIds.size, 42);
+  assert.equal(nativeTokenIds.size, 94);
   assert.ok(canonicalTokens.every((token) => token.isNative === nativeTokenIds.has(token.id)), "native flags agree with the native set");
+});
+
+test("Phase 16 (100 -> 238) tokens all carry a verified CoinGecko ID and no fabricated contract/DEX mapping", () => {
+  for (const token of phase16CanonicalTokens) {
+    assert.ok(coingeckoTokenIds[token.id], `${token.id} has a CoinGecko ID`);
+    assert.equal(token.contractAddress, null, `${token.id}: no contract address is invented in this phase`);
+    assert.equal(token.isNative, nativeTokenIds.has(token.id));
+  }
+  const phase16Ids = new Set(phase16CanonicalTokens.map((token) => token.id));
+  for (const mapping of dexScreenerTokenMappings.filter((entry) => phase16Ids.has(entry.tokenId))) {
+    assert.equal(mapping.tokenAddress, null, `${mapping.tokenId}: no DEX Screener address is invented in this phase`);
+    assert.ok(mapping.unmappedReason, `${mapping.tokenId} explains why it is unmapped`);
+  }
+  assert.equal(new Set(phase16CanonicalTokens.map((token) => coingeckoTokenIds[token.id])).size, phase16CanonicalTokens.length, "no duplicate CoinGecko IDs among the new tokens");
 });
 
 test("provider observation persistence is idempotent while raw snapshots remain append-only", async () => {

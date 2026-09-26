@@ -75,7 +75,7 @@ test("1-2. a full refresh runs the real collectors, persists observations, then 
   assert.deepEqual(new Set(result.due), new Set(["coingecko", "dexscreener", "defillama", "defillama_coins"]));
   const byStep = Object.fromEntries(result.steps.map((step) => [step.step, step]));
   assert.equal(byStep.coingecko.status, "succeeded");
-  assert.equal(byStep.coingecko.detail.returnedAssets, 100);
+  assert.equal(byStep.coingecko.detail.returnedAssets, 238);
   assert.equal(byStep.dexscreener.status, "succeeded");
   assert.equal(byStep.defillama.status, "skipped", "the DeFiLlama written-permission gate is enforced, not bypassed");
   assert.match(byStep.defillama.error, /written permission/i);
@@ -84,8 +84,8 @@ test("1-2. a full refresh runs the real collectors, persists observations, then 
   assert.equal(result.steps.at(-1).step, "metrics", "metrics run after provider synchronization");
 
   const coingeckoRows = db.rows("token_metric_observations").filter((row) => row.provider_id === "coingecko");
-  assert.equal(coingeckoRows.length, 100 * 8);
-  assert.equal(db.rows("raw_provider_records").filter((row) => row.provider_id === "coingecko").length, 100);
+  assert.equal(coingeckoRows.length, 238 * 8);
+  assert.equal(db.rows("raw_provider_records").filter((row) => row.provider_id === "coingecko").length, 238);
   assert.ok(db.rows("calculated_metric_observations").length > 0);
 
   const run = db.rows("data_refresh_runs")[0];
