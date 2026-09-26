@@ -1,8 +1,6 @@
 /**
  * Evidence index for the existing evidence-contract validator, built from the
- * profile payload. Browser-safe (no Node APIs), so the same index and the same
- * validator run on the server (external AI providers) and in the browser
- * (local AI). The validator's rules are unchanged: every citable ID is a
+ * profile payload. The validator's rules are unchanged: every citable ID is a
  * payload field (or scope note / identity), numbers are grounded against the
  * cited fields' displayed and stored values, and period-bearing fields must be
  * cited with their exact period label.

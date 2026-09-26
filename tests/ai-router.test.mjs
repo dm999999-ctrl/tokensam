@@ -217,15 +217,16 @@ test("15. free quota exhausted: FREE_QUOTA_EXHAUSTED, long cooldown, next provid
 // ---- 16-18: capability, deadline, nothing available ----
 
 test("16. capability and free-tier mismatches are skipped before any request", async () => {
-  const env = { GROQ_API_KEY: "g", ZHIPU_API_KEY: "z", HUNYUAN_API_KEY: "h", HUNYUAN_MODEL: "hunyuan-x", SILICONFLOW_API_KEY: "s", SILICONFLOW_MODEL: "m", DASHSCOPE_API_KEY: "q", OPENROUTER_API_KEY: "o", OPENROUTER_MODEL: "vendor/paid-model", MISTRAL_API_KEY: "m", MISTRAL_MODEL: "mistral-medium-2604", AI_PROVIDER_PRIORITY: "qwen,hunyuan,glm,siliconflow,groq,mistral" };
+  // glm and siliconflow are deliberately left out of this priority list: their structured-output
+  // mode (json_object) is now eligible (see test 22+), so they no longer belong among the skips
+  // this test demonstrates. hunyuan stays "unverified" (no documented mode either way).
+  const env = { GROQ_API_KEY: "g", HUNYUAN_API_KEY: "h", HUNYUAN_MODEL: "hunyuan-x", DASHSCOPE_API_KEY: "q", OPENROUTER_API_KEY: "o", OPENROUTER_MODEL: "vendor/paid-model", MISTRAL_API_KEY: "m", MISTRAL_MODEL: "mistral-medium-2604", AI_PROVIDER_PRIORITY: "qwen,hunyuan,groq,mistral" };
   const { result, calls } = await route({ mistral: [chatOk()] }, { env });
   const skips = Object.fromEntries(result.attempts.filter((item) => item.action === "skipped").map((item) => [item.providerId, item.skipReason]));
   assert.equal(skips.qwen, "free_tier_free_trial", "a free trial needs explicit opt-in (AI_ALLOWED_FREE_TIERS)");
   assert.equal(skips.hunyuan, "free_tier_free_trial");
-  assert.equal(skips.glm, "structured_output_json_object", "JSON mode without JSON Schema cannot satisfy the report contract");
-  assert.equal(skips.siliconflow, "structured_output_unverified");
   assert.equal(result.provider.id, "mistral");
-  assert.equal(calls.groq.length + calls.glm.length + calls.qwen.length, 0);
+  assert.equal(calls.groq.length + calls.qwen.length, 0);
 
   const onlyGroqAndPaidOpenRouter = await route({}, { env: { GROQ_API_KEY: "g", OPENROUTER_API_KEY: "o", OPENROUTER_MODEL: "vendor/paid-model" } });
   const later = Object.fromEntries(onlyGroqAndPaidOpenRouter.error.attempts.map((item) => [item.providerId, item.skipReason]));
@@ -332,11 +333,12 @@ test("21. no secret or raw provider text leaks into results, errors, diagnostics
   assert.match(run.result.message, /Qwen \(Alibaba Cloud Model Studio\): temporarily unavailable \(HTTP 503\); Mistral: configuration error \(HTTP 401\)/);
 });
 
-test("22. GLM reads ZHIPU_API_KEY and uses JSON-object mode (schema as text); the router still never selects it", async () => {
+test("22. GLM reads ZHIPU_API_KEY and uses JSON-object mode (schema as text)", async () => {
   assert.equal(buildProviders({ ZHIPU_API_KEY: "zk" }).get("glm").configured, true);
   assert.equal(buildProviders({ ZAI_API_KEY: "zk" }).get("glm").configured, false, "the old variable name is no longer read");
   const glm = buildProviders({ ZHIPU_API_KEY: KEYS.DASHSCOPE_API_KEY }).get("glm");
   assert.equal(glm.model, "glm-4.7-flash");
+  assert.equal(glm.capabilities.structuredOutput, "json_object", "documented JSON mode, not a claimed json_schema");
   const calls = [];
   const fetchImpl = async (url, init) => { calls.push({ url: String(url), init }); return chatOk()(); };
   const outcome = await glm.generateStructuredReport(request, { timeoutMs: 10_000, fetchImpl });
@@ -347,11 +349,77 @@ test("22. GLM reads ZHIPU_API_KEY and uses JSON-object mode (schema as text); th
   assert.ok(body.messages[0].content.startsWith(SYSTEM_INSTRUCTION), "the system instruction is unchanged, with the schema appended");
   assert.ok(body.messages[0].content.endsWith(JSON.stringify(ANALYSIS_RESPONSE_SCHEMA)), "the exact schema is given as text");
   assert.equal(body.messages[1].content, request.userText);
-  const routed = await route({}, { env: { ZHIPU_API_KEY: "zk", AI_PROVIDER_PRIORITY: "glm" } });
-  assert.equal(routed.error.attempts[0].skipReason, "structured_output_json_object", "production routing is unchanged");
   const mistral = scripted({ mistral: [chatOk()] });
   await buildProviders(ENV).get("mistral").generateStructuredReport(request, { timeoutMs: 10_000, fetchImpl: mistral.fetchImpl });
   assert.equal(JSON.parse(mistral.calls.mistral[0].init.body).response_format.type, "json_schema", "JSON-schema providers are unchanged");
+});
+
+// ---- 23: GLM (json_object) is a first-class, fully validated routing path ----
+
+const GLM_ENV = { ZHIPU_API_KEY: "zk", MISTRAL_API_KEY: KEYS.MISTRAL_API_KEY, MISTRAL_MODEL: "mistral-medium-2604", AI_PROVIDER_PRIORITY: "glm,mistral" };
+
+test("23A-B. GLM is no longer skipped for its structured-output mode, and is selected first when configured", async () => {
+  const { result, calls } = await route({ glm: [chatOk()], mistral: [chatOk()] }, { env: GLM_ENV });
+  assert.equal(result.provider.id, "glm", "json_object is now an eligible routing path");
+  assert.equal(result.attempts[0].skipReason, null, "not skipped");
+  assert.equal(calls.mistral.length, 0, "the router stops at the first success");
+});
+
+test("23C. GLM valid JSON + valid schema + valid evidence is accepted", async () => {
+  const { result } = await route({ glm: [chatOk()] }, { env: GLM_ENV });
+  assert.equal(result.provider.id, "glm");
+  assert.equal(result.attempt.validationPassed, true);
+});
+
+test("23D. GLM malformed JSON is rejected (retried once), then falls back to Mistral", async () => {
+  const { result, calls } = await route({ glm: [chatOk("not json at all"), chatOk("{still not json")], mistral: [chatOk()] }, { env: GLM_ENV });
+  assert.equal(calls.glm.length, 2, "one same-provider retry, same as any json_schema provider");
+  assert.deepEqual(attempted(result.attempts), ["glm:structured_output", "glm:structured_output", "mistral:ok"]);
+});
+
+test("23E. GLM JSON that does not match the report schema is rejected, then falls back to Mistral", async () => {
+  const { result, calls } = await route({ glm: [chatOk({ executiveSummary: "x" }), chatOk({ executiveSummary: "y" })], mistral: [chatOk()] }, { env: GLM_ENV });
+  assert.equal(calls.glm.length, 2);
+  assert.deepEqual(attempted(result.attempts), ["glm:structured_output", "glm:structured_output", "mistral:ok"]);
+});
+
+test("23F. GLM output failing the evidence contract is rejected (no retry) and falls back to Mistral", async () => {
+  const { result, health } = await route({ glm: [chatOk(invalidReport())], mistral: [chatOk()] }, { env: GLM_ENV });
+  assert.deepEqual(attempted(result.attempts), ["glm:validation", "mistral:ok"]);
+  const glmAttempt = result.attempts.find((item) => item.providerId === "glm");
+  assert.equal(glmAttempt.validationPassed, false);
+  assert.ok(glmAttempt.validationViolations >= 2);
+  assert.equal(health.get("glm", Date.now()).status, "healthy", "the provider answered; validation is not an availability failure");
+});
+
+test("23G. GLM HTTP 429/5xx/timeout is infrastructure-transient and falls back to Mistral", async () => {
+  for (const failure of [http(429), http(503), timeout()]) {
+    const { result, calls, health } = await route({ glm: [failure], mistral: [chatOk()] }, { env: GLM_ENV, health: createProviderHealth() });
+    assert.equal(calls.glm.length, 1, "no retry on an infrastructure failure");
+    assert.equal(result.provider.id, "mistral");
+    assert.equal(result.attempts.find((item) => item.providerId === "glm").category, "transient");
+    assert.equal(health.get("glm", Date.now()).status, "cooldown");
+  }
+});
+
+// ---- 24: SiliconFlow and ModelScope wiring (verified json_object capability, no invented model) ----
+
+test("24. SiliconFlow and ModelScope are eligible json_object providers, but stay unconfigured without their model env var", async () => {
+  const siliconflow = buildProviders({ SILICONFLOW_API_KEY: "sk" }).get("siliconflow");
+  assert.equal(siliconflow.capabilities.structuredOutput, "json_object", "documented JSON mode (docs.siliconflow.cn JSON-mode guide), not a claimed json_schema");
+  assert.equal(siliconflow.configured, false, "no default model is invented; SILICONFLOW_MODEL is required");
+  assert.equal(buildProviders({ SILICONFLOW_API_KEY: "sk", SILICONFLOW_MODEL: "some-model" }).get("siliconflow").configured, true);
+
+  const modelscope = buildProviders({ MODELSCOPE_API_TOKEN: "mt" }).get("modelscope");
+  assert.equal(modelscope.capabilities.structuredOutput, "json_object", "json_schema is a documented open bug (modelscope/modelscope#1801); json_object is used instead");
+  assert.equal(modelscope.configured, false, "no default model is invented; MODELSCOPE_MODEL is required");
+  assert.equal(buildProviders({ MODELSCOPE_API_TOKEN: "mt", MODELSCOPE_MODEL: "some-model" }).get("modelscope").configured, true);
+  assert.equal(buildProviders({}).get("modelscope").configured, false, "no token configured in this environment");
+
+  const routed = await route({}, { env: { SILICONFLOW_API_KEY: "sk", MODELSCOPE_API_TOKEN: "mt", AI_PROVIDER_PRIORITY: "siliconflow,modelscope" } });
+  const skips = Object.fromEntries(routed.error.attempts.map((item) => [item.providerId, item.skipReason]));
+  assert.equal(skips.siliconflow, "not_configured", "eligible capability, but still no model");
+  assert.equal(skips.modelscope, "not_configured");
 });
 
 let failures = 0;

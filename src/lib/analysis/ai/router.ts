@@ -78,7 +78,10 @@ export function ineligibility(provider: AIProvider | undefined, request: ReportR
   if (!provider.configured) return "not_configured";
   if (!allowedTiers.has(provider.freeTier.status)) return `free_tier_${provider.freeTier.status.toLowerCase()}`;
   const caps = provider.capabilities;
-  if (caps.structuredOutput !== "json_schema") return `structured_output_${caps.structuredOutput}`;
+  // json_schema (API-enforced) and json_object (schema sent as text) both reach the identical
+  // schema check and evidence validator in `validate`; only an unverified structured-output mode
+  // is excluded, since neither this router nor the API gives any shape guarantee for it.
+  if (caps.structuredOutput === "unverified") return "structured_output_unverified";
   if (caps.maxOutputTokens < minOutputTokens) return "output_capacity";
   const needed = request.estimatedInputTokens + minOutputTokens;
   if (caps.maxContextTokens !== null && caps.maxContextTokens < needed) return "context_window";

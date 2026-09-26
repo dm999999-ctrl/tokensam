@@ -42,7 +42,13 @@ type OpenAiSpec = {
   outputTokenParam?: "max_tokens" | "max_completion_tokens";
 };
 
-/** OpenAI-compatible providers. A provider without a documented JSON-schema mode is registered but never eligible. */
+/**
+ * OpenAI-compatible providers. Eligibility (ai/router.ts `ineligibility()`) requires
+ * structuredOutput "json_schema" (API-enforced) or "json_object" (schema sent as text; the
+ * server's schema check and evidence validator apply exactly the same either way). A provider
+ * whose structured-output support is genuinely undocumented is "unverified" and stays registered
+ * but never eligible, rather than guessing.
+ */
 export const OPENAI_COMPATIBLE_SPECS: OpenAiSpec[] = [
   {
     id: "qwen", displayName: "Qwen (Alibaba Cloud Model Studio)", providerType: "primary_free",
@@ -133,10 +139,26 @@ export const OPENAI_COMPATIBLE_SPECS: OpenAiSpec[] = [
     freeTier: {
       status: "FREE", quotaType: "Free models with fixed rate limits", quota: "Per model (e.g. 100 requests/day)",
       resetOrExpiry: "Daily", paymentMethodRequired: null, freeOnlyMode: "Free by model choice",
-      docs: ["https://docs.siliconflow.com/en/userguide/rate-limits/rate-limit-and-upgradation"], verifiedOn: VERIFIED_ON,
-      notes: "JSON Schema support not documented per free model; no default model chosen.",
+      docs: ["https://docs.siliconflow.com/en/userguide/rate-limits/rate-limit-and-upgradation", "https://docs.siliconflow.cn/cn/userguide/guides/json-mode"], verifiedOn: "2026-09-26",
+      notes: "JSON mode (response_format {\"type\":\"json_object\"}) is documented platform-wide (\"currently the platform's large language models support this parameter\"); JSON Schema (strict) support is not documented per free model, so json_object is used. No default model chosen.",
     },
-    capabilities: openAiCaps({ structuredOutput: "unverified" }),
+    capabilities: openAiCaps({ structuredOutput: "json_object" }),
+  },
+  {
+    // OpenAI-compatible API-Inference service (https://www.modelscope.cn/docs/model-service/API-Inference/intro).
+    // json_schema is documented but reported broken (returns HTTP 200 with null choices, no error:
+    // github.com/modelscope/modelscope/issues/1801), so json_object is used instead, like GLM/SiliconFlow.
+    // No default model: MODELSCOPE_MODEL must be set.
+    id: "modelscope", displayName: "ModelScope (Alibaba)", providerType: "secondary_free",
+    keyEnv: "MODELSCOPE_API_TOKEN", modelEnv: "MODELSCOPE_MODEL", baseUrlEnv: "MODELSCOPE_BASE_URL",
+    defaultBaseUrl: "https://api-inference.modelscope.cn/v1", defaultModel: null,
+    freeTier: {
+      status: "FREE", quotaType: "Free API-Inference access (per-model daily call limits)", quota: "Documented per model on its ModelScope page",
+      resetOrExpiry: "Daily", paymentMethodRequired: null, freeOnlyMode: "Free by model choice",
+      docs: ["https://www.modelscope.cn/docs/model-service/API-Inference/intro", "https://github.com/modelscope/modelscope/issues/1801"], verifiedOn: "2026-09-26",
+      notes: "response_format {\"type\":\"json_object\"} works; {\"type\":\"json_schema\"} is a documented open bug (HTTP 200, null choices, no error), so json_schema must not be used until that is fixed. No default model chosen.",
+    },
+    capabilities: openAiCaps({ structuredOutput: "json_object" }),
   },
 ];
 
