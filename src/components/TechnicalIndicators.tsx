@@ -1,5 +1,5 @@
 import type { TechnicalIndicator, TechnicalIndicatorGroup, TechnicalIndicatorsView } from "@/types/technical-indicators";
-import { formatParameters, formatReading } from "@/lib/ui/indicator-format";
+import { formatParameters, formatReading, readingTone } from "@/lib/ui/indicator-format";
 import { formatUtc } from "@/lib/ui/format";
 import { datasetLabel } from "@/lib/ui/data-language";
 
@@ -13,18 +13,18 @@ export function IndicatorCard({ indicator }: { indicator: TechnicalIndicator }) 
   const datasets = [...new Set(provenance.providers.map((provider) => datasetLabel(provider, "Market data")))].join(" + ");
   const start = formatUtc(provenance.observationStart, false), end = formatUtc(provenance.observationEnd, false);
   const readings = indicator.readings
-    .map((reading) => ({ reading, text: formatReading(reading) }))
-    .filter((item): item is { reading: typeof item.reading; text: string } => item.text !== null);
+    .map((reading) => ({ reading, text: formatReading(reading), tone: readingTone(reading) }))
+    .filter((item): item is { reading: typeof item.reading; text: string; tone: typeof item.tone } => item.text !== null);
   return (
     <article className="indicator-card" aria-labelledby={`indicator-${indicator.id}`}>
       <header className="indicator-head">
         <strong id={`indicator-${indicator.id}`}>{indicator.name}</strong>
       </header>
       <dl className="indicator-readings">
-        {readings.map(({ reading, text }) => (
+        {readings.map(({ reading, text, tone }) => (
           <div key={reading.label}>
             <dt>{reading.label}</dt>
-            <dd>{text}{reading.at ? <small>{formatUtc(reading.at, false)}</small> : null}</dd>
+            <dd className={`tone-${tone}`}>{text}{reading.at ? <small>{formatUtc(reading.at, false)}</small> : null}</dd>
           </div>
         ))}
       </dl>

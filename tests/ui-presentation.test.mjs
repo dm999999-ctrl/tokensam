@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { canonicalTokens } from "../src/data/canonical-tokens.ts";
 import { tokenCoverage } from "../src/data/provider-coverage.ts";
@@ -72,6 +73,29 @@ test("1. formatters keep a legitimate zero and never turn a missing value into z
   assert.equal(formatShare(0.23), "0.23%", "a share carries no sign");
   assert.deepEqual(formatChange(0), { text: "0.00%", tone: "flat" });
   assert.equal(formatChange(undefined), null);
+});
+
+test("1b. formatChange reports a direction (tone) for every non-zero value, positive or negative", () => {
+  assert.deepEqual(formatChange(5.7), { text: "+5.70%", tone: "positive" });
+  assert.deepEqual(formatChange(-0.18), { text: "-0.18%", tone: "negative" });
+  assert.deepEqual(formatChange(6.02), { text: "+6.02%", tone: "positive" });
+  assert.deepEqual(formatChange(-0.53), { text: "-0.53%", tone: "negative" });
+});
+
+test("1c. Token Profile page: explicit changes (tone-positive, tone-negative) both render in the brand crimson; zero/unchanged (tone-flat) and plain magnitudes (tone-neutral) keep their existing color, and only the Token Profile page is affected", () => {
+  const css = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.profile-page \.tone-positive,\s*\.profile-page \.tone-negative\s*\{\s*color:\s*var\(--crimson-bright\);\s*\}/, "positive and negative changes share one rule, scoped to the profile page, using the existing crimson token (not a new color)");
+  assert.doesNotMatch(css, /--crimson-red|--red-accent|#[0-9a-f]{3,8}[^;]*\/\*\s*new red/i, "no new red color is introduced");
+  // Unscoped defaults (used outside the Token Profile page, e.g. sidebar movers) are unchanged.
+  assert.match(css, /\.tone-positive \{ color: var\(--positive\); \}/);
+  assert.match(css, /\.tone-negative \{ color: var\(--negative\); \}/);
+  assert.match(css, /\.tone-flat \{ color: var\(--flat\); \}/);
+  assert.match(css, /\.tone-neutral \{ color: inherit; \}/);
+  // Drawdown / volatility (HistoricalSection) are inherently negative-or-zero magnitudes, not a change/delta:
+  // they must never be styled via a tone-* class (which would misread a metric as a "decrease").
+  const historicalSection = readFileSync(new URL("../src/components/HistoricalSection.tsx", import.meta.url), "utf8");
+  const drawdownLines = historicalSection.split("\n").filter((line) => /drawdown|volatility/i.test(line));
+  assert.ok(drawdownLines.length > 0 && drawdownLines.every((line) => !/tone-/.test(line)), "drawdown/volatility are plain magnitudes, never tone-colored");
 });
 
 test("2. ratio and share metrics render neutrally; growth shows its interval and short intervals stay neutral", () => {

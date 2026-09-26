@@ -5,7 +5,7 @@ import { correlation, emaSeries, linearRegression, rsi, sampleStdev, sma, stdev 
 import { DAY_MS, SERIES_RULES, alignSeries, contiguousTail, dailySamples, maxHistoryAgeDays } from "../src/lib/indicators/series.ts";
 import { INDICATOR_DEFINITIONS, direction, relationState, relationshipLabel, spansExactly, swingPoints } from "../src/lib/indicators/catalog.ts";
 import { evaluateTechnicalIndicators } from "../src/lib/indicators/build.ts";
-import { formatReading } from "../src/lib/ui/indicator-format.ts";
+import { formatReading, readingTone } from "../src/lib/ui/indicator-format.ts";
 import { horizonLabel, intervalBetween } from "../src/lib/ui/format.ts";
 import { buildProfileModel } from "../src/lib/ui/profile-model.ts";
 import { buildTokenHistory } from "../src/lib/data/live-data.ts";
@@ -424,6 +424,20 @@ test("readings format by unit", () => {
   assert.equal(formatReading({ label: "x", value: 0.111, unit: "multiple" }), "0.111×");
   assert.equal(formatReading({ label: "x", value: 43.2, unit: "percent" }), "43.2%");
   assert.equal(formatReading({ label: "x", value: Number.NaN, unit: "usd" }), null);
+});
+
+test("reading tone: only explicit change/gap units (percent_change, percent_per_day) carry a direction; a zero reading is flat, and every other unit stays neutral however its value is signed", () => {
+  assert.equal(readingTone({ label: "x", value: 6.02, unit: "percent_change" }), "positive");
+  assert.equal(readingTone({ label: "x", value: -0.53, unit: "percent_change" }), "negative");
+  assert.equal(readingTone({ label: "x", value: 0, unit: "percent_change" }), "flat");
+  assert.equal(readingTone({ label: "x", value: 0.16, unit: "percent_per_day" }), "positive");
+  assert.equal(readingTone({ label: "x", value: -1.2, unit: "percent_per_day" }), "negative");
+  // Not a change/delta: a plain magnitude, ratio, or index never gets colored just because its value is negative.
+  assert.equal(readingTone({ label: "x", value: -43.2, unit: "percent" }), "neutral");
+  assert.equal(readingTone({ label: "x", value: -65.51, unit: "index" }), "neutral");
+  assert.equal(readingTone({ label: "x", value: -0.111, unit: "multiple" }), "neutral");
+  assert.equal(readingTone({ label: "x", value: -5, unit: "usd" }), "neutral");
+  assert.equal(readingTone({ label: "x", value: "2026-01-01", unit: "date" }), "neutral");
 });
 
 let failures = 0;
