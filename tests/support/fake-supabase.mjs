@@ -4,8 +4,10 @@
 
 const IDENTITY_TABLES = new Set([
   "raw_provider_records", "token_metric_observations", "calculated_metric_observations",
-  "data_refresh_runs", "data_refresh_steps", "token_ai_analyses",
+  "data_refresh_runs", "data_refresh_steps", "token_ai_analyses", "geckoterminal_sync_runs",
 ]);
+/** Tables with a partial unique index permitting only one 'running' row (a lease-based single-run lock). */
+const SINGLE_RUNNING_ROW_TABLES = new Set(["data_refresh_runs", "geckoterminal_sync_runs"]);
 const VIEWS = {
   latest_token_metric_observations: { source: "token_metric_observations", key: ["token_id", "provider_id", "metric_id"], order: ["observed_at", "collected_at", "id"] },
   latest_raw_provider_records: { source: "raw_provider_records", key: ["provider_id", "token_id", "chain_id"], order: ["collected_at", "id"] },
@@ -95,7 +97,7 @@ export function createFakeSupabase({ seed = {}, views = true, missingTables = []
       }
       const rows = rowsOf(this.table);
       if (this.op === "insert") {
-        if (this.table === "data_refresh_runs" && this.payload.some((row) => row.status === "running")
+        if (SINGLE_RUNNING_ROW_TABLES.has(this.table) && this.payload.some((row) => row.status === "running")
           && rows.some((row) => row.status === "running")) {
           return { data: null, error: { code: "23505", message: "duplicate key value violates unique constraint" } };
         }

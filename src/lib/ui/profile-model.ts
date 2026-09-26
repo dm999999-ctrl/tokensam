@@ -17,8 +17,11 @@ export type Card = { id: string; label: string; value: string; tone: Tone; note?
 export type SectionNote = { title: string; reason: string };
 /** Circulating vs maximum supply. `barPct` is clamped to 0–100 for drawing; `circulatingPct` is the actual ratio. */
 export type SupplyComposition = { circulatingPct: number; remainingPct: number; barPct: number; circulating: string; maximum: string; symbol: string };
+/** One on-chain pool row for the DEX Markets pool list. */
+export type PoolRow = { id: string; dexLabel: string; pairAddress: string; liquidity: string | null; volume24h: string | null };
 export type SectionId =
-  | "overview" | "market" | "fundamentals" | "tokenomics" | "market-structure" | "history" | "technical" | "analysis" | "sources";
+  | "overview" | "market" | "fundamentals" | "tokenomics" | "market-structure" | "dex-markets" | "onchain-identity"
+  | "history" | "technical" | "analysis" | "sources";
 
 export type ProfileModel = {
   snapshot: { cards: Card[]; changes: Card[] };
@@ -28,6 +31,10 @@ export type ProfileModel = {
     | { available: true; protocolName: string; scopeLine: string; primary: Card[]; valuation: Card[]; changes: Card[] }
     | { available: false; note: SectionNote };
   marketStructure: { available: true; scopeLine: string; cards: Card[] } | { available: false; note: SectionNote };
+  /** GeckoTerminal on-chain pools: distinct pool-level data (DEX, pool, liquidity, volume), not the DEX Screener aggregate above. */
+  dexMarkets: { available: true; scopeLine: string; cards: Card[]; dexes: string[]; pools: PoolRow[] } | { available: false; note: SectionNote };
+  /** Network + exact contract address for this token's on-chain identity. */
+  onchainIdentity: { available: true; network: string; contractAddress: string } | { available: false; note: SectionNote };
   tokenomics: { available: true; items: Card[]; circulatingOfMaxPct: number | null; composition: SupplyComposition | null } | { available: false; note: SectionNote };
   /** Technical indicator categories (price action, volume, on-chain); cross-metric groups live in `divergence`. */
   technical: TechnicalIndicatorGroup[];
@@ -91,6 +98,11 @@ function dexReason(reason: CoverageReason | null, isNative: boolean): string {
   if (reason === "no_provider_data") return "No on-chain DEX market was found for this asset's canonical token identifier; wrapped assets are not substituted.";
   if (reason === "native_asset_lacks_provider_identifier" || isNative) return "No canonical token market is currently available for this native asset; wrapped assets are not substituted.";
   return "No canonical token market is currently available for this asset.";
+}
+
+/** Turns a raw on-chain DEX identifier ("uniswap_v3") into a readable label ("Uniswap V3"). Not a provider name. */
+function humanizeDexId(id: string): string {
+  return id.split(/[-_]/).filter(Boolean).map((part) => part[0].toUpperCase() + part.slice(1)).join(" ");
 }
 
 export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
@@ -189,6 +201,52 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
       : { available: false, note: { title: "DEX markets", reason: "No exact-address DEX market data is currently stored for this token." } };
   }
 
+  // D2. DEX Markets (GeckoTerminal): market scope, exact-address identity only. This is separate,
+  // pool-level data (individual pools/DEXes) rather than a second copy of the Market Structure aggregate
+  // above; both are shown, clearly separate, rather than merging or picking a "winning" provider.
+  let dexMarkets: ProfileModel["dexMarkets"];
+  let onchainIdentity: ProfileModel["onchainIdentity"];
+  const onchain = data.onchainMarkets;
+  if (!onchain) {
+    const reason = "No canonical on-chain network/address identity is currently available for this asset; wrapped assets are not substituted.";
+    dexMarkets = { available: false, note: { title: "DEX markets", reason } };
+    onchainIdentity = { available: false, note: { title: "Contract / on-chain identity", reason } };
+  } else {
+    onchainIdentity = onchain.contractAddress
+      ? { available: true, network: onchain.network ?? "Unknown network", contractAddress: onchain.contractAddress }
+      : { available: false, note: { title: "Contract / on-chain identity", reason: "No contract address is recorded for this token's on-chain identity." } };
+    if (onchain.pools.length === 0) {
+      dexMarkets = { available: false, note: { title: "DEX markets", reason: "No on-chain DEX pools were found for this token's exact network and address." } };
+    } else {
+      const priceChange = formatChange(onchain.priceChange24hPct);
+      const cards = present([
+        card("gt_liquidity", "DEX liquidity", formatUsd(onchain.liquidityUsd, true), { note: "Most liquid on-chain pool" }),
+        card("gt_volume", "DEX volume · 24h", formatUsd(onchain.volume24hUsd, true), { note: "Summed across on-chain pools" }),
+        priceChange ? { id: "gt_price_change", label: "Price change · 24h", value: priceChange.text, tone: priceChange.tone } : null,
+        card("gt_fdv", "Fully diluted valuation", formatUsd(onchain.fdvUsd, true)),
+        card("gt_market_cap", "Market cap", formatUsd(onchain.marketCapUsd, true)),
+      ]);
+      const pools: PoolRow[] = [...onchain.pools]
+        .sort((a, b) => (b.liquidityUsd ?? -1) - (a.liquidityUsd ?? -1))
+        .map((pool) => ({
+          id: pool.pairAddress,
+          dexLabel: pool.dexId ? humanizeDexId(pool.dexId) : "Unknown DEX",
+          pairAddress: pool.pairAddress,
+          liquidity: formatUsd(pool.liquidityUsd, true),
+          volume24h: formatUsd(pool.volume24hUsd, true),
+        }));
+      dexMarkets = cards.length > 0 || pools.length > 0
+        ? {
+          available: true,
+          scopeLine: "On-chain DEX pools for this exact token address, across every decentralized exchange it was found on.",
+          cards,
+          dexes: onchain.dexes.map(humanizeDexId),
+          pools,
+        }
+        : { available: false, note: { title: "DEX markets", reason: "No on-chain DEX market data is currently stored for this token." } };
+    }
+  }
+
   // E. Tokenomics: token-scope supply; a missing maximum is hidden, never labelled "uncapped".
   const supply = (value: number | null) => formatSupply(value) === null ? null : `${formatSupply(value)} ${token.symbol}`;
   // FDV is the token-level value reported in the stored market-data record, never derived here or taken from DEX data.
@@ -244,6 +302,8 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
     ...(fundamentals.available ? [{ id: "fundamentals" as const, label: "Fundamentals" }] : []),
     ...(tokenomics.available ? [{ id: "tokenomics" as const, label: "Tokenomics" }] : []),
     ...(marketStructure.available ? [{ id: "market-structure" as const, label: "Market Structure" }] : []),
+    ...(dexMarkets.available ? [{ id: "dex-markets" as const, label: "DEX Markets" }] : []),
+    ...(onchainIdentity.available ? [{ id: "onchain-identity" as const, label: "On-chain Identity" }] : []),
     ...(history.available ? [{ id: "history" as const, label: "History" }] : []),
     // Cross-metric analysis is a subsection of Technical, not its own nav item.
     ...(technical.length > 0 || hasCrossMetric ? [{ id: "technical" as const, label: "Technical" }] : []),
@@ -251,7 +311,7 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
     { id: "sources", label: "Sources" },
   ];
 
-  return { snapshot, history, fundamentals, marketStructure, tokenomics, technical, divergence, sections, methodology: buildMethodology(data, { protocolMapped, dexMapped }) };
+  return { snapshot, history, fundamentals, marketStructure, dexMarkets, onchainIdentity, tokenomics, technical, divergence, sections, methodology: buildMethodology(data, { protocolMapped, dexMapped }) };
 }
 
 function buildMethodology(data: LiveTokenProfileData, mapped: { protocolMapped: boolean; dexMapped: boolean }): Methodology {

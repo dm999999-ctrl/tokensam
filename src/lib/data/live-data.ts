@@ -3,7 +3,8 @@ import "server-only";
 import { createSupabaseAdminClient } from "../supabase/admin.ts";
 import { OBSERVATION_COLUMNS, latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
 import { selectMovers, type Movers } from "../ui/movers.ts";
-import { buildTechnicalIndicators } from "../indicators/build.ts";
+import { buildTechnicalIndicators, INDICATOR_METHOD, withExtraIndicators } from "../indicators/build.ts";
+import { buildConcentrationIndicators } from "../indicators/onchain-concentration.ts";
 import type { TechnicalIndicatorsView } from "../../types/technical-indicators.ts";
 import { PROVIDER_STEPS, type ProviderStep, type RefreshStep } from "../refresh/config.ts";
 import { buildDatasetFreshness, buildRefreshStatus, type RefreshStatusView } from "../refresh/freshness.ts";
@@ -23,6 +24,7 @@ import {
   type DashboardToken,
   type LiveTokenProfileData,
   type MetricSource,
+  type OnchainMarketsData,
 } from "../../types/token.ts";
 
 const OBSERVED_METRICS = [
@@ -59,7 +61,7 @@ type DbObservation = {
   token_id: string;
   chain_id: string;
   metric_id: string;
-  provider_id: "coingecko" | "defillama" | "dexscreener" | "defillama_coins";
+  provider_id: "coingecko" | "defillama" | "dexscreener" | "defillama_coins" | "geckoterminal";
   value: number | string | null;
   status: string;
   observed_at: string;
@@ -256,6 +258,19 @@ const HISTORY_SERIES = [
 ];
 /** Extra history read only for technical indicators (price, volume, market cap and TVL come from HISTORY_SERIES). */
 const INDICATOR_EXTRA_SERIES = [{ providerId: "coingecko", metricId: "circulating_supply" }];
+/**
+ * GeckoTerminal's own normalized aggregates (market scope, exact-address only):
+ * liquidity_usd is its most liquid pool's reserve, volume_24h_usd is summed
+ * across every matched pool, mirroring the DEX Screener normalizer's semantics
+ * but from GeckoTerminal's own pool coverage and snapshot time.
+ */
+const GECKO_TERMINAL_SERIES = [
+  { providerId: "geckoterminal", metricId: "liquidity_usd" },
+  { providerId: "geckoterminal", metricId: "volume_24h_usd" },
+  { providerId: "geckoterminal", metricId: "price_change_24h_pct" },
+  { providerId: "geckoterminal", metricId: "fdv_usd" },
+  { providerId: "geckoterminal", metricId: "market_cap_usd" },
+];
 
 type DbCalculatedValue = {
   id: number;
@@ -407,6 +422,67 @@ async function readTokenLogos(client: SupabaseAdminClient, tokenIds: string[]): 
   }
 }
 
+type GeckoTerminalRawPool = {
+  attributes?: {
+    address?: string;
+    pool_created_at?: string | null;
+    reserve_in_usd?: string | number | null;
+    volume_usd?: { h24?: string | number | null };
+    token_price_usd?: string | number | null;
+  };
+};
+
+/**
+ * GeckoTerminal on-chain pools for this token's exact network/address identity.
+ * `provider_pairs` holds the indexed pool identity (address, DEX, creation
+ * time); per-pool liquidity/volume are not separate columns (avoiding
+ * duplicate metric storage), so they are read back from the same raw payload
+ * already preserved in `raw_provider_records` and matched by pool address.
+ * Optional: a failed read leaves pools empty rather than failing the profile.
+ */
+async function readGeckoTerminalPools(
+  client: SupabaseAdminClient,
+  tokenId: string,
+): Promise<{ dexes: string[]; pools: OnchainMarketsData["pools"]; collectedAt: string | null }> {
+  try {
+    const [pairsResult, rawResult] = await Promise.all([
+      client.from("provider_pairs")
+        .select("pair_address,dex_id,pair_created_at")
+        .eq("provider_id", "geckoterminal").eq("token_id", tokenId),
+      client.from("latest_raw_provider_records")
+        .select("collected_at,payload")
+        .eq("provider_id", "geckoterminal").eq("token_id", tokenId).maybeSingle(),
+    ]);
+    if (pairsResult.error) throw pairsResult.error;
+    if (rawResult.error) throw rawResult.error;
+    const pairRows = (pairsResult.data ?? []) as { pair_address: string; dex_id: string | null; pair_created_at: string | null }[];
+    const rawRecord = rawResult.data as { collected_at?: string; payload?: { providerPools?: GeckoTerminalRawPool[] } } | null;
+    const rawPools = rawRecord?.payload?.providerPools ?? [];
+    const poolByAddress = new Map(rawPools
+      .filter((pool) => pool.attributes?.address)
+      .map((pool) => [pool.attributes!.address!.toLowerCase(), pool]));
+    const pools = pairRows.map((row) => {
+      const raw = poolByAddress.get(row.pair_address.toLowerCase());
+      return {
+        pairAddress: row.pair_address,
+        dexId: row.dex_id,
+        createdAt: row.pair_created_at,
+        liquidityUsd: numberValue(raw?.attributes?.reserve_in_usd),
+        volume24hUsd: numberValue(raw?.attributes?.volume_usd?.h24),
+        priceUsd: numberValue(raw?.attributes?.token_price_usd),
+      };
+    });
+    return {
+      pools,
+      dexes: [...new Set(pools.map((pool) => pool.dexId).filter((id): id is string => Boolean(id)))],
+      collectedAt: rawRecord?.collected_at ?? null,
+    };
+  } catch (error) {
+    console.error(`GeckoTerminal pool read failed for ${tokenId} (shown as unavailable):`, error);
+    return { pools: [], dexes: [], collectedAt: null };
+  }
+}
+
 /** Latest rows of the newest metrics run for the dashboard's calculated metrics (read-only). */
 async function readDashboardCalculated(client: SupabaseAdminClient, tokenIds: string[]): Promise<DbCalculatedValue[]> {
   const metricIds = [...DASHBOARD_CALCULATED_METRICS];
@@ -504,21 +580,27 @@ export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdmin
   if (tokenError) throw tokenError;
   if (!tokenData) return null;
   const tokenRow = tokenData as DbToken;
-  const [chainResult, observations, calculatedResult, definitionResult, mappingResult, logos, supplyHistory, reportedFdv] = await Promise.all([
+  const [chainResult, observations, calculatedResult, definitionResult, mappingResult, logos, supplyHistory, reportedFdv, gtPools] = await Promise.all([
     client.from("chains").select("id,name").eq("id", tokenRow.chain_id).maybeSingle(),
-    readLatest(client, [tokenId]).then(async (latest) => mergeById(latest,
-      await readObservationWindow<DbObservation>(client, [tokenId], HISTORY_SERIES, new Date(Date.now() - HISTORY_DAYS * DAY_MS)))),
+    readLatest(client, [tokenId]).then(async (latest) => mergeById(
+      latest,
+      await readObservationWindow<DbObservation>(client, [tokenId], HISTORY_SERIES, new Date(Date.now() - HISTORY_DAYS * DAY_MS)),
+      // GeckoTerminal's own aggregates (market scope); a separate provider, read the same way as history series.
+      await readObservationWindow<DbObservation>(client, [tokenId], GECKO_TERMINAL_SERIES, new Date(Date.now() - HISTORY_DAYS * DAY_MS)),
+    )),
     client.from("calculated_metric_observations")
       .select("id,token_id,chain_id,metric_id,metric_name,unit,value,status,formula,calculated_at,period_start_at,period_end_at,unavailable_reason:provenance->>unavailable_reason")
       .eq("token_id", tokenId).order("calculated_at", { ascending: false }).order("id", { ascending: false }).range(0, 999),
     client.from("calculated_metric_definitions").select("id,category,source_scopes"),
-    client.from("provider_token_mappings").select("provider_id").eq("token_id", tokenId),
+    client.from("provider_token_mappings").select("provider_id,chain_id,external_asset_id,external_contract_address").eq("token_id", tokenId),
     readTokenLogos(client, [tokenId]),
     // Supply history is read only for technical indicators; a failed read just omits them.
     readObservationWindow<DbObservation>(client, [tokenId], INDICATOR_EXTRA_SERIES, new Date(Date.now() - HISTORY_DAYS * DAY_MS))
       .catch((error) => { console.error(`Indicator supply history read failed for ${tokenId}:`, error); return [] as DbObservation[]; }),
     // Token-level FDV from the stored market-data record (Tokenomics); failures leave it unavailable.
     readReportedFdv(client, [tokenId]),
+    // GeckoTerminal pool identity (DEX, address, creation time); optional, so a failed read leaves it empty.
+    readGeckoTerminalPools(client, tokenId),
   ]);
   if (chainResult.error) throw chainResult.error;
   if (calculatedResult.error) throw calculatedResult.error;
@@ -541,7 +623,7 @@ export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdmin
     .sort((a, b) => Date.parse(b.collected_at) - Date.parse(a.collected_at))
     .slice(0, 8)
     .map((row) => row.note as string))];
-  const mappings = (mappingResult.data ?? []) as { provider_id: string }[];
+  const mappings = (mappingResult.data ?? []) as { provider_id: string; chain_id: string; external_asset_id: string; external_contract_address: string | null }[];
   const calc = buildCalculatedMetrics(
     (calculatedResult.data ?? []) as DbCalculatedMetric[],
     (definitionResult.data ?? []) as DbCalculatedMetricDefinition[],
@@ -560,12 +642,38 @@ export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdmin
   // Market-scope counts only for a curated exact-address mapping; never from a wrapped proxy.
   const dexCount = (metricId: string) => dexMapped ? observationValue(observationFor(observations, tokenId, "dexscreener", metricId)) : null;
   const protocolMapped = coverage.some((item) => item.provider === "defillama" && item.status === "mapped");
+  // GeckoTerminal identity: network + exact contract address, from its own curated mapping (never a
+  // wrapped or ticker-matched substitute). The chain name reuses this token's own chain lookup, since the
+  // canonical chain the mapping is keyed to is always this token's own chain in the current mapping data.
+  const gtMapping = mappings.find((mapping) => mapping.provider_id === "geckoterminal");
+  const onchainMarkets: OnchainMarketsData | null = gtMapping
+    ? {
+      network: gtMapping.chain_id === tokenRow.chain_id ? (chain?.name ?? gtMapping.chain_id) : gtMapping.chain_id,
+      contractAddress: gtMapping.external_contract_address,
+      liquidityUsd: observationValue(observationFor(observations, tokenId, "geckoterminal", "liquidity_usd")),
+      volume24hUsd: observationValue(observationFor(observations, tokenId, "geckoterminal", "volume_24h_usd")),
+      priceChange24hPct: observationValue(observationFor(observations, tokenId, "geckoterminal", "price_change_24h_pct")),
+      fdvUsd: observationValue(observationFor(observations, tokenId, "geckoterminal", "fdv_usd")),
+      marketCapUsd: observationValue(observationFor(observations, tokenId, "geckoterminal", "market_cap_usd")),
+      dexes: gtPools.dexes,
+      pools: gtPools.pools,
+    }
+    : null;
   let technicalIndicators: TechnicalIndicatorsView | null = null;
+  const nowIso = new Date().toISOString();
   try {
     technicalIndicators = buildTechnicalIndicators(mergeById(observations, supplyHistory), { asOf: new Date(), protocolMapped });
   } catch (error) {
     // Indicators are optional context: a calculation failure hides the section, never the profile.
     console.error(`Technical indicator calculation failed for ${tokenId}:`, error);
+  }
+  // On-chain concentration (Pool/DEX HHI): cross-sectional, from the latest GeckoTerminal
+  // snapshot only. Merged in even if the daily-series indicators above found nothing.
+  const concentrationIndicators = onchainMarkets
+    ? buildConcentrationIndicators(onchainMarkets.pools, { collectedAt: gtPools.collectedAt, calculatedAt: nowIso })
+    : [];
+  if (concentrationIndicators.length > 0) {
+    technicalIndicators = withExtraIndicators(technicalIndicators ?? { calculatedAt: nowIso, method: INDICATOR_METHOD, groups: [] }, concentrationIndicators);
   }
   return {
     token,
@@ -602,6 +710,7 @@ export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdmin
       buys24h: dexCount("buys_24h_count"),
       sells24h: dexCount("sells_24h_count"),
     },
+    onchainMarkets,
   };
 }
 

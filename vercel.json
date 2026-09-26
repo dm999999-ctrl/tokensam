@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/refresh",
       "schedule": "7 * * * *"
+    },
+    {
+      "path": "/api/cron/geckoterminal",
+      "schedule": "5 0 * * *"
     }
   ]
 }

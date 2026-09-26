@@ -313,6 +313,12 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .metric-row dt { display: grid; gap: 2px; color: var(--ink); font-size: 13px; }
 .metric-row dt small { color: var(--subtle); font-size: 12px; }
 .metric-row dd { margin: 0; color: var(--ink-strong); font-size: 14px; font-weight: 600; white-space: nowrap; }
+.pool-list { display: grid; gap: 6px; margin: 14px 0 0; padding: 0; list-style: none; }
+.pool-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.pool-dex { flex: 0 0 auto; }
+.pool-figures { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-left: auto; }
+.pool-figures span { display: grid; gap: 1px; color: var(--ink-strong); font-size: 13px; font-weight: 600; text-align: right; }
+.pool-figures small { color: var(--subtle); font-size: 11px; font-weight: 400; }
 .signals { margin-top: 20px; }
 .signals ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
 .signal { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line-soft); border-radius: var(--radius); color: var(--muted); font-size: 13px; }

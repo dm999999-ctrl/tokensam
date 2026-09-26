@@ -52,6 +52,8 @@ A server-only, manually invoked CoinGecko collector is available through `pnpm c
 
 A server-only DEX Screener collector is available through `pnpm dexscreener:sync` after applying its Supabase migration. It preserves all exact-address pair records. See [the DEX Screener integration guide](docs/dexscreener-integration.md).
 
+A server-only GeckoTerminal collector calls the standalone GeckoTerminal Public API directly (never CoinGecko's `/onchain` endpoints or its quota) for on-chain DEX pool data, kept independent of the existing CoinGecko integration. It backs the Token Profile's "DEX Markets" and "Contract / On-chain Identity" sections and the Pool/DEX Concentration (HHI) indicators. Run it manually with `pnpm geckoterminal:sync`, or enable a daily scheduled collection via `/api/cron/geckoterminal` (`GECKOTERMINAL_SYNC_ENABLED=true`) so its liquidity/volume history accumulates for future time-series indicators. It is still not part of the hourly `/api/cron/refresh`. See [the GeckoTerminal integration guide](docs/geckoterminal-integration.md).
+
 The deterministic Phase 9 metrics engine reads stored CoinGecko, DeFiLlama, and DEX Screener observations and materializes provenance-bearing derived metrics in Supabase. After applying its migration, run `pnpm metrics:calculate`. It makes no external API calls; the Token Profile displays the stored results. See [the metrics engine guide](docs/metrics-engine.md).
 
 The canonical provider-sync universe contains 50 chain-scoped tokens. See [the token-universe and provider mapping guide](docs/token-universe.md) for the additions and mapping coverage.
