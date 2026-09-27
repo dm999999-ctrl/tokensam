@@ -126,6 +126,43 @@ test("a /coins/list outage is recorded separately from a discovery outage, so ab
   assert.equal(result.listedCoingeckoIds.size, 0);
 });
 
+test("an unmapped CoinGecko platform never fails discovery and never leaks a raw platform key as chain_id", async () => {
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === "/api/v3/coins/markets") {
+      return new Response(
+        JSON.stringify([
+          { id: "bitcoin", symbol: "btc", name: "Bitcoin", current_price: 1, market_cap: 1000 },
+          { id: "brand-new-l2-coin", symbol: "l2c", name: "Brand New L2 Coin", current_price: 1, market_cap: 1000 },
+        ]),
+        { status: 200 },
+      );
+    }
+    if (parsed.pathname === "/api/v3/coins/list") {
+      return new Response(
+        JSON.stringify([
+          { id: "bitcoin", symbol: "btc", name: "Bitcoin", platforms: {} },
+          { id: "brand-new-l2-coin", symbol: "l2c", name: "Brand New L2 Coin", platforms: { "some-l2-nobody-has-mapped-yet": "0xdeadbeef" } },
+        ]),
+        { status: 200 },
+      );
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+  const result = await discoverCandidates({
+    poolSize: 10,
+    config: { apiKey: "k", baseUrl: "https://api.coingecko.com/api/v3", keyHeader: "x-cg-demo-api-key" },
+    fetchImpl,
+    sleep: async () => {},
+  });
+  assert.equal(result.outage, null);
+  assert.equal(result.candidates.length, 2);
+  const unmapped = result.candidates.find((c) => c.coingeckoId === "brand-new-l2-coin");
+  assert.equal(unmapped.chainId, null, "an unmapped CoinGecko platform key must never become chain_id (the exact universe_candidates_chain_id_fkey bug)");
+  assert.equal(unmapped.contractAddress, null);
+  assert.deepEqual(unmapped.identityEvidence.platforms, { "some-l2-nobody-has-mapped-yet": "0xdeadbeef" }, "the raw platform is still preserved as evidence");
+});
+
 test("a discovery-wide outage is reported, not thrown, and the pool is left empty", async () => {
   const fetchImpl = async () => new Response("", { status: 500 });
   const result = await discoverCandidates({

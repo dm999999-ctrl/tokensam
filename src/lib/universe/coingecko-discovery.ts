@@ -2,10 +2,13 @@
 // expanding the pool well beyond the curated 238-token Dashboard set without
 // hand-entering token names. `/coins/markets` is paginated (up to 250/page,
 // CoinGecko's own maximum) rather than requested per-token, and `/coins/list`
-// is fetched once to establish chain/contract identity. This never touches
-// `src/data/canonical-tokens.ts` or the tables the Dashboard reads.
+// is fetched once to establish chain/contract identity. This never writes to
+// `src/data/canonical-tokens.ts` or the tables the Dashboard reads; it only
+// reads the canonical chain-ID catalog from it (via coingecko-chain-map.ts)
+// so a candidate's `chain_id` can never violate the `chains` foreign key.
 
 import { getCoinGeckoConfig } from "../providers/coingecko.ts";
+import { resolveCanonicalChainId } from "./coingecko-chain-map.ts";
 import { fetchJsonWithRetry, ProviderOutageError, type Sleep } from "./http.ts";
 import { newCandidateFromMarket, type CoinGeckoListEntry, type CoinGeckoMarketCandidate, type UniverseCandidate } from "./types.ts";
 
@@ -58,8 +61,16 @@ export function resolvePlatformIdentity(entry: CoinGeckoListEntry | undefined): 
   );
   const entries = Object.entries(platforms);
   if (entries.length === 1) {
-    const [chainId, contractAddress] = entries[0];
-    return { chainId, contractAddress: contractAddress.toLowerCase(), isNative: false, platforms };
+    const [platformKey, contractAddress] = entries[0];
+    // `platforms` (the raw evidence, including this platform key) is always
+    // returned either way, so an unmapped platform is never lost — only its
+    // use as `chain_id`/`contract_address` (a `chains` foreign key pair) is
+    // withheld until a confident canonical mapping exists (AGENTS.md #6, #12;
+    // `universe_candidates_chain_id_fkey` must never see a raw CoinGecko
+    // platform key, e.g. "binance-smart-chain" is not the chain ID "bnb-chain").
+    const chainId = resolveCanonicalChainId(platformKey);
+    if (chainId) return { chainId, contractAddress: contractAddress.toLowerCase(), isNative: false, platforms };
+    return { chainId: null, contractAddress: null, isNative: false, platforms };
   }
   return { chainId: null, contractAddress: null, isNative: entries.length === 0, platforms };
 }
