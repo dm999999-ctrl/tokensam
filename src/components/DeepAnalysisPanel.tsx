@@ -27,11 +27,18 @@ function utc(value: string | null) {
   return `${new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })} UTC`;
 }
 
+/**
+ * Renders each cited evidence ID (e.g. "obs:price") as its human-readable provenance label (e.g.
+ * "Overview · Price: $9.33"), never as the raw internal ID: that ID is an evidence-contract
+ * implementation detail (see analysis/schema.ts), not something to expose in a user-facing report.
+ * The raw ID stays reachable in the title tooltip, which is the intended provenance mechanism for
+ * anyone who wants to see exactly which context entry a citation points to.
+ */
 function Sources({ ids, sources }: { ids: string[]; sources: Record<string, string> }) {
   if (ids.length === 0) return null;
   return (
     <span className="ai-sources">
-      {ids.map((id) => <span key={id} className="ai-source" title={sources[id] ?? id}>{id}</span>)}
+      {ids.map((id) => <span key={id} className="ai-source" title={id}>{sources[id] ?? "Evidence"}</span>)}
     </span>
   );
 }

@@ -7,8 +7,10 @@
 import {
   buildEvidenceIndex,
   findAnalyticalLanguage,
+  findCausalLanguage,
   findDirectionalLanguage,
   findExternalConcept,
+  findLeakedEvidenceMarker,
   findOtherAsset,
   findUnsupportedNamedPeriod,
   overviewPeriods,
@@ -291,8 +293,13 @@ function citedItems(ids: string[], check: Check): EvidenceItem[] {
  * (an invented number or period), regardless of which provider, if any, the text names.
  */
 function languageRules(value: string, path: string, check: Check, options: { concept?: "fatal" | "warning" } = {}): void {
+  const marker = findLeakedEvidenceMarker(value);
+  if (marker) check.violations.push(`${path}: contains the internal evidence marker "${marker}"; cite it in sourceIds instead of writing it in the text.`);
   for (const directional of findDirectionalLanguage(value)) {
     check.violations.push(`${path}: directional/sentiment language ("${directional}"); describe observed changes neutrally.`);
+  }
+  for (const causal of findCausalLanguage(value)) {
+    check.violations.push(`${path}: causal language ("${causal}"); the supplied evidence is observational and never establishes that one factor caused another — describe an observed relationship instead.`);
   }
   for (const analytical of findAnalyticalLanguage(value)) {
     check.warnings.push(`${path}: analytical language ("${analytical}") — only a warning while the underlying claim is otherwise grounded.`);

@@ -110,7 +110,34 @@ const ANALYTICAL_PATTERNS: RegExp[] = [
   /\bweak(ness(es)?|en(s|ed|ing)?)?\b/i,
   /\bimprov(e[ds]?|ing|ement)\b/i,
   /\bdeterior(ate[ds]?|ating|ation)\b/i,
+  /\bstab(le|ility|ilize[ds]?|ilizing)\b/i,
+  /\bsignificant(ly)?\b/i,
+  /\bconsistent(ly)?\b/i,
 ];
+
+/**
+ * Causal-claim language: the research context is purely observational (prices, TVL, supply,
+ * on-chain aggregates), so it never establishes that one factor caused another. Unlike
+ * ANALYTICAL_PATTERNS, a causal claim is always fatal regardless of how well-grounded its
+ * numbers are — the claim itself (that X caused Y) is not something this evidence can support,
+ * exactly like DIRECTIONAL_PATTERNS' sentiment/prediction language.
+ */
+// "due to" and "because of" are deliberately excluded: they are the normal, legitimate way this
+// report explains why data is unavailable ("unavailable due to missing DeFiLlama data"), which
+// must remain allowed (see the module comment on legitimate providers). Only phrasing that
+// specifically attributes a market outcome to a cause is listed here.
+const CAUSAL_PATTERNS: RegExp[] = [
+  /\bcaused? (by|the)\b/i,
+  /\b(led|leading) to\b/i,
+  /\bdrove\b/i,
+  /\bdriv(es|ing) (the|this|that)\b/i,
+  /\bdriven by\b/i,
+  /\bas a result of\b/i,
+  /\battribut(e[ds]?|able) to\b/i,
+];
+
+/** Every internal evidence-ID marker literally written into prose (it belongs only in sourceIds). */
+const LEAKED_MARKER_PATTERN = /\b(?:obs|hist|calc|scope):[a-z][a-z0-9_]*\b/i;
 
 /** Every fatal sentiment/prediction term in the text (all are reported, not just the first). */
 export function findDirectionalLanguage(text: string): string[] {
@@ -120,6 +147,16 @@ export function findDirectionalLanguage(text: string): string[] {
 /** Every analytical/descriptive term in the text; downgraded to a warning when the text is otherwise grounded. */
 export function findAnalyticalLanguage(text: string): string[] {
   return ANALYTICAL_PATTERNS.flatMap((pattern) => text.match(pattern)?.[0] ?? []);
+}
+
+/** Every fatal causal claim in the text (all are reported, not just the first). */
+export function findCausalLanguage(text: string): string[] {
+  return CAUSAL_PATTERNS.flatMap((pattern) => text.match(pattern)?.[0] ?? []);
+}
+
+/** An internal evidence-ID marker written directly into prose, where only sourceIds may cite it. */
+export function findLeakedEvidenceMarker(text: string): string | null {
+  return text.match(LEAKED_MARKER_PATTERN)?.[0] ?? null;
 }
 
 /**

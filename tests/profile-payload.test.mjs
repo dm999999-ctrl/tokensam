@@ -76,6 +76,15 @@ function violations(output, payload) {
   }
   return [];
 }
+/** Non-fatal warnings: from a successful validation, or from a rejected one (still collected). */
+function warnings(output, payload) {
+  try {
+    return validateModelAnalysis(output, buildProfileEvidenceIndex(payload)).warnings;
+  } catch (error) {
+    if (error instanceof AnalysisValidationError) return error.warnings;
+    throw error;
+  }
+}
 const empty = { overview: "No statement is made in this section.", statements: [] };
 function report(overrides = {}) {
   return {
@@ -450,11 +459,11 @@ test("P26. a grounded date in tokenomics.overview now passes", () => {
 test("P27. an unsupported number in tokenomics.overview still fails", () => {
   const circ = field(uniPayload, "obs:circulating_supply");
   const found = violations(report({
-    tokenomics: { overview: "Circulating supply is about 999M tokens.", statements: [
+    tokenomics: { overview: "Circulating supply is about 8888M tokens.", statements: [
       st("observed", `CoinGecko reports a circulating supply of about ${circ.value}.`, [circ.id]),
     ] },
   }), uniPayload);
-  assert.ok(found.some((item) => /tokenomics\.overview: number\(s\) 999 do not match any value in the cited sources\./.test(item)));
+  assert.ok(found.some((item) => /tokenomics\.overview: number\(s\) 8888 do not match any value in the cited sources\./.test(item)));
 });
 
 test("P28. an unsupported date/period in tokenomics.overview still fails", () => {
@@ -514,6 +523,74 @@ test("P32. an unsupported numerical value in marketPerformance still fails, exac
     ] },
   }), uniPayload);
   assert.ok(found.some((item) => /marketPerformance\.statements\[0\]\.text: number\(s\) 87 do not match any value in the cited sources\./.test(item)), "the field's own real change value, not the invented number 87");
+});
+
+// ---- Regression: the successful Cardano Production run exposed raw evidence-contract markers
+// (obs:price, hist:price_30d, calc:volume_to_market_cap, scope:defillama, ...) as literal visible
+// text. Traced to two places: (1) the model can write an ID inline in prose (now a fatal validator
+// rule, so it is caught before it is ever stored), and (2) the renderer showed the raw id instead
+// of its human-readable provenance label (fixed in DeepAnalysisPanel.tsx — see
+// tests/deep-analysis-panel.test.mjs). This section also covers Part 2's semantic-quality review:
+// unsupported causal language, overstated characterization words, and legitimate scope statements.
+
+test("P33. an internal evidence marker written literally into prose text is rejected, even when the statement is otherwise properly sourced", () => {
+  const price = field(uniPayload, "obs:price");
+  const found = violations(report({
+    executiveSummary: { overview: "The price is shown.", statements: [
+      st("observed", `The price shown in obs:price is ${price.value}.`, [price.id]),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /executiveSummary\.statements\[0\]\.text: contains the internal evidence marker "obs:price"; cite it in sourceIds instead of writing it in the text\./.test(item)));
+});
+
+test("P34. internal evidence markers remain fully available to the validator: sourceIds still cite and ground exactly as before, only prose text may not repeat them literally", () => {
+  const price = field(uniPayload, "obs:price");
+  const tvl = field(uniPayload, "obs:tvl");
+  const found = violations(report({
+    executiveSummary: { overview: "The price is shown.", statements: [st("observed", `The profile shows a price of ${price.value}.`, [price.id])] },
+    fundamentalPerformance: { overview: "Protocol fundamentals are reported.", statements: [st("observed", `Protocol TVL is about ${tvl.value}.`, [tvl.id])] },
+  }), uniPayload);
+  assert.deepEqual(found, [], "citing obs:price and obs:tvl in sourceIds — never in text — passes exactly as it always has");
+});
+
+test("P35. unsupported causal language is rejected regardless of grounding, but a legitimate 'due to <data limitation>' explanation remains allowed", () => {
+  const price = field(uniPayload, "obs:price");
+  const marketCap = field(uniPayload, "obs:market_cap");
+  const causal = violations(report({
+    marketPerformance: { overview: "Price and market cap are shown.", statements: [
+      st("interpretation", `The change in ${price.value} drove the market capitalization of ${marketCap.value}.`, [price.id, marketCap.id]),
+    ] },
+  }), uniPayload);
+  assert.ok(causal.some((item) => /marketPerformance\.statements\[0\]\.text: causal language \("drove"\)/.test(item)));
+  const dueTo = violations(report({
+    liquidityMarketStructure: { overview: "DEX market structure is unavailable for this token.", statements: [
+      st("uncertainty", "DEX market data is unavailable due to no verified DEX Screener mapping for this token.", ["scope:dexscreener"]),
+    ] },
+  }), uniPayload);
+  assert.deepEqual(dueTo, [], "'due to' explaining a data limitation is not a market-causal claim and remains allowed");
+});
+
+test("P36. overstated characterization words ('consistent', 'significant', 'stable') are recorded as warnings, not silently accepted or fatally rejected, exactly like existing analytical language", () => {
+  const price = field(uniPayload, "obs:price");
+  const output = report({
+    executiveSummary: { overview: "The price is shown.", statements: [
+      st("observed", `The price has remained consistent at about ${price.value}.`, [price.id]),
+    ] },
+  });
+  assert.deepEqual(violations(output, uniPayload), [], "the underlying claim is grounded, so the word choice alone does not fail the report");
+  assert.ok(warnings(output, uniPayload).some((item) => /executiveSummary\.statements\[0\]\.text: analytical language \("consistent"\)/.test(item)), "but it is still flagged for review");
+});
+
+test("P37. legitimate DeFiLlama/DEX Screener scope-unavailability statements remain valid after this round's changes", () => {
+  const found = violations(report({
+    fundamentalPerformance: { overview: "This section's data is unavailable for this token.", statements: [
+      st("uncertainty", "There is no DeFiLlama mapping for this token, so this data is unavailable by design.", ["scope:defillama"]),
+    ] },
+    liquidityMarketStructure: { overview: "This section's data is unavailable for this token.", statements: [
+      st("uncertainty", "There is no verified DEX Screener mapping for this token, so DEX data is unavailable by design.", ["scope:dexscreener"]),
+    ] },
+  }), btcPayload);
+  assert.deepEqual(found, []);
 });
 
 let failures = 0;

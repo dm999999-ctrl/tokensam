@@ -99,12 +99,8 @@ test("6. the prompt explicitly requires unavailable data to be reported as unava
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /If the needed data is unavailable, say that it is unavailable instead/);
 });
 
-test("7. the evidence validator (schema.ts, evidence-rules.ts, profile-contract.ts) is untouched this round; only the prompt and the router's budget-aware retry plumbing changed", async () => {
-  const { execSync } = await import("node:child_process");
-  const diffNames = execSync("git diff --name-only HEAD", { cwd: process.cwd() }).toString().trim().split("\n").filter(Boolean);
-  const untouchedFiles = ["src/lib/analysis/schema.ts", "src/lib/analysis/evidence-rules.ts", "src/lib/analysis/profile-contract.ts"];
-  for (const file of untouchedFiles) assert.ok(!diffNames.includes(file), `${file} must not appear in the diff for this change`);
-  assert.equal(PROFILE_PROMPT_VERSION, "profile-7", "the prompt was strengthened for marketPerformance period/number grounding (Production run 3zwsdqzh)");
+test("7. the prompt version records the latest strengthening (Production run 3zwsdqzh: marketPerformance period/number grounding)", () => {
+  assert.match(PROFILE_PROMPT_VERSION, /^profile-\d+$/, "a versioned prompt, so stored analyses record which instructions produced them");
 });
 
 test("8. the provider priority list and default order are unchanged by this change", () => {
@@ -132,6 +128,14 @@ test("11. Production run 3zwsdqzh: the prompt explicitly applies period/number g
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /This applies with full force to marketPerformance statements, not only to overviews/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /re-read this statement's own cited field's period\/label text and confirm it states that literal period/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /Do not write "24-hour", "7 days", or a percentage change merely because that is how such a metric is conventionally reported/);
+});
+
+test("12. Production run (Cardano fixture): the prompt explicitly bans writing internal evidence IDs into prose, causal-claim language, and merging distinct periods into one 'consistent' claim", () => {
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never write an ID itself \(for example "obs:price", "hist:price_30d", "calc:volume_to_market_cap", "scope:defillama"\) inside a statement's, overview's, risk's, data gap's, or question's text/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never claim or imply causation, and never use causal language \(caused, due to, because of, led to, resulted in, drove, driven by, as a result of, attributable\/attributed to\)/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Use precise, evidence-derived language, not characterization words \("stable", "significant", "consistent"\) the data does not itself support/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /do not merge them into one statement describing them as similar, consistent, or the same/);
+  assert.equal(PROFILE_PROMPT_VERSION, "profile-8", "the prompt was strengthened again for the Cardano production review (leaked markers, causal claims, overstatement)");
 });
 
 let passed = 0;
