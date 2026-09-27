@@ -177,7 +177,12 @@ export async function routeReport<T>(input: {
       const timeoutMs = Math.min(provider!.attemptTimeoutMs, Math.max(minAttemptMs, remaining - reservedForLaterMs));
       attemptNumber += 1;
       const started = clock();
-      const outcome = await provider!.generateStructuredReport(input.request, { timeoutMs, fetchImpl: input.fetchImpl, diagnostics: input.diagnostics, sleep: input.sleep });
+      const outcome = await provider!.generateStructuredReport(input.request, {
+        timeoutMs, fetchImpl: input.fetchImpl, diagnostics: input.diagnostics, sleep: input.sleep,
+        // So a bounded in-adapter retry (adapters.ts) can check it would not eat into what later
+        // providers are owed before attempting it, exactly like this router's own reservation.
+        deadlineAt: input.deadlineAt, reservedForLaterMs, clock,
+      });
       const record: RouteAttempt = { ...base(provider, id), action: "attempted", retry, latencyMs: clock() - started, timeoutMs };
       if (!outcome.ok) {
         input.health.recordFailure(id, outcome.category, clock(), outcome.retryAfterMs);

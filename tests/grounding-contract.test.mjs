@@ -99,12 +99,12 @@ test("6. the prompt explicitly requires unavailable data to be reported as unava
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /If the needed data is unavailable, say that it is unavailable instead/);
 });
 
-test("7. the router and the structural evidence contract (profile-contract.ts) are untouched; the prompt version is unchanged this round", async () => {
+test("7. the evidence validator (schema.ts, evidence-rules.ts, profile-contract.ts) is untouched this round; only the prompt and the router's budget-aware retry plumbing changed", async () => {
   const { execSync } = await import("node:child_process");
   const diffNames = execSync("git diff --name-only HEAD", { cwd: process.cwd() }).toString().trim().split("\n").filter(Boolean);
-  const untouchedFiles = ["src/lib/analysis/profile-contract.ts", "src/lib/analysis/ai/router.ts"];
+  const untouchedFiles = ["src/lib/analysis/schema.ts", "src/lib/analysis/evidence-rules.ts", "src/lib/analysis/profile-contract.ts"];
   for (const file of untouchedFiles) assert.ok(!diffNames.includes(file), `${file} must not appear in the diff for this change`);
-  assert.equal(PROFILE_PROMPT_VERSION, "profile-6", "no prompt change this round: the fix is at the shared evidence-validation semantics layer (evidence-rules.ts, schema.ts)");
+  assert.equal(PROFILE_PROMPT_VERSION, "profile-7", "the prompt was strengthened for marketPerformance period/number grounding (Production run 3zwsdqzh)");
 });
 
 test("8. the provider priority list and default order are unchanged by this change", () => {
@@ -126,6 +126,12 @@ test("10. Production run svtndn2v: the prompt now flatly bars naming an unmapped
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /from the mere existence of a calculated metric \(a calc: field carries only the period its own period\/label states, never a commonly-associated one like 24 hours\)/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /A metric that would normally be a 24-hour, 7-day, or 30-day change elsewhere does not make that period available here unless this statement's own cited field states it/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /never write the number without its period, or the period without a matching number/);
+});
+
+test("11. Production run 3zwsdqzh: the prompt explicitly applies period/number grounding to marketPerformance statements, not only overviews", () => {
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /This applies with full force to marketPerformance statements, not only to overviews/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /re-read this statement's own cited field's period\/label text and confirm it states that literal period/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Do not write "24-hour", "7 days", or a percentage change merely because that is how such a metric is conventionally reported/);
 });
 
 let passed = 0;

@@ -635,6 +635,56 @@ test("30B. requirement F, quantified: after GLM's real 102.555s single (unretrie
   assert.ok(mistralAttempt.timeoutMs > 41_500, "comfortably above Mistral's own observed ~41.5s completion time");
 });
 
+// ---- Requirements 2-4: the reported 3zwsdqzh cascade (GLM ~62.5s incl. one bounded retry,
+// Mistral 32.4s validation failure, OpenRouter 60s timeout, SiliconFlow two full ~43.35s timeouts
+// = ~87s, ModelScope and Gemini skipped:deadline — ~245s total, over the 240s budget). A bounded
+// in-adapter retry (adapters.ts) now checks the SAME reservation the router itself enforces before
+// taking a second attempt: if a retry would eat into what later candidates are owed, it is skipped
+// and the failure is returned immediately, exactly like running out of attempts. These tests
+// reproduce the reported cascade's real timing to prove the fix, with no validator or architecture
+// change: SiliconFlow's second attempt is skipped once the budget is tight, and the providers after
+// it (Requirement 2's stated goal) get a real, meaningful attempt instead of "skipped:deadline".
+
+test("31. requirement 2-3: the 3zwsdqzh cascade — GLM retries once (affordable), Mistral fails validation, OpenRouter times out, then SiliconFlow's second retry is skipped once it would eat into ModelScope/Gemini's reserved share, and ModelScope gets a real attempt instead of being starved", async () => {
+  let now = 0;
+  const clock = () => now;
+  const deadlineAt = now + 240_000;
+  const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
+  const { result, calls } = await route(
+    {
+      glm: [advanceBy(60_000, http(429)), advanceBy(470, http(429))],
+      mistral: [advanceBy(32_400, chatOk(invalidReport()))],
+      openrouter: [advanceBy(60_000, timeout())],
+      siliconflow: [advanceBy(47_130, timeout())],
+      modelscope: [advanceBy(1_000, chatOk())],
+    },
+    { env: SIX_ENV, clock, deadlineAt },
+  );
+  assert.equal(calls.glm.length, 2, "GLM's retry was affordable here (huge slack remained) and is unaffected by the budget-aware check");
+  assert.equal(calls.mistral.length, 1, "validation failures are never retried, unaffected");
+  assert.equal(calls.openrouter.length, 1, "OpenRouter has no in-adapter retry to begin with, unaffected");
+  assert.equal(calls.siliconflow.length, 1, "requirement 3: SiliconFlow's second attempt is skipped — remaining (40,000ms) minus the reserved share for ModelScope/Gemini (40,000ms) cannot afford another backoff+timeout (49,130ms)");
+  const attempted = result.attempts.filter((item) => item.action === "attempted");
+  assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope"], "requirement 2: ModelScope gets a real attempt — not \"skipped:deadline\" as in the reported cascade");
+  assert.equal(result.provider.id, "modelscope");
+  assert.equal(now, 201_000, "well inside the 240s deadline, with meaningful budget still available for ModelScope and (if needed) Gemini");
+});
+
+test("32. requirement 4: GLM's 429 retry is skipped when it would starve the only remaining provider, even though 429 is still a technically-retryable category", async () => {
+  let now = 0;
+  const clock = () => now;
+  const deadlineAt = now + 90_000;
+  const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
+  const { result, calls } = await route(
+    { glm: [advanceBy(60_000, http(429)), http(429)], mistral: [chatOk()] },
+    { env: { ...SIX_ENV, AI_PROVIDER_PRIORITY: "glm,mistral" }, clock, deadlineAt },
+  );
+  assert.equal(calls.glm.length, 1, "remaining after attempt 1 (30,000ms) minus Mistral's reserved share (20,000ms) cannot afford another backoff+timeout (62,000ms), so the retry is skipped");
+  assert.equal(result.provider.id, "mistral", "the router still falls back normally, well within the 90s deadline");
+  const glmAttempt = result.attempts.find((item) => item.providerId === "glm");
+  assert.equal(glmAttempt.category, "transient", "429 handling is otherwise unchanged: still classified transient, still cooled down, never a permanent failure");
+});
+
 let failures = 0;
 for (const { name, run } of cases) {
   try {

@@ -467,6 +467,55 @@ test("P28. an unsupported date/period in tokenomics.overview still fails", () =>
   assert.ok(found.some((item) => /tokenomics\.overview: names a period \("30-day"\)/.test(item)));
 });
 
+// ---- Regression: Production run 3zwsdqzh — Mistral's report was rejected for exactly 3 issues,
+// all in marketPerformance: an unsupported "7 days", plus an unsupported number 24 and "24-hour"
+// on a separate statement. prompt.ts rule 6a reinforces that marketPerformance statements are
+// grounded exactly like any other (a calc: or obs: field supports only its own stated value and
+// period), and the unchanged validator remains the actual enforcement — these prove it still
+// passes a genuinely grounded 7-day/24-hour statement and still rejects each unsupported case.
+
+test("P29. a grounded 7-day and a grounded 24-hour statement in marketPerformance both pass", () => {
+  const change7d = field(uniPayload, "obs:change_7d");
+  const change24h = field(uniPayload, "obs:change_24h");
+  const found = violations(report({
+    marketPerformance: { overview: "Price changes are reported over their own stated periods.", statements: [
+      st("observed", `CoinGecko reported a price change of about ${change7d.value} over its rolling 7-day window.`, [change7d.id], change7d.period),
+      st("observed", `CoinGecko reported a price change of about ${change24h.value} over its rolling 24-hour window.`, [change24h.id], change24h.period),
+    ] },
+  }), uniPayload);
+  assert.deepEqual(found, []);
+});
+
+test("P30. an unsupported inferred 7-day period in marketPerformance still fails", () => {
+  const marketCap = field(uniPayload, "obs:market_cap");
+  const found = violations(report({
+    marketPerformance: { overview: "Market capitalization is reported.", statements: [
+      st("observed", `Market capitalization was about ${marketCap.value} over the past 7 days.`, [marketCap.id]),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /marketPerformance\.statements\[0\]\.text: "7 days" is not a period established by the cited sources\./.test(item)), "obs:market_cap has no period of its own, regardless of how commonly a 7-day figure is reported elsewhere");
+});
+
+test("P31. an unsupported inferred 24-hour period in marketPerformance still fails", () => {
+  const marketCap = field(uniPayload, "obs:market_cap");
+  const found = violations(report({
+    marketPerformance: { overview: "Market capitalization is reported.", statements: [
+      st("observed", `Market capitalization was about ${marketCap.value} over the past 24 hours.`, [marketCap.id]),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /marketPerformance\.statements\[0\]\.text: "24 hours" is not a period established by the cited sources\./.test(item)));
+});
+
+test("P32. an unsupported numerical value in marketPerformance still fails, exactly as Mistral's svtndn2v marketPerformance.statements[11] failure (number 24)", () => {
+  const change24h = field(uniPayload, "obs:change_24h");
+  const found = violations(report({
+    marketPerformance: { overview: "Price changes are reported over their own stated periods.", statements: [
+      st("observed", "The 24-hour price change was about 87%.", [change24h.id], change24h.period),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /marketPerformance\.statements\[0\]\.text: number\(s\) 87 do not match any value in the cited sources\./.test(item)), "the field's own real change value, not the invented number 87");
+});
+
 let failures = 0;
 for (const { name, run } of cases) {
   try {

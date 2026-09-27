@@ -126,6 +126,18 @@ export async function generateWithOpenAiCompatible(
   });
   const reasonPrefix = `${config.providerId}_`;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = options.clock ?? Date.now;
+  // Budget-aware retry: a retry costs up to `backoffMs + options.timeoutMs` more wall-clock time
+  // (the same timeoutMs is reused for the retried attempt), so it is only taken when that much is
+  // available beyond what the router is holding in reserve for every later candidate provider —
+  // otherwise one provider's retry could alone consume another provider's entire reserved share.
+  // Without deadline info (a direct adapter call outside the router, e.g. a unit test), always
+  // allow it, exactly as before this check existed.
+  const canRetry = (backoffMs: number): boolean => {
+    if (options.deadlineAt === undefined) return true;
+    const remaining = options.deadlineAt - now();
+    return remaining - (options.reservedForLaterMs ?? 0) >= backoffMs + options.timeoutMs;
+  };
   // Bounded in-adapter retry (mirrors gemini.ts): only 429/5xx/timeout/network are retried, at
   // most once, with a short capped backoff. Quota, configuration, and success are never retried
   // here — the router's own fallback and per-provider cooldown handle those.
@@ -145,7 +157,8 @@ export async function generateWithOpenAiCompatible(
     } catch (error) {
       const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
       record.finish(timedOut ? "timeout" : "network");
-      if (attempt < MAX_ATTEMPTS) { await sleep(timedOut ? 2_000 : 1_000); continue; }
+      const backoff = timedOut ? 2_000 : 1_000;
+      if (attempt < MAX_ATTEMPTS && canRetry(backoff)) { await sleep(backoff); continue; }
       return { ok: false, category: "transient", httpStatus: null, reason: `${reasonPrefix}${timedOut ? "timeout" : "network"}` };
     }
     record.headers(response, !response.ok);
@@ -155,22 +168,24 @@ export async function generateWithOpenAiCompatible(
     } catch (error) {
       const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
       record.finish(timedOut ? "body_timeout" : "network");
-      if (attempt < MAX_ATTEMPTS) { await sleep(timedOut ? 2_000 : 1_000); continue; }
+      const backoff = timedOut ? 2_000 : 1_000;
+      if (attempt < MAX_ATTEMPTS && canRetry(backoff)) { await sleep(backoff); continue; }
       return { ok: false, category: "transient", httpStatus: response.status, reason: `${reasonPrefix}${timedOut ? "timeout" : "network"}` };
     }
     if (!response.ok) {
       record.finish("http_error");
       const category = classifyHttpStatus(response.status, QUOTA_SIGNALS.test(text));
-      if (category === "transient" && attempt < MAX_ATTEMPTS) {
-        const retryAfter = retryAfterMs(response.headers.get("retry-after"));
-        await sleep(retryAfter !== null ? Math.min(retryAfter, 10_000) : 2_000);
+      const retryAfter = retryAfterMs(response.headers.get("retry-after"));
+      const backoff = retryAfter !== null ? Math.min(retryAfter, 10_000) : 2_000;
+      if (category === "transient" && attempt < MAX_ATTEMPTS && canRetry(backoff)) {
+        await sleep(backoff);
         continue;
       }
       return {
         ok: false, category, httpStatus: response.status,
         reason: category === "quota" ? `${reasonPrefix}free_quota_exhausted` : `${reasonPrefix}${response.status}`,
         // Honoured by the provider's cooldown (the router never retries in place).
-        retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
+        retryAfterMs: retryAfter,
       };
     }
     break;
