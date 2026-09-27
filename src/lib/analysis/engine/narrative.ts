@@ -398,7 +398,7 @@ export function riskItem(finding: Finding): RawRisk {
   if (finding.findingType === "low_circulating_supply_share") {
     return {
       title: "Large share of supply not yet circulating", basis: "evidence",
-      detail: `Circulating supply represents ${str(finding.data.value)} of maximum supply; continued issuance as the remainder circulates is a supply-structure factor to weigh.`,
+      detail: `Circulating supply represents ${str(finding.data.value)} of maximum supply; the remaining supply entering circulation over time is a supply-structure factor to weigh.`,
       sourceIds: finding.evidenceIds,
     };
   }

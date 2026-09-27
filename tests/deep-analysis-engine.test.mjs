@@ -14,7 +14,7 @@ import { extractFindings } from "../src/lib/analysis/engine/findings.ts";
 import { buildEngineReport, ENGINE_VERSION, ANALYSIS_VERSION } from "../src/lib/analysis/engine/report.ts";
 import { generateDeterministicAnalysis, getDeterministicAnalysisState, DETERMINISTIC_ENGINE_NAME } from "../src/lib/analysis/deterministic-service.ts";
 import { AnalysisValidationError, findProhibitedLanguage } from "../src/lib/analysis/schema.ts";
-import { findCausalLanguage, findDirectionalLanguage, findLeakedEvidenceMarker } from "../src/lib/analysis/evidence-rules.ts";
+import { findCausalLanguage, findDirectionalLanguage, findExternalConcept, findLeakedEvidenceMarker } from "../src/lib/analysis/evidence-rules.ts";
 
 const cases = [];
 function test(name, run) { cases.push({ name, run }); }
@@ -403,6 +403,65 @@ test("risk section explicitly names the dimensions evaluated when nothing crosse
     assert.ok(fallback);
     assert.equal(fallback.basis, "data_limitation");
     assert.ok(fallback.sourceIds.length > 0);
+  }
+});
+
+// ---- Production regression: SUI (native asset, real DEX market structure, circulating share
+// under the low-circulating-share threshold) ----
+//
+// Root cause: the "low_circulating_supply_share" risk finding's detail text read "continued
+// issuance as the remainder circulates is a supply-structure factor to weigh." The evidence
+// contract's language rules reject any text that introduces an external crypto concept the
+// research context does not itself establish (findExternalConcept, evidence-rules.ts), and
+// "issuance" is one of the listed concepts (alongside "halving", "emissions", "governance", etc.).
+// No fixture before this one had a circulating share low enough (<=50%, LOW_CIRCULATING_SHARE_PCT)
+// to ever reach this specific risk finding, so the bug went unexercised until a real token —
+// SUI, whose circulating supply is roughly a third of its capped maximum supply — hit it in
+// production. This fixture reproduces that exact shape: a native asset (no contract address), a
+// real DEX Screener market structure (liquidity, volume, buy/sell counts, transactions), no
+// DeFiLlama protocol mapping, and a circulating/maximum-supply ratio under the threshold.
+const SUI_LIKE_TOKEN = "sui-sui";
+const suiLikeSeed = seed(SUI_LIKE_TOKEN, "sui", [
+  ["coingecko", "price_usd", 3.42],
+  ["coingecko", "price_usd", 3.55, 24 * 6.9],
+  ["coingecko", "price_usd", 3.10, 24 * 29],
+  ["coingecko", "price_usd", 1.85, 24 * 88],
+  ["coingecko", "market_cap_usd", 11_950_000_000], ["coingecko", "volume_24h_usd", 480_000_000],
+  ["coingecko", "price_change_24h_pct", -3.7, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", -3.7, 0.5, { window_days: 7 }],
+  ["coingecko", "circulating_supply", 3_495_000_000], ["coingecko", "total_supply", 10_000_000_000], ["coingecko", "maximum_supply", 10_000_000_000],
+  ["dexscreener", "liquidity_usd", 4_200_000, 0.5], ["dexscreener", "fdv_usd", 34_200_000_000, 0.5],
+  ["dexscreener", "transactions_24h_count", 18422, 0.5], ["dexscreener", "buys_24h_count", 9800, 0.5], ["dexscreener", "sells_24h_count", 8622, 0.5],
+], [
+  { metric: "dex_aggregate_liquidity_usd", value: 6_100_000 }, { metric: "dex_aggregate_volume_24h_usd", value: 22_000_000 },
+  { metric: "dex_liquidity_to_market_cap_pct", value: 0.035 }, { metric: "dex_aggregate_liquidity_to_market_cap_pct", value: 0.051 },
+  { metric: "dex_volume_to_liquidity", value: 3.6 }, { metric: "dex_buy_sell_ratio", value: 9800 / 8622 },
+  { metric: "dex_primary_pair_liquidity_usd", value: 4_200_000 }, { metric: "dex_primary_pair_volume_24h_usd", value: 15_000_000 },
+], true);
+
+test("SUI regression: a low-circulating-share native asset with real DEX market structure generates successfully (previously failed evidence validation on 'issuance')", async () => {
+  const findings = extractFindings(await payloadFor(SUI_LIKE_TOKEN, suiLikeSeed));
+  assert.ok(findings.some((item) => item.findingType === "low_circulating_supply_share"), "the fixture actually reaches the previously-broken risk finding");
+
+  const db = createFakeSupabase({ seed: suiLikeSeed });
+  const result = await generateDeterministicAnalysis(db.client, SUI_LIKE_TOKEN, { now: () => NOW });
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result));
+
+  const risk = result.analysis.risks.find((r) => r.title === "Large share of supply not yet circulating");
+  assert.ok(risk);
+  assert.equal(findExternalConcept(risk.detail, ""), null, `risk detail still introduces an external concept: ${risk.detail}`);
+});
+
+test("general robustness: no generated report text ever introduces an EXTERNAL_CONCEPTS term the engine's own domain has no business using", async () => {
+  // A context-free check (empty contextText): every one of these narrative sentences must stand on
+  // its own without relying on a research context happening to mention the same word — the engine
+  // has no legitimate reason to ever write "issuance", "governance", "staking", etc.
+  const payloads = [...Object.values(ALL_PAYLOADS), await payloadFor(SUI_LIKE_TOKEN, suiLikeSeed)];
+  for (const payload of payloads) {
+    const report = buildEngineReport(payload);
+    for (const text of allText(report.analysis)) {
+      const concept = findExternalConcept(text, "");
+      assert.equal(concept, null, `"${concept}" introduced in: ${text}`);
+    }
   }
 });
 
