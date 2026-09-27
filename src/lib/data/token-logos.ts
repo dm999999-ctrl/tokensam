@@ -7,7 +7,9 @@ import { coingeckoTokenIds } from "../../data/coingecko-token-mappings.ts";
  * CoinGecko ID for the canonical token, and only from CoinGecko's image CDN.
  */
 export const COINGECKO_MARKETS_ENDPOINT = "GET /coins/markets";
-const LOGO_HOSTS = new Set(["coin-images.coingecko.com", "assets.coingecko.com"]);
+// Exported so other modules (e.g. Phase A universe logo validation) share the
+// same trusted-CDN allowlist instead of maintaining a second copy of it.
+export const LOGO_HOSTS = new Set(["coin-images.coingecko.com", "assets.coingecko.com"]);
 
 export function validatedLogoUrl(tokenId: string, payloadId: unknown, image: unknown): string | null {
   const expected = coingeckoTokenIds[tokenId];

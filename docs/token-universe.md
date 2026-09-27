@@ -2,6 +2,8 @@
 
 The universe is 100 canonical tokens on 46 chains: the verified 50 from Phase 10 (unchanged, same IDs and order) plus 50 added in Phase 15. Current per-token coverage, generated from stored data, is in [provider-coverage.md](provider-coverage.md). Regenerate it with `pnpm coverage:report`.
 
+This curated universe is what the Dashboard and Token Profiles read today, and Phase A does not change that. A separate, much larger machine-validated candidate pool (heading toward a future Active 1,000 plus reserve) is being built alongside it; see [universe-phase-a.md](universe-phase-a.md).
+
 # Phase 10: 20 to 50 tokens
 
 The server-side provider collection universe has grown from 20 to 50 canonical assets. The dashboard lists every canonical token from Supabase. No schema migration was needed; the CoinGecko collection already upserts canonical chain, token, and provider-mapping rows before it persists observations.
