@@ -25,7 +25,12 @@ export type BinanceFuturesSymbol = {
 
 export function getBinanceConfig(env: Record<string, string | undefined> = process.env): { spotBaseUrl: string; futuresBaseUrl: string } {
   return {
-    spotBaseUrl: env.BINANCE_SPOT_API_BASE_URL?.trim() || "https://api.binance.com",
+    // data-api.binance.vision is Binance's public market-data mirror: same
+    // /api/v3/* paths and payload shape as api.binance.com, reachable without
+    // an API key, and confirmed reachable where api.binance.com is not.
+    // BINANCE_SPOT_API_BASE_URL still overrides this for tests/environments
+    // where api.binance.com (or another mirror) is the reachable host.
+    spotBaseUrl: env.BINANCE_SPOT_API_BASE_URL?.trim() || "https://data-api.binance.vision",
     futuresBaseUrl: env.BINANCE_FUTURES_API_BASE_URL?.trim() || "https://fapi.binance.com",
   };
 }

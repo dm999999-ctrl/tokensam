@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { buildMarketSnapshot, isSpotTradable } from "../src/lib/universe/binance-client.ts";
+import { buildMarketSnapshot, getBinanceConfig, isSpotTradable } from "../src/lib/universe/binance-client.ts";
 import { binanceUnavailable, resolveBinanceSpot } from "../src/lib/universe/binance-resolver.ts";
 import { DEFAULT_ELIGIBILITY_CONFIG } from "../src/lib/universe/config.ts";
 
@@ -9,6 +9,21 @@ function test(name, run) { cases.push({ name, run }); }
 
 const CHECKED_AT = "2026-09-29T00:00:00.000Z";
 const config = DEFAULT_ELIGIBILITY_CONFIG;
+
+test("Binance Spot config defaults to the reachable public data-api host, not api.binance.com", () => {
+  const defaults = getBinanceConfig({});
+  assert.equal(defaults.spotBaseUrl, "https://data-api.binance.vision");
+  assert.equal(defaults.futuresBaseUrl, "https://fapi.binance.com");
+});
+
+test("Binance Spot/Futures base URLs remain overridable via environment variables", () => {
+  const overridden = getBinanceConfig({
+    BINANCE_SPOT_API_BASE_URL: "https://api.binance.com",
+    BINANCE_FUTURES_API_BASE_URL: "https://testnet.binancefuture.com",
+  });
+  assert.equal(overridden.spotBaseUrl, "https://api.binance.com");
+  assert.equal(overridden.futuresBaseUrl, "https://testnet.binancefuture.com");
+});
 
 function snapshotOf(spotSymbols, futuresSymbols = []) {
   return buildMarketSnapshot(spotSymbols, futuresSymbols);

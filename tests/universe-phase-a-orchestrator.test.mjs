@@ -52,7 +52,7 @@ function fixtureFetch(overrides = {}) {
       const prices = MARKET_CHART_BY_ID[chartMatch[1]] ?? [];
       return new Response(JSON.stringify({ prices }), { status: 200 });
     }
-    if (parsed.hostname === "api.binance.com" && parsed.pathname === "/api/v3/exchangeInfo") {
+    if (parsed.hostname === "data-api.binance.vision" && parsed.pathname === "/api/v3/exchangeInfo") {
       return new Response(JSON.stringify({
         symbols: [
           { symbol: "BTCUSDT", status: "TRADING", baseAsset: "BTC", quoteAsset: "USDT" },
@@ -128,7 +128,7 @@ test("a Binance-wide outage marks affected candidates temporarily_unavailable wi
 
   const binanceDownFetch = async (url) => {
     const parsed = new URL(url);
-    if (parsed.hostname === "api.binance.com" || parsed.hostname === "fapi.binance.com") return new Response("", { status: 500 });
+    if (parsed.hostname === "data-api.binance.vision" || parsed.hostname === "fapi.binance.com") return new Response("", { status: 500 });
     return fixtureFetch()(url);
   };
 

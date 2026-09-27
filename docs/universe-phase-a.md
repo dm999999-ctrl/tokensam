@@ -45,7 +45,7 @@ pnpm universe:validate --dry-run       # same, but nothing is written to Supabas
 pnpm universe:validate --pool-size=3000
 ```
 
-Requires `COINGECKO_API_KEY` (same variable the existing collectors use) and, for persistence, `SUPABASE_URL`/`SUPABASE_SECRET_KEY`. Binance's `exchangeInfo` endpoints are public and need no key.
+Requires `COINGECKO_API_KEY` (same variable the existing collectors use) and, for persistence, `SUPABASE_URL`/`SUPABASE_SECRET_KEY`. Binance's `exchangeInfo` endpoints are public and need no key; Spot defaults to `https://data-api.binance.vision` (Binance's public market-data mirror, confirmed reachable where `api.binance.com` is not from some networks) and Futures to `https://fapi.binance.com`. Both are overridable via `BINANCE_SPOT_API_BASE_URL`/`BINANCE_FUTURES_API_BASE_URL`.
 
 ## Verified in this environment
 
