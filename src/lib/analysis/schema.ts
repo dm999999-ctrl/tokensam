@@ -93,6 +93,15 @@ export type AnalysisMetadata = {
   validation: { droppedSourceIds: number; untraceableFactualStatements: number };
   /** Non-fatal evidence-contract observations (e.g. analytical wording, an overview period already grounded elsewhere in the section). */
   validationWarnings?: string[];
+  /**
+   * Present only on reports from the deterministic Deep Analysis Engine (analysis/engine/*), never
+   * on the earlier AI-provider-generated reports: which analytical-rule version produced the
+   * findings/narrative, and the same "as of" instant already in contextAsOf, named for the engine's
+   * own report metadata. Their absence on a stored report identifies it as pre-engine.
+   */
+  engineVersion?: string;
+  analysisVersion?: string;
+  dataSnapshotAt?: string | null;
 };
 
 export type TokenAnalysis = ModelAnalysis & { metadata: AnalysisMetadata };

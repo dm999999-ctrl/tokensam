@@ -5,12 +5,14 @@ import { LiveDataUnavailable } from "@/components/LiveDataUnavailable";
 import { AppShell } from "@/components/AppShell";
 import { canonicalTokens } from "@/data/canonical-tokens";
 import { getLiveTokenProfile, getSidebarMovers } from "@/lib/data/live-data";
-import { getAnalysisState, type AnalysisState } from "@/lib/analysis/service";
+import { getDeterministicAnalysisState } from "@/lib/analysis/deterministic-service";
+import type { AnalysisState } from "@/lib/analysis/service";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
-// Applies to the Deep AI Analysis Server Action invoked from this page: context build, up to two
-// Gemini attempts (60 s each), and at most one OpenRouter fallback attempt (100 s).
+// Generous ceiling for the "Generate AI Report" Server Action invoked from this page. The
+// deterministic Deep Analysis Engine has no external calls and typically finishes in well under a
+// second; this only guards against a slow database round trip.
 export const maxDuration = 300;
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
@@ -21,7 +23,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 
 async function loadAnalysisState(id: string): Promise<AnalysisState> {
   try {
-    return await getAnalysisState(createSupabaseAdminClient(), id);
+    return await getDeterministicAnalysisState(createSupabaseAdminClient(), id);
   } catch (error) {
     // The analysis panel must never break the profile.
     console.error(`Deep AI Analysis state load failed for ${id}:`, error);
