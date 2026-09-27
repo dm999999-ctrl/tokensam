@@ -255,11 +255,11 @@ test("C4. after attachment, an invented ID fails the constrained schema; the unc
 // 4g, U0, and rule 6) to stop these at the source; these tests prove the unchanged validator already
 // rejects every one of them as a second line of defense, so the fix is generation-side only.
 
-test("P11. an overview containing a number or date is rejected, even when every statement below it is properly sourced", () => {
+test("P11. an overview containing an ungrounded number is rejected, even when every statement below it is properly sourced (a grounded one now passes — see P25+)", () => {
   const found = violations(report({
-    executiveSummary: { overview: "The price is $9.33 as of today.", statements: [st("observed", "The profile shows a price of $9.33.", ["obs:price"])] },
+    executiveSummary: { overview: "The price is $12.40 as of today.", statements: [st("observed", "The profile shows a price of $9.33.", ["obs:price"])] },
   }), uniPayload);
-  assert.ok(found.some((item) => /executiveSummary\.overview: contains numbers or dates; state evidence-derived facts as sourced statements\./.test(item)));
+  assert.ok(found.some((item) => /executiveSummary\.overview: number\(s\) 12\.40 do not match any value in the cited sources\./.test(item)));
 });
 
 test("P12. a period is never inferred from a metric's name: citing a field with no period text still fails when the statement names a period anyway", () => {
@@ -419,6 +419,52 @@ test("P24. a properly evidenced provider claim still passes: naming the provider
     ] },
   }), uniPayload);
   assert.deepEqual(found, []);
+});
+
+// ---- Regression: Production run 1f6fha8x — Mistral's complete, otherwise-valid report was
+// rejected solely because tokenomics.overview repeated a number its own cited statement already
+// established. schema.ts's section() now grounds overview numbers/dates against the section's own
+// cited evidence exactly like periods (grounded => warning, ungrounded => still fatal), instead of
+// banning every digit outright.
+
+test("P25. a grounded number in tokenomics.overview now passes (previously fatal on any digit at all)", () => {
+  const circ = field(uniPayload, "obs:circulating_supply");
+  const found = violations(report({
+    tokenomics: { overview: "Circulating supply is about 620.67M tokens, as CoinGecko reports.", statements: [
+      st("observed", `CoinGecko reports a circulating supply of about ${circ.value}.`, [circ.id]),
+    ] },
+  }), uniPayload);
+  assert.deepEqual(found, []);
+});
+
+test("P26. a grounded date in tokenomics.overview now passes", () => {
+  const fresh = field(uniPayload, "fresh:calculated_metrics");
+  const found = violations(report({
+    tokenomics: { overview: `Supply figures reflect data ${fresh.value}.`, statements: [
+      st("uncertainty", `Calculated tokenomics metrics were ${fresh.value}.`, [fresh.id]),
+    ] },
+  }), uniPayload);
+  assert.deepEqual(found, []);
+});
+
+test("P27. an unsupported number in tokenomics.overview still fails", () => {
+  const circ = field(uniPayload, "obs:circulating_supply");
+  const found = violations(report({
+    tokenomics: { overview: "Circulating supply is about 999M tokens.", statements: [
+      st("observed", `CoinGecko reports a circulating supply of about ${circ.value}.`, [circ.id]),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /tokenomics\.overview: number\(s\) 999 do not match any value in the cited sources\./.test(item)));
+});
+
+test("P28. an unsupported date/period in tokenomics.overview still fails", () => {
+  const circ = field(uniPayload, "obs:circulating_supply");
+  const found = violations(report({
+    tokenomics: { overview: "Supply figures are reported over a 30-day window.", statements: [
+      st("observed", `CoinGecko reports a circulating supply of about ${circ.value}.`, [circ.id]),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /tokenomics\.overview: names a period \("30-day"\)/.test(item)));
 });
 
 let failures = 0;

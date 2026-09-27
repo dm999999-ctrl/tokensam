@@ -188,7 +188,10 @@ function openAiProvider(spec: OpenAiSpec, env: Env): AIProvider {
     id: spec.id, displayName: spec.displayName, providerType: spec.providerType,
     model, models: model ? [model] : [], freeTier: spec.freeTier, capabilities: spec.capabilities,
     configured: Boolean(apiKey && model && /^https:\/\//.test(baseUrl)),
-    attemptTimeoutMs: 120_000,
+    // Bounded well under the 240s global deadline: this adapter retries once in place on a
+    // transient failure with the SAME timeoutMs (adapters.ts), so one provider's worst case is
+    // 2*attemptTimeoutMs = 120s — half the deadline, never a majority of it on its own.
+    attemptTimeoutMs: 60_000,
     generateStructuredReport: (request, options) => generateWithOpenAiCompatible(
       {
         providerId: spec.id, apiKey, model, baseUrl, maxOutputTokens: spec.capabilities.maxOutputTokens, outputTokenParam: spec.outputTokenParam,
@@ -221,7 +224,8 @@ function openRouterProvider(env: Env): AIProvider {
     id: "openrouter", displayName: "OpenRouter", providerType: "backup", model, models: [model], freeTier: openRouterFreeTier(model),
     capabilities: { structuredOutput: "json_schema", maxContextTokens: null, maxRequestTokens: null, maxOutputTokens: 16_384, supportsReasoningControl: false, supportsStreaming: true, supportsUsageMetadata: true },
     configured: Boolean(config),
-    attemptTimeoutMs: 150_000,
+    // Single attempt only (no in-adapter retry), so this is also the worst case for this provider.
+    attemptTimeoutMs: 60_000,
     generateStructuredReport: (request, options) => generateWithOpenRouter(config!, request, options),
   };
 }

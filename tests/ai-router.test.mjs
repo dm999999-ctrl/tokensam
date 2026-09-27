@@ -47,7 +47,10 @@ function validReport() {
 }
 function invalidReport() {
   const report = validReport();
-  report.executiveSummary.overview = "Bitcoin is bullish and traded near $84,388.";
+  // Two independent violations: directional language, and a number the cited evidence never
+  // established (unlike the real BTC price this section's own statement cites, $84,388 would be
+  // grounded and only a warning now — see profile-payload.test.mjs P25+).
+  report.executiveSummary.overview = "Bitcoin is bullish and its market cap has reached $999B.";
   return report;
 }
 const evidence = buildEvidenceIndex(context);
@@ -439,7 +442,7 @@ test("24z. Task 3 production scenario: GLM fails fast (HTTP 429), Mistral then g
   assert.equal(result.provider.id, "mistral");
   const mistralAttempt = result.attempts.find((item) => item.providerId === "mistral");
   // Only one later candidate here (none, since mistral is last), so mistral gets its own full cap.
-  assert.equal(mistralAttempt.timeoutMs, 120_000, "well above the ~47.7s the equal-share formula gave it, and its own observed ~41.5s completion time");
+  assert.equal(mistralAttempt.timeoutMs, 60_000, "well above the ~47.7s the equal-share formula gave it, and its own observed ~41.5s completion time");
   assert.equal(calls.glm.length, 2, "GLM's bounded retry (Task 1) still ran before falling back");
 });
 
@@ -545,12 +548,12 @@ test("25. with all six providers eligible, the first attempt's budget reserves m
   assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope", "gemini"], "every provider is actually attempted, none skipped for \"deadline\"");
   assert.ok(result.attempts.every((item) => item.skipReason !== "deadline"), "none of the six is starved before it even gets a turn");
   // At the very first attempt, remaining is exactly 240_000 and 5 later providers are reserved
-  // minAttemptMs (20_000) each = 100_000: GLM's budget is min(120_000, 240_000 - 100_000) =
-  // 120_000 — its own full cap, since plenty of budget remains. This is the intended, more
+  // minAttemptMs (20_000) each = 100_000: GLM's budget is min(60_000, 240_000 - 100_000) =
+  // 60_000 — its own full cap, since plenty of budget remains. This is the intended, more
   // realistic allocation (Task 3): an early provider isn't punished down to a bare equal share
   // just because others are queued, as long as their reserved floors are still honored.
   const glmAttempt = attempted.find((item) => item.providerId === "glm");
-  assert.equal(glmAttempt.timeoutMs, 120_000, "GLM gets its own full cap when the reserved floors for later providers still leave enough room");
+  assert.equal(glmAttempt.timeoutMs, 60_000, "GLM gets its own full cap when the reserved floors for later providers still leave enough room");
   assert.equal(calls.gemini.length, 1);
 });
 
@@ -561,13 +564,13 @@ test("26. worst case — every provider fully consumes its own allocated budget,
   // Reserving minAttemptMs (20_000) per later provider, deducted before this one's own budget is
   // computed, guarantees every later provider at least that floor no matter what an earlier one
   // consumes — even in the adversarial case where each provider takes exactly what it was given:
-  //   glm:         reserve 5*20_000=100_000 -> budget min(120_000, 240_000-100_000)      = 120_000
-  //   mistral:     reserve 4*20_000= 80_000 -> budget min(120_000, 120_000- 80_000)      =  40_000
-  //   openrouter:  reserve 3*20_000= 60_000 -> budget min(150_000,  80_000- 60_000)      =  20_000
-  //   siliconflow: reserve 2*20_000= 40_000 -> budget min(120_000,  60_000- 40_000)      =  20_000
-  //   modelscope:  reserve 1*20_000= 20_000 -> budget min(120_000,  40_000- 20_000)      =  20_000
-  //   gemini:      reserve 0        -> budget min( 90_000,  20_000-      0)      =  20_000
-  const expected = [120_000, 40_000, 20_000, 20_000, 20_000, 20_000];
+  //   glm:         reserve 5*20_000=100_000 -> budget min(60_000, 240_000-100_000=140_000) = 60_000
+  //   mistral:     reserve 4*20_000= 80_000 -> budget min(60_000, 180_000- 80_000=100_000) = 60_000
+  //   openrouter:  reserve 3*20_000= 60_000 -> budget min(60_000, 120_000- 60_000= 60_000) = 60_000
+  //   siliconflow: reserve 2*20_000= 40_000 -> budget min(60_000,  60_000- 40_000= 20_000) = 20_000
+  //   modelscope:  reserve 1*20_000= 20_000 -> budget min(60_000,  40_000- 20_000= 20_000) = 20_000
+  //   gemini:      reserve 0        -> budget min(90_000,  20_000-      0= 20_000) = 20_000
+  const expected = [60_000, 60_000, 60_000, 20_000, 20_000, 20_000];
   const providers = ["glm", "mistral", "openrouter", "siliconflow", "modelscope"];
   const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
   const { result } = await route(

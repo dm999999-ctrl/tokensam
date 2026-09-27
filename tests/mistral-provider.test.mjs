@@ -182,7 +182,10 @@ test("M8. missing MISTRAL_API_KEY: Mistral is skipped without a request; Gemini 
 
 test("M9. evidence-validation failure: the Mistral report is rejected (not repaired) and Gemini is tried", async () => {
   const report = validReport();
-  report.executiveSummary.overview = "Bitcoin looks bullish near $84,388.";
+  // Three independent violations: directional language, an invented number the cited evidence
+  // never established (unlike the real BTC price this section's own statement cites, which would
+  // now be grounded and only a warning), and a reference to a distinct asset.
+  report.executiveSummary.overview = "Bitcoin looks bullish, with a market cap near $999B.";
   report.furtherResearchQuestions[0].question = "Could WBTC liquidity serve as a proxy for Bitcoin?";
   const { result } = await route({ mistral: [mistralOk(report)], gemini: [geminiOk()] });
   const mistral = result.attempts[0];

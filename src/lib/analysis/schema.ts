@@ -356,14 +356,20 @@ function section(value: unknown, path: string, check: Check): AnalysisSection {
   });
 
   // Overviews are short syntheses; evidence-derived facts belong in sourced statements. A named
-  // period (e.g. "24 hours") already established by this section's own cited evidence is only a
-  // warning — the underlying fact is grounded, it's just described in the synthesis too — but a
-  // period the section's evidence does not establish, or any other number, is still fatal.
+  // period (e.g. "24 hours") or a number/date already established by this section's own cited
+  // evidence is only a warning — the underlying fact is grounded, it's just described in the
+  // synthesis too — but a period, number, or date the section's evidence does not establish is
+  // still fatal, exactly like a statement's own grounding rule (4c).
   const sectionCited = citedItems(sectionIds, check);
   const { grounded, ungrounded, residual } = overviewPeriods(overview, sectionCited);
   for (const period of grounded) check.warnings.push(`${path}.overview: names a period ("${period}") already established by this section's own cited evidence.`);
   for (const period of ungrounded) check.violations.push(`${path}.overview: names a period ("${period}"); time-based claims belong in sourced statements.`);
-  if (/\d/.test(residual)) check.violations.push(`${path}.overview: contains numbers or dates; state evidence-derived facts as sourced statements.`);
+  const ungroundedOverviewNumbers = ungroundedNumbers(residual, sectionCited);
+  if (ungroundedOverviewNumbers.length) {
+    check.violations.push(`${path}.overview: number(s) ${ungroundedOverviewNumbers.join(", ")} do not match any value in the cited sources.`);
+  } else if (/\d/.test(residual)) {
+    check.warnings.push(`${path}.overview: contains a number or date already established by this section's own cited evidence.`);
+  }
   const sentences = sentenceCount(overview);
   if (sentences > MAX_OVERVIEW_SENTENCES) check.violations.push(`${path}.overview: longer than ${MAX_OVERVIEW_SENTENCES} sentences.`);
   if (statements.length === 0 && sentences > 1) check.violations.push(`${path}: has no statements, so its overview may only be a one-sentence note.`);

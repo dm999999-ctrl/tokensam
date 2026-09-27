@@ -99,7 +99,8 @@ test("9b. a research question naming an unestablished concept to investigate pas
 test("1. a factual overview with an empty statement array fails", () => {
   const output = validBitcoin();
   output.executiveSummary = { overview: "Bitcoin traded at approximately $84,388 with a market cap of about $1.69 trillion.", statements: [] };
-  expectViolation(output, /executiveSummary\.overview: contains numbers or dates/, "numeric overview");
+  // No statements at all means no evidence is cited by this section, so neither number is grounded.
+  expectViolation(output, /executiveSummary\.overview: number\(s\) 84,388, 1\.69 do not match any value in the cited sources/, "numeric overview");
   const paragraph = validBitcoin();
   paragraph.liquidityMarketStructure = { overview: "DEX metrics are unavailable by design. Derived DEX ratios therefore cannot be calculated.", statements: [] };
   expectViolation(paragraph, /has no statements, so its overview may only be a one-sentence note/, "overview paragraph without statements");
@@ -223,8 +224,8 @@ test("stored analyses are re-validated with the context-free rules before displa
 test("the real 2026-09-24 Nemotron Bitcoin output is now rejected, for the reasons the audit identified", () => {
   const found = violations(nemotronOutput);
   const expected = [
-    [/executiveSummary\.overview: contains numbers or dates/, "facts and numbers in overviews"],
-    [/tokenomics\.overview: contains numbers or dates/, "supply figures in the tokenomics overview"],
+    [/executiveSummary\.overview: number\(s\) .*do not match any value in the cited sources/, "facts and numbers in overviews, ungrounded (this section cites nothing)"],
+    [/tokenomics\.overview: number\(s\) .*do not match any value in the cited sources/, "supply figures in the tokenomics overview, ungrounded (this section cites nothing)"],
     [/\("bearish"\)/, "mildly bearish"],
     [/marketPerformance\.overview: names a period \("weekly"\)/, "weekly (a named period in an overview)"],
     [/introduces "issuance"/, "issuance schedule"],
