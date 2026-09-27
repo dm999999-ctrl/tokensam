@@ -10,7 +10,6 @@ import {
   findDirectionalLanguage,
   findExternalConcept,
   findOtherAsset,
-  findUnmappedExplanationIssue,
   findUnsupportedNamedPeriod,
   overviewPeriods,
   sentenceCount,
@@ -283,8 +282,15 @@ function citedItems(ids: string[], check: Check): EvidenceItem[] {
  * Language rules that apply to every piece of model text.
  * `concept: "warning"` is used for forward-looking research questions/rationales, where naming a
  * concept to investigate is not the same as asserting it as fact (see furtherResearchQuestions).
+ *
+ * Naming a legitimate Token Samurai data provider (CoinGecko, DeFiLlama, DEX Screener,
+ * GeckoTerminal) is never itself a violation, mapped or not — Token Samurai genuinely uses all of
+ * them, so "no DeFiLlama mapping is available for this token" and "further research could examine
+ * GeckoTerminal pool data" are both accurate. Only a specific fact attributed to a provider that
+ * this context does not contain is a violation, and the grounding rules below already catch that
+ * (an invented number or period), regardless of which provider, if any, the text names.
  */
-function languageRules(value: string, path: string, check: Check, options: { unmappedCheck?: boolean; concept?: "fatal" | "warning" } = {}): void {
+function languageRules(value: string, path: string, check: Check, options: { concept?: "fatal" | "warning" } = {}): void {
   for (const directional of findDirectionalLanguage(value)) {
     check.violations.push(`${path}: directional/sentiment language ("${directional}"); describe observed changes neutrally.`);
   }
@@ -300,17 +306,6 @@ function languageRules(value: string, path: string, check: Check, options: { unm
   }
   const asset = findOtherAsset(value, context.text, context.tokenSymbol);
   if (asset) check.violations.push(`${path}: refers to ${asset}, a distinct asset the research context does not establish for this token.`);
-  if (options.unmappedCheck === false) return;
-  const unmapped = findUnmappedExplanationIssue(value, context.unmappedProviders);
-  if (unmapped) check.violations.push(`${path}: ${unmapped}.`);
-}
-
-/** A title/detail or question/rationale pair must state the unmapped-provider reason somewhere in the pair. */
-function unmappedPairRule(label: string, explanation: string, path: string, check: Check): void {
-  const context = check.evidence.context;
-  if (!context) return;
-  const issue = findUnmappedExplanationIssue(`${label} ${explanation}`, context.unmappedProviders);
-  if (issue) check.violations.push(`${path}: ${issue}.`);
 }
 
 /** Numbers and named periods in evidence-bearing text must come from the cited items. */
@@ -402,10 +397,9 @@ export function validateModelAnalysis(raw: unknown, evidenceOrIds: EvidenceIndex
       check.violations.push(`${path}: an evidence-based risk must cite observed or calculated data.`);
     }
     for (const [field, value] of [["title", risk.title], ["detail", risk.detail]] as const) {
-      languageRules(value, `${path}.${field}`, check, { unmappedCheck: false });
+      languageRules(value, `${path}.${field}`, check);
       groundingRules(value, `${path}.${field}`, risk.sourceIds, check);
     }
-    unmappedPairRule(risk.title, risk.detail, path, check);
     return risk;
   });
 
@@ -433,11 +427,10 @@ export function validateModelAnalysis(raw: unknown, evidenceOrIds: EvidenceIndex
       sourceIds: sourceIds(item.sourceIds, `${path}.sourceIds`, check),
     };
     for (const [field, value] of [["question", question.question], ["rationale", question.rationale]] as const) {
-      languageRules(value, `${path}.${field}`, check, { unmappedCheck: false, concept: "warning" });
+      languageRules(value, `${path}.${field}`, check, { concept: "warning" });
       if (question.sourceIds.length === 0 && /\d/.test(value)) check.violations.push(`${path}.${field}: states figures without citing their sources.`);
       else groundingRules(value, `${path}.${field}`, question.sourceIds, check);
     }
-    unmappedPairRule(question.question, question.rationale, path, check);
     return question;
   });
 

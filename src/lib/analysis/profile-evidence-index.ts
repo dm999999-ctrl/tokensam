@@ -19,10 +19,7 @@ export function buildProfileEvidenceIndex(payload: ProfilePayload): EvidenceInde
     const type = TYPE_BY_PREFIX[field.id.split(":")[0]] ?? "obs";
     items.set(field.id, evidenceItem(field.id, type, field, field.period ? [field.period] : [], field.status === "shown" && field.periodRequired));
   }
-  const unmappedProviders = payload.scope
-    .filter((note) => !note.mapped && (note.provider === "DeFiLlama" || note.provider === "DEX Screener"))
-    .map((note) => ({ provider: note.provider as "DeFiLlama" | "DEX Screener", scopeId: note.id }));
-  return { ids: new Set(items.keys()), context: { items, text: JSON.stringify(payload), tokenSymbol: payload.token.symbol, unmappedProviders } };
+  return { ids: new Set(items.keys()), context: { items, text: JSON.stringify(payload), tokenSymbol: payload.token.symbol } };
 }
 
 /** Labels for cited IDs, so the panel can show where each statement comes from. */

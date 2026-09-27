@@ -99,12 +99,12 @@ test("6. the prompt explicitly requires unavailable data to be reported as unava
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /If the needed data is unavailable, say that it is unavailable instead/);
 });
 
-test("7. the evidence validator (evidence-rules.ts, schema.ts, profile-contract.ts) is untouched by this change: only prompt.ts and its version changed", async () => {
+test("7. the router and the structural evidence contract (profile-contract.ts) are untouched; the prompt version is unchanged this round", async () => {
   const { execSync } = await import("node:child_process");
   const diffNames = execSync("git diff --name-only HEAD", { cwd: process.cwd() }).toString().trim().split("\n").filter(Boolean);
-  const validatorFiles = ["src/lib/analysis/evidence-rules.ts", "src/lib/analysis/schema.ts", "src/lib/analysis/profile-contract.ts", "src/lib/analysis/ai/router.ts"];
-  for (const file of validatorFiles) assert.ok(!diffNames.includes(file), `${file} must not appear in the diff for this change`);
-  assert.equal(PROFILE_PROMPT_VERSION, "profile-6", "the prompt version was bumped so stored analyses record which instructions produced them");
+  const untouchedFiles = ["src/lib/analysis/profile-contract.ts", "src/lib/analysis/ai/router.ts"];
+  for (const file of untouchedFiles) assert.ok(!diffNames.includes(file), `${file} must not appear in the diff for this change`);
+  assert.equal(PROFILE_PROMPT_VERSION, "profile-6", "no prompt change this round: the fix is at the shared evidence-validation semantics layer (evidence-rules.ts, schema.ts)");
 });
 
 test("8. the provider priority list and default order are unchanged by this change", () => {

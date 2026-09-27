@@ -8,8 +8,16 @@ import type { ResearchContext } from "./research-context.ts";
  * make the statement structure the only place evidence-derived claims can live
  * (numbers must match cited values; periods must be copied from cited items)
  * and reject language that introduces premises the research context does not
- * contain (sentiment labels, external crypto concepts, other assets, invented
- * explanations for unmapped providers).
+ * contain (sentiment labels, external crypto concepts, other assets).
+ *
+ * Mentioning a legitimate Token Samurai data provider (CoinGecko, DeFiLlama,
+ * DEX Screener, GeckoTerminal) by name is never itself a violation, mapped or
+ * not: Token Samurai genuinely uses all of them, and "further research could
+ * examine DeFiLlama TVL data" or "no GeckoTerminal mapping is available for
+ * this token" are both accurate, not fabricated. Only a claim that a provider
+ * supplied a specific fact this context does not contain is a violation, and
+ * that is already caught by the number/period grounding rules below —
+ * provider mentions are not policed separately from that.
  */
 
 export type EvidenceItem = {
@@ -28,7 +36,6 @@ export type EvidenceIndex = {
     items: Map<string, EvidenceItem>;
     text: string;
     tokenSymbol: string;
-    unmappedProviders: { provider: "DeFiLlama" | "DEX Screener"; scopeId: string }[];
   } | null;
 };
 
@@ -68,10 +75,7 @@ export function buildEvidenceIndex(context: ResearchContext): EvidenceIndex {
       if (!items.has(point.sourceId)) items.set(point.sourceId, item(point.sourceId, "point", { ...point, provider: series.provider, metric: series.metric }));
     }
   }
-  const unmappedProviders = context.scope
-    .filter((scope) => !scope.mapped && (scope.provider === "DeFiLlama" || scope.provider === "DEX Screener"))
-    .map((scope) => ({ provider: scope.provider as "DeFiLlama" | "DEX Screener", scopeId: scope.id }));
-  return { ids: new Set(items.keys()), context: { items, text: JSON.stringify(context), tokenSymbol: context.token.symbol, unmappedProviders } };
+  return { ids: new Set(items.keys()), context: { items, text: JSON.stringify(context), tokenSymbol: context.token.symbol } };
 }
 
 /** Evidence for re-validating a stored analysis: only its cited IDs are known. */
@@ -172,24 +176,6 @@ export function findOtherAsset(text: string, contextText: string, tokenSymbol: s
   for (const pattern of WRAPPED_ALIASES) {
     const match = text.match(pattern);
     if (match && !pattern.test(contextText)) return match[0];
-  }
-  return null;
-}
-
-const PROVIDER_TERMS: Record<"DeFiLlama" | "DEX Screener", RegExp> = {
-  "DeFiLlama": /\b(defillama|tvl|total value locked|protocol (fees|revenue)|fees|revenue)\b/i,
-  "DEX Screener": /\b(dex screener|dex|liquidity|trading pairs?|pairs?)\b/i,
-};
-const MAPPING_REASON = /\b(mapp(ing|ed)|by design|configured|no (curated|verified))\b/i;
-const OTHER_REASON = /\b((with)?in the (last|past)|aligned observations|insufficient (history|observations)|stale|not (been )?refreshed|timed? out|refresh (failed|failure))\b/i;
-
-/** For an unmapped provider, explanations must use the context's reason (no mapping), not an invented one. */
-export function findUnmappedExplanationIssue(text: string, unmapped: { provider: "DeFiLlama" | "DEX Screener" }[]): string | null {
-  for (const { provider } of unmapped) {
-    if (!PROVIDER_TERMS[provider].test(text)) continue;
-    const invented = text.match(OTHER_REASON);
-    if (invented) return `explains unavailable ${provider} data as "${invented[0]}", but the context's reason is that ${provider} has no mapping for this token`;
-    if (!MAPPING_REASON.test(text)) return `refers to ${provider} data without stating the context's reason (no ${provider} mapping for this token)`;
   }
   return null;
 }

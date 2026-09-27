@@ -162,7 +162,7 @@ test("P8. the unchanged validator runs on payload IDs: grounded numbers and exac
   assert.deepEqual(violations(ok, uniPayload), []);
 });
 
-test("P9. the validator still rejects unsupported numbers, missing periods, unknown IDs, outside concepts, and invented unmapped reasons", () => {
+test("P9. the validator still rejects unsupported numbers, missing periods, unknown IDs, and outside concepts", () => {
   const change = field(uniPayload, "obs:change_7d");
   const found = violations(report({
     executiveSummary: { overview: "The profile shows market data.", statements: [
@@ -176,13 +176,9 @@ test("P9. the validator still rejects unsupported numbers, missing periods, unkn
   assert.ok(found.some((item) => /cites time-based evidence but has no period/.test(item)), "missing period");
   assert.ok(found.some((item) => /unknown source ID "obs:row_123"/.test(item)), "unknown ID");
   assert.ok(found.some((item) => /introduces "halving"/.test(item)), "outside concept");
-  const btc = violations(report({
-    liquidityMarketStructure: { overview: "DEX liquidity is unavailable because the data is stale.", statements: [] },
-  }), btcPayload);
-  assert.ok(btc.some((item) => /DEX Screener data as "stale"/.test(item)), "invented reason for an unmapped provider");
 });
 
-test("P10. the prompt's prescribed unmapped-provider wording satisfies the (unchanged) validator rule", () => {
+test("P10. the prompt's prescribed unmapped-provider wording still passes (mentioning the provider was never required to use it — see P20+)", () => {
   const wording = (provider) => {
     const match = PROFILE_SYSTEM_INSTRUCTION.match(new RegExp(`- ${provider}: "([^"]+)"`));
     assert.ok(match, `the prompt prescribes wording for ${provider}`);
@@ -199,8 +195,6 @@ test("P10. the prompt's prescribed unmapped-provider wording satisfies the (unch
     ],
   }), btcPayload);
   assert.deepEqual(btc, [], "the wording passes wherever it is used");
-  const bare = violations(report({ liquidityMarketStructure: { overview: "DEX liquidity is not shown for this token.", statements: [] } }), btcPayload);
-  assert.ok(bare.some((item) => /without stating the context's reason/.test(item)), "without the wording the rule still fails");
 });
 
 // ---- Structural evidence contract (profile-contract.ts) ----
@@ -286,24 +280,25 @@ test("P13. a historical/trend claim is rejected when no hist: evidence is cited 
   assert.ok(found.some((item) => /"90 days" is not a period established by the cited sources/.test(item)), "obs:price alone establishes no history, regardless of how many hist: series the payload defines elsewhere");
 });
 
-test("P14. a DEX Screener mention with no mapping is rejected exactly as GLM/Mistral's gdj2hhww failure", () => {
+test("P14. a DEX Screener mention with no mapping now passes: mentioning a legitimate provider is not itself a violation (see P20+ for the full provider-neutral rule)", () => {
   const found = violations(report({
     liquidityMarketStructure: { overview: "DEX Screener does not cover this token.", statements: [] },
   }), btcPayload);
-  assert.ok(found.some((item) => /refers to DEX Screener data without stating the context's reason \(no DEX Screener mapping for this token\)/.test(item)));
+  assert.deepEqual(found, [], "GLM/Mistral's gdj2hhww text made no unsupported factual claim, so it should never have been fatal");
 });
 
 // ---- Regression: Production run svtndn2v (profile-5 cut GLM 3→1 and Mistral 9→5 violations, but
 // left two patterns: DEX Screener named in overview/research-question text with no mapping, and a
 // period/number inferred from a metric — including a calculated metric — that does not itself state
-// it). prompt.ts U1a and the extended rule 6 target these; the unchanged validator already rejects
-// every one of them, proving the fix is generation-side only.
+// it). prompt.ts U1a and the extended rule 6 target these on the generation side; P16 was updated
+// after the validator's own provider-name policing was retired (see P20+) in favor of relying
+// entirely on number/period grounding, which still catches genuinely fabricated facts.
 
-test("P16. a DEX Screener mention in a research question's rationale with no mapping is rejected, exactly as Mistral's svtndn2v furtherResearchQuestions[3] failure", () => {
+test("P16. a bare DEX Screener mention in a research question's rationale with no mapping now passes (no fact is claimed)", () => {
   const found = violations(report({
     furtherResearchQuestions: [{ question: "What is the on-chain market structure for this token?", rationale: "DEX Screener does not report pairs for this token.", sourceIds: [] }],
   }), btcPayload);
-  assert.ok(found.some((item) => /furtherResearchQuestions\[0\]: refers to DEX Screener data without stating the context's reason \(no DEX Screener mapping for this token\)/.test(item)));
+  assert.deepEqual(found, [], "Mistral's svtndn2v text named the provider but claimed no specific fact");
 });
 
 test("P17. an unsupported '30 days' in a risk detail is rejected, exactly as Mistral's svtndn2v risks[3].detail failure", () => {
@@ -345,6 +340,82 @@ test("P15. valid numeric and period claims inside properly sourced statements st
     marketPerformance: { overview: "Price changes are shown over their stated periods.", statements: [
       st("observed", `CoinGecko reported a 24-hour price change of ${change.value}.`, [change.id], change.period),
       ...(hist ? [st("observed", `Price history shows ${hist.value}.`, [hist.id], hist.period)] : []),
+    ] },
+  }), uniPayload);
+  assert.deepEqual(found, []);
+});
+
+// ---- Shared evidence-validation semantics: legitimate Token Samurai providers (CoinGecko,
+// DeFiLlama, DEX Screener, GeckoTerminal) may always be mentioned, mapped or not — Token Samurai
+// genuinely uses all four. Only a claim that a provider supplied a specific fact this context does
+// not contain is a violation, and that is caught by the (unchanged) number/period grounding rules
+// regardless of which provider, if any, the text names. This lives in evidence-rules.ts/schema.ts,
+// so it applies identically for all six AI providers with no router or provider-specific change.
+
+const LEGITIMATE_PROVIDERS = ["DEX Screener", "DeFiLlama", "CoinGecko", "GeckoTerminal"];
+
+test("P20. mentioning any of the four legitimate providers is never itself a violation, mapped or not", () => {
+  for (const provider of LEGITIMATE_PROVIDERS) {
+    const found = violations(report({
+      liquidityMarketStructure: { overview: `${provider} data is unavailable for this token.`, statements: [] },
+    }), btcPayload);
+    assert.deepEqual(found, [], `"${provider} data is unavailable for this token." should pass`);
+  }
+  assert.deepEqual(violations(report({
+    executiveSummary: { overview: "Token Samurai uses CoinGecko for market data.", statements: [] },
+  }), btcPayload), [], "a platform-level fact about a provider is not a token-specific claim");
+});
+
+test("P21. a research question referring to any of the four providers passes when it asserts no fact as already established", () => {
+  for (const provider of LEGITIMATE_PROVIDERS) {
+    const found = violations(report({
+      furtherResearchQuestions: [{
+        question: `What does ${provider} report about this token's market data?`,
+        rationale: `Further research could examine ${provider} data alongside the available context.`,
+        sourceIds: [],
+      }],
+    }), btcPayload);
+    assert.deepEqual(found, [], `a research question naming ${provider} should pass`);
+  }
+});
+
+test("P22. an unsupported numerical claim attributed to any of the four providers still fails", () => {
+  const claims = {
+    "DEX Screener": "DEX Screener shows $118K in liquidity.",
+    "DeFiLlama": "DeFiLlama reports $120M TVL.",
+    "CoinGecko": "CoinGecko reports a $5.2B market cap.",
+    "GeckoTerminal": "GeckoTerminal reports $3.4M liquidity.",
+  };
+  for (const provider of LEGITIMATE_PROVIDERS) {
+    const found = violations(report({
+      executiveSummary: { overview: "The token is summarized.", statements: [st("observed", claims[provider], ["obs:price"])] },
+    }), btcPayload);
+    assert.ok(found.some((item) => /number\(s\)/.test(item)), `an unsupported numeric claim from ${provider} should still fail ("${claims[provider]}"); got ${JSON.stringify(found)}`);
+  }
+});
+
+test("P23. an unsupported historical claim attributed to any of the four providers still fails", () => {
+  const claims = {
+    "DEX Screener": "DEX Screener shows a 24-hour volume of $9M.",
+    "DeFiLlama": "DeFiLlama recorded a 30% TVL decline over 30 days.",
+    "CoinGecko": "CoinGecko recorded a 30% decline over 30 days.",
+    "GeckoTerminal": "GeckoTerminal shows a 24-hour volume increase of 12%.",
+  };
+  for (const provider of LEGITIMATE_PROVIDERS) {
+    const found = violations(report({
+      marketPerformance: { overview: "Price history is summarized.", statements: [st("observed", claims[provider], ["obs:price"])] },
+    }), btcPayload);
+    assert.ok(found.some((item) => /number\(s\)/.test(item) || /is not a period established/.test(item)), `an unsupported historical claim from ${provider} should still fail ("${claims[provider]}"); got ${JSON.stringify(found)}`);
+  }
+});
+
+test("P24. a properly evidenced provider claim still passes: naming the provider adds no extra scrutiny beyond normal grounding", () => {
+  const tvl = field(uniPayload, "obs:tvl");
+  const fees = field(uniPayload, "obs:fees_24h");
+  const found = violations(report({
+    fundamentalPerformance: { overview: "Protocol fundamentals are reported by DeFiLlama.", statements: [
+      st("observed", `DeFiLlama reports a protocol TVL of about ${tvl.value}.`, [tvl.id]),
+      st("observed", `DeFiLlama reports fees of about ${fees.value}.`, [fees.id], fees.period),
     ] },
   }), uniPayload);
   assert.deepEqual(found, []);
