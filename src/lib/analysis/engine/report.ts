@@ -18,9 +18,9 @@ import {
 import { MAX_FINDINGS_PER_SECTION } from "./thresholds.ts";
 
 /** Bumped whenever the analytical rules (findings.ts/thresholds.ts) change in a way that could change output. */
-export const ENGINE_VERSION = "1";
+export const ENGINE_VERSION = "2";
 /** Bumped whenever the report structure/narrative composition (narrative.ts/report.ts) changes. */
-export const ANALYSIS_VERSION = "1";
+export const ANALYSIS_VERSION = "2";
 
 const SEVERITY_WEIGHT = { high: 3, moderate: 2, low: 1 } as const;
 
@@ -33,6 +33,7 @@ function priority(finding: Finding): number {
   let score = SEVERITY_WEIGHT[finding.severity] * 1000;
   const raw = finding.data.raw;
   if (typeof raw === "number" && Number.isFinite(raw)) score += Math.min(Math.abs(raw), 500);
+  if (finding.horizons) score += Math.min(finding.horizons.length * 25, 100); // multi-horizon findings synthesize more evidence
   score += finding.evidenceIds.length;
   return score;
 }
@@ -50,16 +51,6 @@ const CATEGORY_TO_SECTION: Partial<Record<FindingCategory, SectionKey>> = {
   tokenomics: "tokenomics",
 };
 
-const SECTION_LABEL: Record<SectionKey, string> = {
-  executiveSummary: "an overall snapshot",
-  marketPerformance: "market performance",
-  fundamentalPerformance: "fundamental and protocol activity",
-  valuation: "valuation",
-  marketFundamentalRelationships: "market and fundamental relationships",
-  liquidityMarketStructure: "liquidity and market structure",
-  tokenomics: "tokenomics",
-};
-
 type RawSection = { overview: string; statements: ReturnType<typeof statementForFinding>[] };
 type RawReport = Record<SectionKey, RawSection> & {
   risks: ReturnType<typeof riskItem>[];
@@ -72,20 +63,29 @@ function buildRawReport(payload: ProfilePayload, findings: Finding[]): RawReport
   const byCategory = new Map<FindingCategory, Finding[]>();
   for (const finding of findings) byCategory.set(finding.category, [...(byCategory.get(finding.category) ?? []), finding]);
 
+  const fundamentalsMapped = payload.scope.find((note) => note.id === "scope:defillama")?.mapped ?? false;
+
   const sections = {} as Record<SectionKey, RawSection>;
   for (const [category, sectionKey] of Object.entries(CATEGORY_TO_SECTION) as [FindingCategory, SectionKey][]) {
     const capped = topFindings(byCategory.get(category) ?? [], MAX_FINDINGS_PER_SECTION);
-    sections[sectionKey] = { overview: sectionOverview(SECTION_LABEL[sectionKey], capped), statements: capped.map(statementForFinding) };
+    const overview = capped.length > 0 ? sectionOverview(sectionKey, capped, {}) : sectionOverview(sectionKey, capped, { fundamentalsMapped });
+    sections[sectionKey] = { overview, statements: capped.map((finding) => statementForFinding(finding, "detail")) };
   }
 
   // Executive summary: the highest-priority findings across every analytical category (never
-  // dataQuality — data gaps have their own section), restated with the same statement builders.
+  // dataQuality/risk — those have their own sections), restated through the *summary* composer so
+  // the same evidence produces a different, higher-level sentence than its section detail. Bare
+  // fact restatements (a single supply figure, a single ratio quote) are excluded from headline
+  // eligibility — they belong in their section, not in "the most significant findings" synthesis —
+  // unless nothing more substantive is available, in which case they are the best evidence there is.
   const analytical = findings.filter((finding) => finding.category !== "dataQuality" && finding.category !== "risk");
-  const headline = topFindings(analytical, 4);
+  const isBareFact = (finding: Finding) => /^supply_(circulating_supply|total_supply|maximum_supply)$/.test(finding.findingType) || finding.findingType.startsWith("structure_");
+  const substantive = analytical.filter((finding) => !isBareFact(finding));
+  const headline = topFindings(substantive.length > 0 ? substantive : analytical, 4);
   const categoriesCovered = new Set(analytical.map((finding) => finding.category)).size;
   sections.executiveSummary = {
-    overview: executiveOverview(analytical.length, categoriesCovered),
-    statements: headline.map(statementForFinding),
+    overview: executiveOverview(headline, analytical.length, categoriesCovered),
+    statements: headline.map((finding) => statementForFinding(finding, "summary")),
   };
 
   const risks = topFindings(byCategory.get("risk") ?? [], MAX_FINDINGS_PER_SECTION).map(riskItem);
@@ -108,7 +108,9 @@ export type EngineReport = {
  * deterministic: the same payload always yields the same report; a different payload (a later
  * snapshot, a different token) yields different findings and therefore different text. Throws
  * AnalysisValidationError if the assembled report somehow fails the evidence contract — that would
- * be a bug in this module, since every fact here is grounded by construction.
+ * be a bug in this module, since every fact here is grounded by construction. Every narrative
+ * composer call is routed through a non-throwing fallback (see narrative.ts's `genericStatement`),
+ * so an unrecognized finding type can never surface as a generation failure.
  */
 export function buildEngineReport(payload: ProfilePayload): EngineReport {
   const findings = extractFindings(payload);

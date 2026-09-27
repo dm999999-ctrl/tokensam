@@ -63,3 +63,45 @@ export const MIN_TREND_POINTS = 2;
 
 /** Findings are capped per section so the report stays a curated summary, not a data dump (Priority). */
 export const MAX_FINDINGS_PER_SECTION = 6;
+
+/**
+ * Magnitude-of-change vocabulary for narrative prose, distinct from MOMENTUM_BANDS above:
+ * MOMENTUM_BANDS drives finding severity/prioritization (a coarse 4-band scale), while this drives
+ * word choice in generated sentences (a finer 5-word scale) and is period-aware — a 15% move over
+ * 24 hours reads very differently from a 15% move over 90 days, so the same wording bands are not
+ * reused across periods. Centralized here so the words are not chosen ad hoc in narrative.ts.
+ */
+export type MagnitudeWord = "marginal" | "moderate" | "notable" | "substantial" | "pronounced";
+export type MomentumPeriodKey = "24h" | "7d" | "30d" | "90d";
+
+const MAGNITUDE_WORD_BANDS: Record<MomentumPeriodKey, { word: MagnitudeWord; minAbsPct: number }[]> = {
+  "24h": [
+    { word: "pronounced", minAbsPct: 20 }, { word: "substantial", minAbsPct: 10 },
+    { word: "notable", minAbsPct: 5 }, { word: "moderate", minAbsPct: 2 }, { word: "marginal", minAbsPct: 0 },
+  ],
+  "7d": [
+    { word: "pronounced", minAbsPct: 35 }, { word: "substantial", minAbsPct: 20 },
+    { word: "notable", minAbsPct: 10 }, { word: "moderate", minAbsPct: 3 }, { word: "marginal", minAbsPct: 0 },
+  ],
+  "30d": [
+    { word: "pronounced", minAbsPct: 60 }, { word: "substantial", minAbsPct: 30 },
+    { word: "notable", minAbsPct: 15 }, { word: "moderate", minAbsPct: 5 }, { word: "marginal", minAbsPct: 0 },
+  ],
+  "90d": [
+    { word: "pronounced", minAbsPct: 100 }, { word: "substantial", minAbsPct: 50 },
+    { word: "notable", minAbsPct: 25 }, { word: "moderate", minAbsPct: 8 }, { word: "marginal", minAbsPct: 0 },
+  ],
+};
+
+export function magnitudeWord(period: MomentumPeriodKey, changePct: number): MagnitudeWord {
+  const abs = Math.abs(changePct);
+  return MAGNITUDE_WORD_BANDS[period].find((entry) => abs >= entry.minAbsPct)?.word ?? "marginal";
+}
+
+/**
+ * Recent-vs-prior daily rate ratio thresholds for classifying a multi-horizon momentum pattern as
+ * accelerating or decelerating (see engine/findings.ts's multi-horizon momentum finding). Both are
+ * ratios of %/day rates, not raw percentages.
+ */
+export const ACCELERATION_RATE_RATIO = 1.4;
+export const DECELERATION_RATE_RATIO = 1 / ACCELERATION_RATE_RATIO;
