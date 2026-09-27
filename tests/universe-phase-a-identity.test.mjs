@@ -56,19 +56,62 @@ test("a curated deprecation marks the asset deprecated without deleting it", () 
   assert.equal(result[0].universeStatus, "deprecated");
 });
 
-test("a candidate absent from the latest catalog fetch becomes deprecated, not deleted", () => {
-  const stillListed = candidate({ coingeckoId: "still-here" });
-  const noLongerListed = candidate({ coingeckoId: "gone-now" });
-  const result = applyCatalogAbsenceDeprecation([stillListed, noLongerListed], new Set(["still-here"]), "2026-09-29T00:00:00.000Z");
-  assert.equal(result.find((c) => c.coingeckoId === "still-here").universeStatus, "candidate");
-  const deprecated = result.find((c) => c.coingeckoId === "gone-now");
-  assert.equal(deprecated.universeStatus, "deprecated");
-  assert.ok(deprecated.statusReason.includes("2026-09-29"));
+const CHECKED_AT = "2026-09-29T00:00:00.000Z";
+const THRESHOLD = 3;
+
+test("falling outside this run's ranked pool but still in CoinGecko's full catalog is NOT deprecation evidence", () => {
+  // The classic false positive this fix targets: a token drops from rank #2,499
+  // to #2,501 on a volatile day. It is absent from `discoveredIds` (the ranked
+  // top-poolSize window) but still returned by /coins/list.
+  const rankedOut = candidate({ coingeckoId: "fell-out-of-pool" });
+  const result = applyCatalogAbsenceDeprecation([rankedOut], new Set(), new Set(["fell-out-of-pool"]), null, THRESHOLD, CHECKED_AT);
+  assert.equal(result[0].universeStatus, "candidate", "still genuinely listed, so its status is untouched");
+  assert.equal(result[0].absentFromSourceStreak, 0);
+});
+
+test("a /coins/list outage never counts as absence evidence, in either direction", () => {
+  const candidateWithPriorStreak = candidate({ coingeckoId: "unknown-during-outage", absentFromSourceStreak: 2 });
+  const result = applyCatalogAbsenceDeprecation([candidateWithPriorStreak], new Set(), new Set(), "network error", THRESHOLD, CHECKED_AT);
+  assert.equal(result[0].universeStatus, "candidate");
+  assert.equal(result[0].absentFromSourceStreak, 2, "the streak is neither advanced nor reset during a provider outage");
+});
+
+test("a single confirmed absence from the full catalog is needs_review, never an immediate deprecation", () => {
+  const goneOnce = candidate({ coingeckoId: "confirmed-absent-once" });
+  const result = applyCatalogAbsenceDeprecation([goneOnce], new Set(), new Set(), null, THRESHOLD, CHECKED_AT);
+  assert.equal(result[0].universeStatus, "needs_review");
+  assert.equal(result[0].absentFromSourceStreak, 1);
+  assert.ok(result[0].statusReason.includes("1 of 3"));
+});
+
+test("only threshold consecutive confirmed absences promote a candidate to deprecated", () => {
+  let current = candidate({ coingeckoId: "confirmed-absent-repeatedly" });
+  for (let run = 1; run < THRESHOLD; run += 1) {
+    current = applyCatalogAbsenceDeprecation([current], new Set(), new Set(), null, THRESHOLD, CHECKED_AT)[0];
+    assert.equal(current.universeStatus, "needs_review", `run ${run} should still be needs_review, not deprecated`);
+  }
+  current = applyCatalogAbsenceDeprecation([current], new Set(), new Set(), null, THRESHOLD, CHECKED_AT)[0];
+  assert.equal(current.universeStatus, "deprecated");
+  assert.equal(current.absentFromSourceStreak, THRESHOLD);
+  assert.ok(current.statusReason.includes(`${THRESHOLD} consecutive`));
+});
+
+test("reappearing in the full catalog resets the absence streak", () => {
+  const previouslyFlagged = candidate({ coingeckoId: "back-again", universeStatus: "needs_review", absentFromSourceStreak: 2 });
+  const result = applyCatalogAbsenceDeprecation([previouslyFlagged], new Set(), new Set(["back-again"]), null, THRESHOLD, CHECKED_AT);
+  assert.equal(result[0].absentFromSourceStreak, 0);
+  assert.equal(result[0].universeStatus, "needs_review", "duplicates.ts only resets the streak; run-validation.ts clears the status once it is re-validated as present");
+});
+
+test("a candidate re-validated this run (present in discoveredIds) is left alone by the absence rule entirely", () => {
+  const rechecked = candidate({ coingeckoId: "rechecked-this-run", absentFromSourceStreak: 1 });
+  const result = applyCatalogAbsenceDeprecation([rechecked], new Set(["rechecked-this-run"]), new Set(), null, THRESHOLD, CHECKED_AT);
+  assert.equal(result[0], rechecked, "no change at all: run-validation.ts is responsible for resetting the streak on the fresh-validation path");
 });
 
 test("a candidate already duplicate/migrated is left alone by the catalog-absence rule", () => {
   const dup = candidate({ coingeckoId: "already-duplicate", universeStatus: "duplicate" });
-  const result = applyCatalogAbsenceDeprecation([dup], new Set(), "2026-09-29T00:00:00.000Z");
+  const result = applyCatalogAbsenceDeprecation([dup], new Set(), new Set(), null, THRESHOLD, CHECKED_AT);
   assert.equal(result[0].universeStatus, "duplicate");
 });
 

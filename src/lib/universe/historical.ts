@@ -37,6 +37,9 @@ export type HistoricalCheckResult = Pick<
   "historicalDataStatus" | "historicalCoverageDays" | "historicalRequiredDays" | "historicalDataCheckedAt" | "historicalDataFailureReason"
 >;
 
+/** Only the fields an outage actually changes; a previously-measured coverage span is never overwritten by a temporary failure (AGENTS.md #25). */
+export type HistoricalOutageResult = Pick<UniverseCandidate, "historicalDataStatus" | "historicalRequiredDays" | "historicalDataCheckedAt" | "historicalDataFailureReason">;
+
 /** Coverage span in days between the earliest and latest stored/returned price point. */
 export function coverageDays(prices: [number, number][] | undefined): number {
   if (!prices || prices.length < 2) return 0;
@@ -65,10 +68,9 @@ export function evaluateHistoricalCoverage(prices: [number, number][] | undefine
   };
 }
 
-export function historicalUnavailable(requiredDays: number, checkedAt: string, detail: string): HistoricalCheckResult {
+export function historicalUnavailable(requiredDays: number, checkedAt: string, detail: string): HistoricalOutageResult {
   return {
     historicalDataStatus: "temporarily_unavailable" as CheckStatus,
-    historicalCoverageDays: null,
     historicalRequiredDays: requiredDays,
     historicalDataCheckedAt: checkedAt,
     historicalDataFailureReason: `COINGECKO_UNAVAILABLE: ${detail}`,
@@ -81,7 +83,7 @@ export async function checkHistoricalData(
   requiredDays: number,
   config: CoinGeckoConfig,
   options: { fetchImpl: typeof fetch; sleep: Sleep; now?: () => Date },
-): Promise<HistoricalCheckResult> {
+): Promise<HistoricalCheckResult | HistoricalOutageResult> {
   const checkedAt = (options.now ?? (() => new Date()))().toISOString();
   try {
     const chart = await fetchMarketChart(coingeckoId, requiredDays, config, options);

@@ -70,13 +70,43 @@ export async function runUniverseValidation(options: RunValidationOptions): Prom
   const validatedFresh: UniverseCandidate[] = discovery.candidates.map((candidate) => {
     const market = discovery.marketsById.get(candidate.coingeckoId) as CoinGeckoMarketCandidate;
     const previous = existingById.get(candidate.coingeckoId);
-    const merged: UniverseCandidate = previous ? { ...candidate, id: previous.id, tokenId: previous.tokenId ?? candidate.tokenId } : candidate;
+    // Start from the previously-stored row (not a blank template) so that
+    // every check this run's later steps might skip or only partially update
+    // on a provider outage (Binance, logo, historical) keeps its last-known
+    // value instead of reverting to null (AGENTS.md #25, #30). Freshly
+    // re-validated this run means present, so any catalog-absence streak
+    // clears and a prior absence-driven needs_review reverts to candidate.
+    const merged: UniverseCandidate = previous
+      ? {
+          ...previous,
+          symbol: candidate.symbol,
+          name: candidate.name,
+          chainId: candidate.chainId,
+          contractAddress: candidate.contractAddress,
+          isNative: candidate.isNative,
+          identityEvidence: candidate.identityEvidence,
+          marketCapRank: candidate.marketCapRank,
+          source: candidate.source,
+          tokenId: previous.tokenId ?? candidate.tokenId,
+          universeStatus: previous.universeStatus === "needs_review" ? "candidate" : previous.universeStatus,
+          absentFromSourceStreak: 0,
+        }
+      : candidate;
     return matchExistingToken({ ...merged, ...validateCoinGeckoCandidate(market, checkedAt), lastSeenInSourceAt: checkedAt });
   });
 
   // ---- 2. Carry forward previously-tracked candidates absent from this fetch ----
+  // (still genuinely listed on CoinGecko but outside this run's ranked pool,
+  // a real catalog outage, or confirmed absent — see duplicates.ts.)
   const staleExisting = existing.filter((candidate) => !discovery.discoveredIds.has(candidate.coingeckoId));
-  let allCandidates = applyCatalogAbsenceDeprecation([...validatedFresh, ...staleExisting], discovery.discoveredIds, checkedAt);
+  let allCandidates = applyCatalogAbsenceDeprecation(
+    [...validatedFresh, ...staleExisting],
+    discovery.discoveredIds,
+    discovery.listedCoingeckoIds,
+    discovery.listOutage,
+    config.absenceConfirmationThreshold,
+    checkedAt,
+  );
 
   // ---- 3. Duplicate / deprecated / migrated lifecycle rules ----
   allCandidates = applyDuplicateAndLifecycleRules(allCandidates);

@@ -14,6 +14,10 @@ This is deliberately separate infrastructure from the existing 100/238-token cur
 
 Nothing is ever deleted. Duplicate, deprecated, and migrated candidates keep every field; only `universe_status` and `status_reason` change.
 
+### Deprecation-by-absence: confirmed evidence, not a single missed fetch
+
+A candidate falling out of this run's ranked top-`poolSize` `/coins/markets` window is **not** deprecation evidence — a token can drift from rank #2,499 to #2,501 on an ordinary volatile day without being delisted. The only signal `duplicates.ts` trusts is absence from CoinGecko's own near-complete `/coins/list` catalog, and even that is not acted on immediately: a single confirmed absence only raises `needs_review` and increments `absent_from_source_streak`; only `absenceConfirmationThreshold` (default 3) *consecutive* confirmed absences promote a candidate to `deprecated`. A `/coins/list` fetch failure is recorded as its own `listOutage` and never counted as absence evidence in either direction. Reappearing resets the streak to 0. See `tests/universe-phase-a-identity.test.mjs` and the absence-specific cases in `tests/universe-phase-a-orchestrator.test.mjs`.
+
 ## Modules (`src/lib/universe/`)
 
 | Module | Responsibility |
@@ -24,7 +28,7 @@ Nothing is ever deleted. Duplicate, deprecated, and migrated candidates keep eve
 | `coingecko-validation.ts` | PASS/FAIL/TEMPORARY on the already-fetched market row: no extra request per candidate. |
 | `binance-client.ts` / `binance-resolver.ts` | One Spot `exchangeInfo` + one Futures `exchangeInfo` call validates the *entire* pool. Preferred hierarchy: USDT → USDC → approved stablecoin → BTC route → ETH route → unresolved. Spot and Futures are hard-separated; a Futures-only listing is `BINANCE_FUTURES_ONLY`, never silently accepted. |
 | `identity.ts` | Resolves whether a Binance base-asset symbol confidently belongs to one candidate. A symbol colliding across the pool stays `needs_review` unless a hand-verified entry exists in `src/data/universe-binance-symbol-overrides.ts` (empty by default — nothing is guessed). |
-| `duplicates.ts` | Contract-address duplicates, curated migrations/deprecations (`src/data/universe-known-migrations.ts`), and "no longer in the latest catalog fetch" deprecation-by-absence. |
+| `duplicates.ts` | Contract-address duplicates, curated migrations/deprecations (`src/data/universe-known-migrations.ts`), and confirmed-absence deprecation (see below — absence is never trusted on a single fetch). |
 | `logo.ts` | CoinGecko (trusted CDN, no live check needed) → Binance (no stable public endpoint exists, so this step is a documented no-op, not a guess) → existing Token Samurai logo (live-verified) → unavailable. |
 | `historical.ts` | Coverage-days check via `/coins/{id}/market_chart`, the one genuinely per-candidate request; bounded concurrency + pacing, and only run for candidates that already passed the cheaper CoinGecko + identity checks. |
 | `supply.ts` | Circulating supply present → pass; market cap or reported FDV present but no circulating supply → `needs_review`; nothing at all → `fail`. Never invents a value. |

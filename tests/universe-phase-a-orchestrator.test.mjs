@@ -12,8 +12,10 @@ const NOW = "2026-09-29T12:00:00.000Z";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function sufficientPrices() {
+  // Spans 65 days, comfortably over the default 61-day requirement (the
+  // existing MACD indicator's own warm-up minimum; see config.ts).
   const now = Date.parse(NOW);
-  return Array.from({ length: 31 }, (_, i) => [now - (30 - i) * DAY_MS, 100 + i]);
+  return Array.from({ length: 66 }, (_, i) => [now - (65 - i) * DAY_MS, 100 + i]);
 }
 function thinPrices() {
   const now = Date.parse(NOW);
@@ -113,6 +115,76 @@ test("end-to-end: each fixture candidate reaches the correct, explained eligibil
   assert.ok(markdown.includes("## Summary"));
 });
 
+test("a Binance-wide outage marks affected candidates temporarily_unavailable without wiping their prior Binance mapping", async () => {
+  const previous = (
+    await runUniverseValidation({
+      config: { candidatePoolSize: MARKET_FIXTURES.length },
+      env: { COINGECKO_API_KEY: "test-key" },
+      fetchImpl: fixtureFetch(),
+      sleep: async () => {},
+      now: () => new Date(NOW),
+    })
+  ).candidates;
+
+  const binanceDownFetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === "api.binance.com" || parsed.hostname === "fapi.binance.com") return new Response("", { status: 500 });
+    return fixtureFetch()(url);
+  };
+
+  const result = await runUniverseValidation({
+    config: { candidatePoolSize: MARKET_FIXTURES.length },
+    env: { COINGECKO_API_KEY: "test-key" },
+    fetchImpl: binanceDownFetch,
+    sleep: async () => {},
+    now: () => new Date(NOW),
+    existingCandidates: previous,
+  });
+
+  assert.equal(result.outage, null, "a Binance-only outage does not abort the whole run");
+  const bitcoin = result.candidates.find((c) => c.coingeckoId === "bitcoin");
+  assert.equal(bitcoin.binanceStatus, "temporarily_unavailable");
+  assert.ok(bitcoin.binanceFailureReason.startsWith("BINANCE_UNAVAILABLE"));
+  assert.equal(bitcoin.eligibilityStatus, "temporarily_unavailable", "not permanently ineligible just because Binance was briefly unreachable");
+  assert.equal(bitcoin.binanceSymbol, "BTCUSDT", "the previously-resolved Binance pair must survive a temporary outage, not be nulled out");
+  assert.equal(bitcoin.binanceResolutionMethod, "direct_usdt", "the previously-resolved method must also survive a temporary outage");
+});
+
+test("a historical-data-provider outage during re-validation preserves the previously-measured coverage span", async () => {
+  const previous = (
+    await runUniverseValidation({
+      config: { candidatePoolSize: MARKET_FIXTURES.length },
+      env: { COINGECKO_API_KEY: "test-key" },
+      fetchImpl: fixtureFetch(),
+      sleep: async () => {},
+      now: () => new Date(NOW),
+    })
+  ).candidates;
+  const bitcoinBefore = previous.find((c) => c.coingeckoId === "bitcoin");
+  assert.equal(bitcoinBefore.historicalDataStatus, "pass");
+  assert.ok(bitcoinBefore.historicalCoverageDays > 0);
+
+  const historyDownFetch = async (url) => {
+    const parsed = new URL(url);
+    if (/^\/api\/v3\/coins\/[^/]+\/market_chart$/.test(parsed.pathname)) return new Response("", { status: 500 });
+    return fixtureFetch()(url);
+  };
+
+  const result = await runUniverseValidation({
+    config: { candidatePoolSize: MARKET_FIXTURES.length },
+    env: { COINGECKO_API_KEY: "test-key" },
+    fetchImpl: historyDownFetch,
+    sleep: async () => {},
+    now: () => new Date(NOW),
+    existingCandidates: previous,
+  });
+
+  const bitcoinAfter = result.candidates.find((c) => c.coingeckoId === "bitcoin");
+  assert.equal(bitcoinAfter.historicalDataStatus, "temporarily_unavailable");
+  assert.equal(bitcoinAfter.eligibilityStatus, "temporarily_unavailable");
+  assert.equal(bitcoinAfter.historicalCoverageDays, bitcoinBefore.historicalCoverageDays, "the previously-measured coverage span survives a provider outage, not reset to null");
+});
+
 test("a discovery-wide outage never destroys previously-persisted eligible candidates", async () => {
   const previous = (
     await runUniverseValidation({
@@ -137,6 +209,89 @@ test("a discovery-wide outage never destroys previously-persisted eligible candi
   const bitcoin = result.candidates.find((c) => c.coingeckoId === "bitcoin");
   assert.equal(bitcoin.eligibilityStatus, "temporarily_unavailable");
   assert.equal(bitcoin.binanceSymbol, "BTCUSDT", "the previously-resolved Binance mapping is preserved through the outage");
+});
+
+test("a candidate falling outside a smaller re-run's ranked pool, but still in /coins/list, is never treated as deprecated", async () => {
+  const previous = (
+    await runUniverseValidation({
+      config: { candidatePoolSize: MARKET_FIXTURES.length },
+      env: { COINGECKO_API_KEY: "test-key" },
+      fetchImpl: fixtureFetch(),
+      sleep: async () => {},
+      now: () => new Date(NOW),
+    })
+  ).candidates;
+  const futuresBefore = previous.find((c) => c.coingeckoId === "futures-coin");
+  assert.equal(futuresBefore.eligibilityStatus, "ineligible");
+
+  // A smaller pool this run: only "bitcoin" is re-validated, but /coins/list
+  // (fixtureFetch's list handler) still lists every fixture ID, so nothing
+  // should be marked deprecated or have its status disturbed.
+  const result = await runUniverseValidation({
+    config: { candidatePoolSize: 1 },
+    env: { COINGECKO_API_KEY: "test-key" },
+    fetchImpl: fixtureFetch(),
+    sleep: async () => {},
+    now: () => new Date(NOW),
+    existingCandidates: previous,
+  });
+
+  assert.equal(result.outage, null);
+  const futuresAfter = result.candidates.find((c) => c.coingeckoId === "futures-coin");
+  assert.equal(futuresAfter.universeStatus, "candidate", "still genuinely listed on CoinGecko, so it is not deprecated");
+  assert.equal(futuresAfter.absentFromSourceStreak, 0);
+  assert.equal(futuresAfter.eligibilityStatus, "ineligible", "its prior, still-accurate eligibility is preserved rather than recomputed from nothing");
+  assert.ok(futuresAfter.eligibilityReasonCodes.includes("BINANCE_FUTURES_ONLY"));
+});
+
+test("a candidate confirmed absent from /coins/list across the configured threshold of runs becomes deprecated, never on the first miss", async () => {
+  const previous = (
+    await runUniverseValidation({
+      config: { candidatePoolSize: MARKET_FIXTURES.length },
+      env: { COINGECKO_API_KEY: "test-key" },
+      fetchImpl: fixtureFetch(),
+      sleep: async () => {},
+      now: () => new Date(NOW),
+    })
+  ).candidates;
+
+  const trulyGoneFetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === "api.coingecko.com" && parsed.pathname === "/api/v3/coins/markets") return new Response(JSON.stringify([]), { status: 200 });
+    if (parsed.hostname === "api.coingecko.com" && parsed.pathname === "/api/v3/coins/list") {
+      // "futures-coin" has genuinely vanished from the entire catalog this time.
+      return new Response(JSON.stringify(MARKET_FIXTURES.filter((m) => m.id !== "futures-coin").map((m) => ({ id: m.id, symbol: m.symbol, name: m.name, platforms: {} }))), { status: 200 });
+    }
+    return fixtureFetch()(url);
+  };
+
+  let current = previous;
+  for (let run = 1; run <= 2; run += 1) {
+    const result = await runUniverseValidation({
+      config: { candidatePoolSize: 1 },
+      env: { COINGECKO_API_KEY: "test-key" },
+      fetchImpl: trulyGoneFetch,
+      sleep: async () => {},
+      now: () => new Date(NOW),
+      existingCandidates: current,
+    });
+    current = result.candidates;
+    const futures = current.find((c) => c.coingeckoId === "futures-coin");
+    assert.equal(futures.universeStatus, "needs_review", `run ${run}: a single/second absence is needs_review, not yet deprecated`);
+  }
+
+  // Third confirmed-absent run reaches the default threshold (3).
+  const third = await runUniverseValidation({
+    config: { candidatePoolSize: 1 },
+    env: { COINGECKO_API_KEY: "test-key" },
+    fetchImpl: trulyGoneFetch,
+    sleep: async () => {},
+    now: () => new Date(NOW),
+    existingCandidates: current,
+  });
+  const futuresFinal = third.candidates.find((c) => c.coingeckoId === "futures-coin");
+  assert.equal(futuresFinal.universeStatus, "deprecated");
+  assert.equal(futuresFinal.absentFromSourceStreak, 3);
 });
 
 test("persisting the same candidate pool twice (idempotent re-run) never duplicates rows", async () => {

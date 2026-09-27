@@ -13,6 +13,9 @@ export type BinanceResolutionResult = Pick<
   "binanceStatus" | "binanceSymbol" | "binanceBaseAsset" | "binanceQuoteAsset" | "binanceMarketStatus" | "binanceMarketType" | "binanceResolutionMethod" | "binanceCheckedAt" | "binanceFailureReason"
 >;
 
+/** Only the fields an outage actually changes; a previously-resolved mapping is never overwritten by a temporary failure (AGENTS.md #10, #25). */
+export type BinanceOutageResult = Pick<UniverseCandidate, "binanceStatus" | "binanceCheckedAt" | "binanceFailureReason">;
+
 function resolutionMethodForQuote(quote: string, priority: string[]): BinanceResolutionMethod {
   if (quote === "USDT") return "direct_usdt";
   if (quote === "USDC") return "direct_usdc";
@@ -107,16 +110,16 @@ function pass(match: BinanceSpotSymbol, method: BinanceResolutionMethod, checked
   };
 }
 
-/** A provider-wide Binance outage: temporarily_unavailable, never a hard failure (AGENTS.md #25). */
-export function binanceUnavailable(checkedAt: string, detail: string): BinanceResolutionResult {
+/**
+ * A provider-wide Binance outage: temporarily_unavailable, never a hard
+ * failure (AGENTS.md #25). Deliberately touches only status/timestamp/reason
+ * — a candidate's previously-resolved Spot mapping (symbol, base/quote asset,
+ * resolution method) is Phase E's mapping infrastructure (AGENTS.md #10) and
+ * must survive a transient outage untouched, not be nulled out.
+ */
+export function binanceUnavailable(checkedAt: string, detail: string): BinanceOutageResult {
   return {
     binanceStatus: "temporarily_unavailable",
-    binanceSymbol: null,
-    binanceBaseAsset: null,
-    binanceQuoteAsset: null,
-    binanceMarketStatus: null,
-    binanceMarketType: null,
-    binanceResolutionMethod: null,
     binanceCheckedAt: checkedAt,
     binanceFailureReason: `BINANCE_UNAVAILABLE: ${detail}`,
   };

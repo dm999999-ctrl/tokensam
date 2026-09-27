@@ -66,6 +66,14 @@ export type UniverseCandidate = {
   duplicateOfId: number | null;
   migratedToCoingeckoId: string | null;
   statusReason: string | null;
+  /**
+   * Consecutive validation runs in which this candidate was confirmed absent
+   * from CoinGecko's own `/coins/list` catalog (not merely outside this run's
+   * ranked top-`poolSize` window). Reset to 0 the moment it reappears. A
+   * single absence alone never marks a candidate deprecated (AGENTS.md #14,
+   * #25) — see `duplicates.ts`.
+   */
+  absentFromSourceStreak: number;
 
   source: string;
   marketCapRank: number | null;
@@ -155,6 +163,7 @@ export function newCandidateFromMarket(market: CoinGeckoMarketCandidate, discove
     duplicateOfId: null,
     migratedToCoingeckoId: null,
     statusReason: null,
+    absentFromSourceStreak: 0,
 
     source: "coingecko_markets",
     marketCapRank: market.market_cap_rank ?? null,

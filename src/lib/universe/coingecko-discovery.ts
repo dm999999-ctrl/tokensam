@@ -66,7 +66,18 @@ export function resolvePlatformIdentity(entry: CoinGeckoListEntry | undefined): 
 
 export type DiscoveryResult = {
   candidates: UniverseCandidate[];
+  /** IDs actually re-validated this run (the ranked top-`poolSize` window). Falling out of this window is NOT deprecation evidence. */
   discoveredIds: Set<string>;
+  /**
+   * Every ID CoinGecko's near-complete `/coins/list` catalog currently
+   * returns. This, not `discoveredIds`, is the only fetch this module uses as
+   * possible evidence that an asset no longer exists on CoinGecko at all
+   * (AGENTS.md #14) — a token can easily rank outside the top `poolSize` on a
+   * volatile day without being delisted.
+   */
+  listedCoingeckoIds: Set<string>;
+  /** Set when `/coins/list` itself could not be fetched this run: absence-based deprecation must not be evaluated (AGENTS.md #25). */
+  listOutage: string | null;
   marketsById: Map<string, CoinGeckoMarketCandidate>;
   outage: string | null;
 };
@@ -86,13 +97,16 @@ export async function discoverCandidates(options: DiscoveryOptions): Promise<Dis
       if (items.length < MARKETS_PAGE_SIZE) break;
     }
   } catch (error) {
-    if (error instanceof ProviderOutageError) return { candidates: [], discoveredIds: new Set(), marketsById: new Map(), outage: error.message };
+    if (error instanceof ProviderOutageError) {
+      return { candidates: [], discoveredIds: new Set(), listedCoingeckoIds: new Set(), listOutage: null, marketsById: new Map(), outage: error.message };
+    }
     throw error;
   }
 
   const trimmed = markets.slice(0, options.poolSize);
 
   let listById = new Map<string, CoinGeckoListEntry>();
+  let listOutage: string | null = null;
   try {
     await options.sleep(MIN_REQUEST_INTERVAL_MS);
     const list = await fetchCoinsList(options.config, options);
@@ -101,6 +115,11 @@ export async function discoverCandidates(options: DiscoveryOptions): Promise<Dis
     if (!(error instanceof ProviderOutageError)) throw error;
     // Identity chain/contract enrichment is best-effort; a list outage does not
     // block candidate discovery itself, it only leaves chain identity unresolved.
+    // It DOES, however, disqualify this run from being used as absence
+    // evidence for deprecation (duplicates.ts): we record that here so the
+    // orchestrator never confuses "the catalog fetch failed" with "the
+    // catalog confirms this ID is gone".
+    listOutage = error.message;
   }
 
   const candidates = trimmed.map((market) => {
@@ -118,6 +137,8 @@ export async function discoverCandidates(options: DiscoveryOptions): Promise<Dis
   return {
     candidates,
     discoveredIds: new Set(candidates.map((candidate) => candidate.coingeckoId)),
+    listedCoingeckoIds: new Set(listById.keys()),
+    listOutage,
     marketsById: new Map(trimmed.map((market) => [market.id, market])),
     outage: null,
   };

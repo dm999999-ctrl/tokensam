@@ -101,6 +101,29 @@ test("discovery paginates /coins/markets up to the pool size and enriches identi
   assert.equal(result.candidates[0].chainId, "ethereum");
   assert.equal(result.candidates[0].contractAddress, "0xdead");
   assert.equal(result.outage, null);
+  assert.equal(result.listOutage, null);
+  assert.deepEqual([...result.listedCoingeckoIds], ["coin-0"], "listedCoingeckoIds reflects /coins/list, not the ranked markets pool");
+});
+
+test("a /coins/list outage is recorded separately from a discovery outage, so absence detection can be skipped for this run", async () => {
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === "/api/v3/coins/markets") {
+      return new Response(JSON.stringify([{ id: "bitcoin", symbol: "btc", name: "Bitcoin", current_price: 1, market_cap: 1000 }]), { status: 200 });
+    }
+    if (parsed.pathname === "/api/v3/coins/list") return new Response("", { status: 500 });
+    throw new Error(`unexpected URL ${url}`);
+  };
+  const result = await discoverCandidates({
+    poolSize: 10,
+    config: { apiKey: "k", baseUrl: "https://api.coingecko.com/api/v3", keyHeader: "x-cg-demo-api-key" },
+    fetchImpl,
+    sleep: async () => {},
+  });
+  assert.equal(result.outage, null, "candidate discovery itself still succeeded");
+  assert.equal(result.candidates.length, 1);
+  assert.ok(result.listOutage, "the catalog-list outage is reported so absence evidence is never inferred from it");
+  assert.equal(result.listedCoingeckoIds.size, 0);
 });
 
 test("a discovery-wide outage is reported, not thrown, and the pool is left empty", async () => {

@@ -30,7 +30,7 @@ test("every hard requirement passing yields ELIGIBLE with no reason codes", () =
   const result = evaluateEligibility(passingCandidate(), config, CHECKED_AT);
   assert.equal(result.eligibilityStatus, "eligible");
   assert.deepEqual(result.eligibilityReasonCodes, []);
-  assert.equal(result.eligibilityConfigVersion, "phase-a-v1");
+  assert.equal(result.eligibilityConfigVersion, "phase-a-v2");
 });
 
 test("CoinGecko not found makes the candidate INELIGIBLE with that exact reason", () => {

@@ -48,6 +48,7 @@ test("a provider-wide outage during the historical fetch is temporarily_unavaila
   );
   assert.equal(result.historicalDataStatus, "temporarily_unavailable");
   assert.ok(result.historicalDataFailureReason.startsWith("COINGECKO_UNAVAILABLE"));
+  assert.equal("historicalCoverageDays" in result, false, "an outage must not report/overwrite a coverage value; the caller preserves whatever was measured before");
 });
 
 test("checkHistoricalData evaluates a real successful response end to end", async () => {

@@ -30,6 +30,7 @@ export function candidateToRow(candidate: UniverseCandidate, updatedAt: string):
     duplicate_of_id: candidate.duplicateOfId,
     migrated_to_coingecko_id: candidate.migratedToCoingeckoId,
     status_reason: candidate.statusReason,
+    absent_from_source_streak: candidate.absentFromSourceStreak,
 
     source: candidate.source,
     market_cap_rank: candidate.marketCapRank,
@@ -102,6 +103,7 @@ export function rowToCandidate(row: Record<string, unknown>): UniverseCandidate 
     duplicateOfId: row.duplicate_of_id ?? null,
     migratedToCoingeckoId: row.migrated_to_coingecko_id ?? null,
     statusReason: row.status_reason ?? null,
+    absentFromSourceStreak: row.absent_from_source_streak ?? 0,
 
     source: row.source ?? "coingecko_markets",
     marketCapRank: row.market_cap_rank ?? null,

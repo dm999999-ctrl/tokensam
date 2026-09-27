@@ -77,19 +77,54 @@ function applyContractDuplicates(candidates: UniverseCandidate[]): UniverseCandi
   });
 }
 
-/** Mark previously-tracked candidates absent from a fresh catalog fetch as deprecated (AGENTS.md #14). */
+/**
+ * Handle previously-tracked candidates this run did not re-validate
+ * (AGENTS.md #14, #25). Absence is never treated as a single fact with one
+ * meaning:
+ *
+ * - Still present in `/coins/list` (CoinGecko's near-complete catalog), just
+ *   outside this run's ranked top-`poolSize` window: not deprecation
+ *   evidence at all — a token can rank #2,501 on a volatile day without being
+ *   delisted. Left completely untouched, streak reset.
+ * - `/coins/list` itself could not be fetched this run (`listOutage` set):
+ *   a provider outage, not evidence of anything. Left completely untouched.
+ * - Genuinely absent from `/coins/list`: real evidence, but a single
+ *   occurrence could still be a transient/incomplete response, so it only
+ *   raises `needs_review` and increments a streak; only `threshold`
+ *   *consecutive* confirmed absences promote it to `deprecated`.
+ */
 export function applyCatalogAbsenceDeprecation(
   candidates: UniverseCandidate[],
-  currentCoingeckoIds: Set<string>,
+  discoveredIds: Set<string>,
+  listedCoingeckoIds: Set<string>,
+  listOutage: string | null,
+  threshold: number,
   checkedAt: string,
 ): UniverseCandidate[] {
   return candidates.map((candidate) => {
-    if (candidate.universeStatus !== "candidate" && candidate.universeStatus !== "canonical") return candidate;
-    if (currentCoingeckoIds.has(candidate.coingeckoId)) return candidate;
+    if (discoveredIds.has(candidate.coingeckoId)) return candidate; // re-validated this run; run-validation.ts resets its streak
+    if (candidate.universeStatus !== "candidate" && candidate.universeStatus !== "canonical" && candidate.universeStatus !== "needs_review") return candidate;
+    if (listOutage) return candidate; // catalog fetch failed: no absence evidence either way
+
+    if (listedCoingeckoIds.has(candidate.coingeckoId)) {
+      // Still genuinely listed on CoinGecko; only fell outside this run's ranked window.
+      return candidate.absentFromSourceStreak === 0 ? candidate : { ...candidate, absentFromSourceStreak: 0 };
+    }
+
+    const streak = candidate.absentFromSourceStreak + 1;
+    if (streak >= threshold) {
+      return {
+        ...candidate,
+        universeStatus: "deprecated",
+        statusReason: `Confirmed absent from CoinGecko's own catalog (/coins/list) across ${streak} consecutive validation runs, most recently on ${checkedAt}.`,
+        absentFromSourceStreak: streak,
+      };
+    }
     return {
       ...candidate,
-      universeStatus: "deprecated",
-      statusReason: `No longer present in the CoinGecko catalog fetch on ${checkedAt}.`,
+      universeStatus: "needs_review",
+      statusReason: `Absent from CoinGecko's catalog fetch on ${checkedAt} (occurrence ${streak} of ${threshold} before being treated as deprecated).`,
+      absentFromSourceStreak: streak,
     };
   });
 }
