@@ -135,7 +135,22 @@ test("12. Production run (Cardano fixture): the prompt explicitly bans writing i
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never claim or imply causation, and never use causal language \(caused, due to, because of, led to, resulted in, drove, driven by, as a result of, attributable\/attributed to\)/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /Use precise, evidence-derived language, not characterization words \("stable", "significant", "consistent"\) the data does not itself support/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /do not merge them into one statement describing them as similar, consistent, or the same/);
-  assert.equal(PROFILE_PROMPT_VERSION, "profile-8", "the prompt was strengthened again for the Cardano production review (leaked markers, causal claims, overstatement)");
+  assert.match(PROFILE_PROMPT_VERSION, /^profile-\d+$/, "a versioned prompt (bumped further for the Mistral-grounding review), so stored analyses record which instructions produced them");
+});
+
+test("13. Mistral-grounding review: the prompt explicitly requires splitting independently-sourced facts into separate statements, and gives a concrete valid/invalid example", () => {
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /If a sentence would state two or more independently-sourced facts.*do not combine them into one statement citing only one of them/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Split them into separate statement objects, one per fact, each citing only the field\(s\) that fact actually rests on/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /EXAMPLE \(illustrates the shape of a valid vs\. an invalid statement/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /the market-capitalization clause has no field of its own in sourceIds — this fails 4c and 4h/);
+  // The example must teach the schema's real citation mechanism (sourceIds), never an inline
+  // "(obs:...)" marker in the text — that would itself trip the leaked-evidence-marker rule
+  // (evidence-rules.ts findLeakedEvidenceMarker) added for the Cardano review. Every prose sentence
+  // in the example's "text" fields must therefore be marker-free.
+  const exampleBlock = PROFILE_SYSTEM_INSTRUCTION.slice(PROFILE_SYSTEM_INSTRUCTION.indexOf("EXAMPLE (illustrates"), PROFILE_SYSTEM_INSTRUCTION.indexOf("Note what makes the valid version work"));
+  for (const text of [...exampleBlock.matchAll(/"text": "([^"]+)"/g)].map((m) => m[1])) {
+    assert.doesNotMatch(text, /\b(?:obs|hist|calc|scope):[a-z]/i, `the example's own "text" must not itself contain a leaked marker: "${text}"`);
+  }
 });
 
 let passed = 0;

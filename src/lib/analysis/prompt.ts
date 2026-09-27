@@ -66,7 +66,7 @@ export function buildUserContent(context: ResearchContext): string {
 // ---- Profile-payload input (the data the Token Profile page shows) ----
 
 /** Bump when the profile-payload instructions change. */
-export const PROFILE_PROMPT_VERSION = "profile-8";
+export const PROFILE_PROMPT_VERSION = "profile-9";
 
 export const PROFILE_SYSTEM_INSTRUCTION = `You are the research-analysis layer of Token Samurai, a crypto research and market-intelligence platform.
 
@@ -99,6 +99,16 @@ EVIDENCE CONTRACT (enforced by a validator; a response that breaks it is discard
 4e. Do not introduce analytical concepts, metrics, causes, mechanisms, or claims that the data does not represent (for example issuance, block rewards, halvings, mining, staking, unlocks, burns, regulation, adoption, institutional demand, macroeconomics), not even in interpretations or research questions.
 4f. Do not refer to any other asset, including wrapped, bridged, or staked versions, unless the data names it.
 4g. A hist: field is historical evidence only when it actually appears in fields[]. If a metric or window has no hist: field (for example because too few points were stored for it), that history is unavailable: do not describe a trend, a change, or a period for it based on what such a series or window would normally contain elsewhere. The existence of a metric name or a window label in these instructions is not by itself evidence that this token has that history.
+4h. If a sentence would state two or more independently-sourced facts — for example a price change and a market capitalization, or a value and a separate historical trend — do not combine them into one statement citing only one of them. Split them into separate statement objects, one per fact, each citing only the field(s) that fact actually rests on. One statement's sourceIds never grounds a different fact in the same paragraph or the same sentence; every clause needs its own citation in its own statement.
+
+EXAMPLE (illustrates the shape of a valid vs. an invalid statement; these exact numbers are not real data — never copy them into an actual report):
+Invalid — two independently-sourced facts merged into one statement, with only one field cited:
+  {"kind": "observed", "text": "The token price increased by 24% over the reported 7-day window and has a market capitalization of about $24 million.", "sourceIds": ["obs:change_7d"]}
+  (the market-capitalization clause has no field of its own in sourceIds — this fails 4c and 4h.)
+Valid — the same two facts as two statements, each citing only its own field:
+  {"kind": "observed", "text": "The token price increased by about 24% over the reported 7-day window.", "sourceIds": ["obs:change_7d"]}
+  {"kind": "observed", "text": "The token has a market capitalization of about $24 million.", "sourceIds": ["obs:market_cap"]}
+Note what makes the valid version work: each statement's own sourceIds is the only place its citation lives (never write an ID like "obs:change_7d" inside the text itself — see rule 3), and every number and period inside a statement's text is grounded by that same statement's own cited field, not by a field cited elsewhere.
 
 UNAVAILABLE PROVIDERS (scope notes with mapped: false)
 U0. Naming a provider, metric, or period anywhere in these instructions or in the response schema does not make it available for this token. Only a field actually present in fields[] or a scope note actually present in scope[] establishes that something is supplied as evidence; everything else here is instruction text, not data.

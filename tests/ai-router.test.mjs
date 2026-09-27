@@ -477,15 +477,33 @@ test("24y. Task 5: SiliconFlow generates via json_object mode against the correc
   assert.equal(calls[0].init.headers.authorization, "Bearer sk", "standard OpenAI-compatible Bearer auth, matching GLM/Mistral");
 });
 
+test("24z-modelscope. ModelScope generates via json_object mode against the correct base URL, model, and Bearer auth, once configured with a real Production token", async () => {
+  const modelscope = buildProviders({ MODELSCOPE_API_TOKEN: "read-only-token-not-a-real-secret", MODELSCOPE_MODEL: "Qwen/Qwen3.5-72B-Instruct" }).get("modelscope");
+  const calls = [];
+  const fetchImpl = async (url, init) => { calls.push({ url: String(url), init }); return chatOk()(); };
+  const outcome = await modelscope.generateStructuredReport(request, { timeoutMs: 10_000, fetchImpl });
+  assert.equal(outcome.ok, true);
+  assert.equal(calls[0].url, "https://api-inference.modelscope.cn/v1/chat/completions", "the exact Production base URL, from the registry default (MODELSCOPE_BASE_URL is not set)");
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.model, "Qwen/Qwen3.5-72B-Instruct", "the exact Production model, read from MODELSCOPE_MODEL — never hard-coded or defaulted");
+  assert.deepEqual(body.response_format, { type: "json_object" }, "json_schema is a documented ModelScope bug (modelscope/modelscope#1801); json_object is used instead");
+  assert.equal(calls[0].init.headers.authorization, "Bearer read-only-token-not-a-real-secret", "standard OpenAI-compatible Bearer auth, matching every other OpenAI-compatible provider");
+  assert.ok(!JSON.stringify(calls[0]).includes("gemini"), "sanity: this call is scoped to ModelScope only");
+});
+
 test("24x. Task 6: ModelScope HTTP 401 is classified as configuration (not transient): never retried, and it is distinguishable from a fixable infrastructure failure", async () => {
   const env = { MODELSCOPE_API_TOKEN: "mt", MODELSCOPE_MODEL: "Qwen/Qwen3.5-72B-Instruct", GEMINI_API_KEY: "gk", AI_PROVIDER_PRIORITY: "modelscope,gemini" };
   const { result, calls, health } = await route({ modelscope: [http(401)], gemini: [geminiOk()] }, { env });
   assert.equal(calls.modelscope.length, 1, "a 401 is never retried (only transient categories get Task 1's bounded retry)");
   assert.equal(result.attempts.find((item) => item.providerId === "modelscope").category, "configuration");
   // A real, working ModelScope 401 in this same code path (correct Bearer header, correct base
-  // URL, correct request body — verified in test 24y) means the credential itself is invalid or
-  // expired; the router correctly marks it "configuration_error" (a 30-minute probe cooldown, not
+  // URL, correct request body — verified in test 24z-modelscope) means the credential itself is
+  // invalid, expired, or lacks Inference-API scope (a "read only" token type on ModelScope's
+  // dashboard, for example, may not be authorized to call API-Inference at all — that is an
+  // account/token-type issue on ModelScope's side, not something this code can detect or work
+  // around); the router correctly marks it "configuration_error" (a 30-minute probe cooldown, not
   // an infinite retry loop) rather than treating it as a fixable transient/infrastructure failure.
+  // This test deliberately does NOT weaken that classification or add a fallback that hides it.
   assert.equal(health.get("modelscope", Date.now()).status, "configuration_error");
   assert.equal(result.provider.id, "gemini", "the router falls through cleanly to the next provider");
 });

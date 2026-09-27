@@ -593,6 +593,67 @@ test("P37. legitimate DeFiLlama/DEX Screener scope-unavailability statements rem
   assert.deepEqual(found, []);
 });
 
+// ---- Regression: recent Production Mistral (ministral-14b-2512) failures — observed statements
+// without obs:/hist: evidence, unsupported numbers, unsupported "24-hour"/"7 days" periods. prompt.ts
+// rule 4h and its valid/invalid example reinforce splitting independently-sourced facts into their
+// own statements; the (unchanged) validator remains the actual enforcement. Each test below maps to
+// one bullet of the requested regression checklist.
+
+test("P38. an 'observed' marketPerformance statement citing no obs:/hist: field is rejected", () => {
+  const ratio = field(uniPayload, "calc:market_cap_to_tvl");
+  const found = violations(report({
+    marketPerformance: { overview: "Price changes are reported.", statements: [
+      st("observed", "The price changed recently.", [ratio.id]),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /marketPerformance\.statements\[0\]: a "observed" statement must cite an observation \(obs:\) or history \(hist:\) source\./.test(item)));
+});
+
+test("P39. an 'observed' valuation statement citing no obs:/hist: field is rejected", () => {
+  const ratio = field(uniPayload, "calc:market_cap_to_tvl");
+  const found = violations(report({
+    valuation: { overview: "Valuation ratios are reported.", statements: [
+      st("observed", "The valuation ratio was favorable.", [ratio.id]),
+    ] },
+  }), uniPayload);
+  assert.ok(found.some((item) => /valuation\.statements\[0\]: a "observed" statement must cite an observation \(obs:\) or history \(hist:\) source\./.test(item)));
+});
+
+test("P40. a valid obs: statement is accepted", () => {
+  const price = field(uniPayload, "obs:price");
+  const found = violations(report({
+    executiveSummary: { overview: "The price is shown.", statements: [st("observed", `The profile shows a price of ${price.value}.`, [price.id])] },
+  }), uniPayload);
+  assert.deepEqual(found, []);
+});
+
+test("P41. a valid hist: statement (a real, grounded price-history window) is accepted", () => {
+  const hist30d = field(uniPayload, "hist:price_30d");
+  const found = violations(report({
+    marketPerformance: { overview: "Price history is reported over its stated window.", statements: [
+      st("observed", `Price history shows ${hist30d.value}.`, [hist30d.id], hist30d.period),
+    ] },
+  }), uniPayload);
+  assert.deepEqual(found, []);
+});
+
+test("P42. a calc: statement is accepted only when its own inputs/period are grounded, and rejected when its number/period is invented instead", () => {
+  const growth = field(uniPayload, "calc:price_growth_pct");
+  const grounded = violations(report({
+    marketPerformance: { overview: "Price changes are reported over their stated periods.", statements: [
+      st("calculated", `Price decreased by about ${Math.abs(growth.raw).toFixed(1)}% between the two most recent stored observations.`, [growth.id], growth.period),
+    ] },
+  }), uniPayload);
+  assert.deepEqual(grounded, [], "the calculated metric's own real value and period are used, so it passes");
+  const invented = violations(report({
+    marketPerformance: { overview: "Price changes are reported over their stated periods.", statements: [
+      st("calculated", "Price decreased by about 8888% over the past 7 days.", [growth.id]),
+    ] },
+  }), uniPayload);
+  assert.ok(invented.some((item) => /number\(s\) 8888, 7 do not match any value in the cited sources/.test(item)));
+  assert.ok(invented.some((item) => /"7 days" is not a period established by the cited sources/.test(item)));
+});
+
 let failures = 0;
 for (const { name, run } of cases) {
   try {
