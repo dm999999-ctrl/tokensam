@@ -121,4 +121,72 @@ export async function readLatestRawRecords<T extends { id: number; token_id: str
     if (record.token_id && record.chain_id && !latest.has(key)) latest.set(key, record);
   }
   return [...latest.values()];
+}/**
+ * Read the latest observation view in bounded token batches. The view is backed
+ * by a DISTINCT ON query over a growing history table; keeping each request to
+ * a small token set prevents one large PostgREST query from hitting Supabase's
+ * statement timeout as the universe grows.
+ */
+export async function readLatestObservations<T extends Row>(client: SupabaseAdminClient, tokenIds: string[]): Promise<T[]> {
+  if (tokenIds.length === 0) return [];
+  const TOKEN_BATCH_SIZE = 50;
+  const batches = Array.from({ length: Math.ceil(tokenIds.length / TOKEN_BATCH_SIZE) }, (_, index) =>
+    tokenIds.slice(index * TOKEN_BATCH_SIZE, (index + 1) * TOKEN_BATCH_SIZE));
+
+  const readBatch = async (batch: string[]): Promise<T[]> => {
+    const fromView = await readPages<T>((from, to) => client.from("latest_token_metric_observations")
+      .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS)
+      .order("token_id").order("provider_id").order("metric_id").range(from, to), "read latest observations");
+    if (!fromView.missing) return fromView.rows;
+
+    const all = await readPages<T>((from, to) => client.from("token_metric_observations")
+      .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS).is("excluded_reason", null)
+      .order("id").range(from, to), "read observations");
+    return latestPerMetric(all.rows);
+  };
+
+  const results = await Promise.all(batches.map(readBatch));
+  return mergeById(...results);
+}
+/** Observations for specific provider metrics since a cutoff (bounded history for series). */
+export async function readObservationWindow<T extends Row>(
+  client: SupabaseAdminClient,
+  tokenIds: string[],
+  series: { providerId: string; metricId: string }[],
+  since: Date,
+): Promise<T[]> {
+  if (tokenIds.length === 0) return [];
+  const results = await Promise.all(series.map(({ providerId, metricId }) => readPages<T>((from, to) => client
+    .from("token_metric_observations")
+    .select(COLUMNS).in("token_id", tokenIds).eq("provider_id", providerId).eq("metric_id", metricId)
+    .is("excluded_reason", null)
+    .gte("observed_at", since.toISOString())
+    .order("observed_at", { ascending: true }).order("id", { ascending: true })
+    .range(from, to), `read ${providerId} ${metricId} history`)));
+  return results.flatMap((result) => result.rows);
+}
+
+/**
+ * Newest raw record per token for one provider (the view from the Phase 11B
+ * migration), with the original full scan as a fallback.
+ */
+export async function readLatestRawRecords<T extends { id: number; token_id: string | null; chain_id: string | null; collected_at: string }>(
+  client: SupabaseAdminClient,
+  providerId: string,
+  columns: string,
+): Promise<T[]> {
+  const fromView = await readPages<T>((from, to) => client.from("latest_raw_provider_records")
+    .select(columns).eq("provider_id", providerId).order("token_id").order("chain_id").range(from, to), `read latest ${providerId} raw records`);
+  if (!fromView.missing) return fromView.rows;
+
+  const all = await readPages<T>((from, to) => client.from("raw_provider_records")
+    .select(columns).eq("provider_id", providerId).is("excluded_reason", null)
+    .order("collected_at", { ascending: false }).order("id", { ascending: false })
+    .range(from, to), `read ${providerId} raw records`);
+  const latest = new Map<string, T>();
+  for (const record of all.rows) {
+    const key = `${record.token_id}:${record.chain_id}`;
+    if (record.token_id && record.chain_id && !latest.has(key)) latest.set(key, record);
+  }
+  return [...latest.values()];
 }
