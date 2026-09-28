@@ -5,11 +5,9 @@ import { CALCULATED_METRICS } from "../src/lib/metrics/engine.ts";
 import { runMetricsCalculation } from "../src/lib/metrics/run-calculation.ts";
 import { readLatestObservations } from "../src/lib/data/observation-reads.ts";
 import { isAuthorizedRefreshRequest } from "../src/lib/refresh/auth.ts";
-import { REFRESH_POLICY, RATE_LIMIT_COOLDOWN_POLICY, computeRateLimitCooldownMs } from "../src/lib/refresh/config.ts";
+import { REFRESH_POLICY } from "../src/lib/refresh/config.ts";
 import { buildRefreshStatus, relativeAge } from "../src/lib/refresh/freshness.ts";
-import { deadlineSleep, isProviderDue, isProviderInCooldown, overallStatus, runDataRefresh } from "../src/lib/refresh/orchestrator.ts";
-import { classifyProviderError } from "../src/lib/refresh/provider-errors.ts";
-import { CoinGeckoApiError } from "../src/lib/providers/coingecko.ts";
+import { deadlineSleep, isProviderDue, overallStatus, runDataRefresh } from "../src/lib/refresh/orchestrator.ts";
 import { SupabaseRefreshStore } from "../src/lib/refresh/store.ts";
 import { createFakeSupabase } from "./support/fake-supabase.mjs";
 
@@ -54,10 +52,6 @@ function providerFetch(mode, calls = []) {
     const behaviour = url.hostname.includes("coingecko") ? mode.coingecko : url.hostname.includes("dexscreener") ? mode.dexscreener : "unexpected";
     if (behaviour === "unexpected") throw new Error(`Unexpected provider host ${url.hostname}`);
     if (behaviour === "error") return new Response("{}", { status: 500 });
-    if (behaviour === "rate_limited") {
-      const headers = mode.retryAfterHeader ? { "retry-after": mode.retryAfterHeader } : {};
-      return new Response("{}", { status: 429, headers });
-    }
     if (behaviour === "hang") {
       return new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal.reason), { once: true }));
     }
@@ -328,205 +322,6 @@ test("bounded reads match the pre-migration full scan", async () => {
     .map((row) => `${row.token_id}|${row.metric_id}|${row.status}|${row.value}`).sort();
   assert.deepEqual(project(withViews), project(withoutViews));
   assert.ok(withViews.calls.some((call) => call.table === "latest_token_metric_observations"));
-});
-
-// ---- Provider rate-limit cooldown ----
-
-test("cooldown: computeRateLimitCooldownMs doubles per failure and caps at the policy maximum", () => {
-  const policy = RATE_LIMIT_COOLDOWN_POLICY.coingecko;
-  assert.equal(computeRateLimitCooldownMs("coingecko", 1), 10 * 60_000);
-  assert.equal(computeRateLimitCooldownMs("coingecko", 2), 20 * 60_000);
-  assert.equal(computeRateLimitCooldownMs("coingecko", 3), 40 * 60_000);
-  assert.equal(computeRateLimitCooldownMs("coingecko", 4), policy.maxMs, "4th+ caps at the policy maximum");
-  assert.equal(computeRateLimitCooldownMs("coingecko", 4), 60 * 60_000);
-  assert.equal(computeRateLimitCooldownMs("coingecko", 10), 60 * 60_000, "further failures never exceed the cap");
-  assert.equal(computeRateLimitCooldownMs("dexscreener", 1), null, "only providers with a policy get a cooldown");
-});
-
-test("cooldown: isProviderInCooldown reads a future timestamp as active and a past one as expired", () => {
-  const now = new Date("2026-09-29T00:00:00.000Z");
-  assert.equal(isProviderInCooldown(new Date(now.getTime() + 60_000).toISOString(), now), true);
-  assert.equal(isProviderInCooldown(new Date(now.getTime() - 60_000).toISOString(), now), false);
-  assert.equal(isProviderInCooldown(null, now), false);
-  assert.equal(isProviderInCooldown(undefined, now), false);
-});
-
-test("cooldown: classifyProviderError distinguishes a final 429 from other provider failures", () => {
-  assert.equal(classifyProviderError(new CoinGeckoApiError("rate limited", 429)).kind, "rate_limited");
-  assert.equal(classifyProviderError(new CoinGeckoApiError("server error", 502)).kind, "server_error");
-  assert.equal(classifyProviderError(new CoinGeckoApiError("network error", null)).kind, "network_error");
-  assert.equal(classifyProviderError(new Error("something else")).kind, "unknown");
-  const withRetryAfter = new CoinGeckoApiError("rate limited", 429, 45_000);
-  assert.equal(classifyProviderError(withRetryAfter).retryAfterMs, 45_000);
-});
-
-test("2. a final 429 records a rate-limit failure and establishes a ~10 minute cooldown, never a success", async () => {
-  const db = createFakeSupabase({ seed: baseSeed() });
-  const startedAt = new Date("2026-09-29T12:00:00.000Z");
-  const result = await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "scheduled", only: ["coingecko", "dexscreener"],
-    fetchImpl: providerFetch({ coingecko: "rate_limited", dexscreener: "ok" }), sleep: noSleep, now: () => startedAt,
-  });
-
-  const coingecko = result.steps.find((step) => step.step === "coingecko");
-  assert.equal(coingecko.status, "failed", "a final 429 is a failure, never marked as a successful refresh");
-  assert.match(coingecko.error, /HTTP 429/);
-  assert.ok(!coingecko.error.includes(process.env.COINGECKO_API_KEY), "cooldown error text never contains the API key");
-  assert.equal(result.steps.find((step) => step.step === "dexscreener").status, "succeeded", "a healthy provider is unaffected");
-  assert.equal(db.rows("token_metric_observations").filter((row) => row.provider_id === "coingecko").length, 0, "no observations are written for a rate-limited failure");
-
-  const state = db.rows("provider_refresh_state").find((row) => row.provider === "coingecko");
-  assert.ok(state, "a provider_refresh_state row is created");
-  assert.equal(state.consecutive_rate_limit_failures, 1);
-  assert.equal(state.cooldown_until, new Date(startedAt.getTime() + 10 * 60_000).toISOString());
-  assert.ok(state.last_error && !state.last_error.includes(process.env.COINGECKO_API_KEY));
-});
-
-test("healthy CoinGecko refresh clears an existing cooldown and resets the failure count", async () => {
-  const db = createFakeSupabase({ seed: baseSeed({
-    provider_refresh_state: [{ provider: "coingecko", consecutive_rate_limit_failures: 2, cooldown_until: null, last_error: "previously rate limited", updated_at: ago(HOUR) }],
-  }) });
-  const result = await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "scheduled", only: ["coingecko"], fetchImpl: providerFetch({ coingecko: "ok" }), sleep: noSleep,
-  });
-  assert.equal(result.steps.find((step) => step.step === "coingecko").status, "succeeded");
-  const state = db.rows("provider_refresh_state").find((row) => row.provider === "coingecko");
-  assert.equal(state.consecutive_rate_limit_failures, 0);
-  assert.equal(state.cooldown_until, null);
-  assert.equal(state.last_error, null);
-});
-
-test("3. repeated final 429s escalate the cooldown and cap at the configured maximum", async () => {
-  const db = createFakeSupabase({ seed: baseSeed() });
-  const store = new SupabaseRefreshStore(db.client);
-  const T0 = new Date("2026-09-29T00:00:00.000Z").getTime();
-  const options = (nowMs) => ({
-    trigger: "scheduled", only: ["coingecko"], force: true,
-    fetchImpl: providerFetch({ coingecko: "rate_limited" }), sleep: noSleep, now: () => new Date(nowMs),
-  });
-
-  await runDataRefresh(db.client, store, options(T0));
-  let state = db.rows("provider_refresh_state").find((row) => row.provider === "coingecko");
-  assert.equal(state.consecutive_rate_limit_failures, 1);
-  assert.equal(state.cooldown_until, new Date(T0 + 10 * 60_000).toISOString());
-
-  await runDataRefresh(db.client, store, options(T0 + 11 * 60_000));
-  state = db.rows("provider_refresh_state").find((row) => row.provider === "coingecko");
-  assert.equal(state.consecutive_rate_limit_failures, 2);
-  assert.equal(state.cooldown_until, new Date(T0 + 11 * 60_000 + 20 * 60_000).toISOString());
-
-  await runDataRefresh(db.client, store, options(T0 + 32 * 60_000));
-  state = db.rows("provider_refresh_state").find((row) => row.provider === "coingecko");
-  assert.equal(state.consecutive_rate_limit_failures, 3);
-  assert.equal(state.cooldown_until, new Date(T0 + 32 * 60_000 + 40 * 60_000).toISOString());
-
-  await runDataRefresh(db.client, store, options(T0 + 73 * 60_000));
-  state = db.rows("provider_refresh_state").find((row) => row.provider === "coingecko");
-  assert.equal(state.consecutive_rate_limit_failures, 4);
-  assert.equal(state.cooldown_until, new Date(T0 + 73 * 60_000 + 60 * 60_000).toISOString(), "4th failure caps at 60 minutes");
-
-  await runDataRefresh(db.client, store, options(T0 + 134 * 60_000));
-  state = db.rows("provider_refresh_state").find((row) => row.provider === "coingecko");
-  assert.equal(state.consecutive_rate_limit_failures, 5);
-  assert.equal(state.cooldown_until, new Date(T0 + 134 * 60_000 + 60 * 60_000).toISOString(), "further failures stay capped");
-});
-
-test("4-5. a provider in cooldown is skipped by the orchestrator, and other providers still run", async () => {
-  const now = new Date("2026-09-29T12:00:00.000Z");
-  const db = createFakeSupabase({ seed: baseSeed({
-    provider_refresh_state: [{ provider: "coingecko", consecutive_rate_limit_failures: 1, cooldown_until: new Date(now.getTime() + 5 * 60_000).toISOString(), last_error: "rate limited", updated_at: ago(60_000) }],
-  }) });
-  let coingeckoCalled = false;
-  const result = await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "scheduled", now: () => now,
-    collectors: { coingecko: { collect: async () => { coingeckoCalled = true; return {}; } } },
-    fetchImpl: providerFetch({ dexscreener: "ok" }),
-    sleep: noSleep,
-  });
-
-  assert.equal(coingeckoCalled, false, "a cooled-down provider is never invoked");
-  assert.ok(!result.due.includes("coingecko"), "a cooled-down provider is excluded from the due list");
-  const coingecko = result.steps.find((step) => step.step === "coingecko");
-  assert.equal(coingecko.status, "skipped");
-  assert.match(coingecko.error, /cooldown/i);
-  assert.equal(result.steps.find((step) => step.step === "dexscreener").status, "succeeded", "a healthy provider still runs during another provider's cooldown");
-  assert.equal(result.steps.find((step) => step.step === "metrics").status, "succeeded", "metrics still run on the providers that did succeed");
-});
-
-test("9. force bypasses the normal due check but never an active rate-limit cooldown", async () => {
-  const now = new Date("2026-09-29T12:00:00.000Z");
-  const db = createFakeSupabase({ seed: baseSeed({
-    provider_refresh_state: [{ provider: "coingecko", consecutive_rate_limit_failures: 1, cooldown_until: new Date(now.getTime() + 5 * 60_000).toISOString(), last_error: "rate limited", updated_at: ago(60_000) }],
-  }) });
-  let coingeckoCalled = false;
-  const result = await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "manual", force: true, only: ["coingecko"], now: () => now,
-    collectors: { coingecko: { collect: async () => { coingeckoCalled = true; return {}; } } },
-  });
-  assert.equal(coingeckoCalled, false, "force=true still does not re-hammer a provider in an active rate-limit cooldown");
-  assert.equal(result.steps.find((step) => step.step === "coingecko").status, "skipped");
-});
-
-test("6-7. cooldown expiry makes the provider eligible again, and a successful retry resets its state", async () => {
-  const now = new Date("2026-09-29T12:00:00.000Z");
-  const db = createFakeSupabase({ seed: baseSeed({
-    provider_refresh_state: [{ provider: "coingecko", consecutive_rate_limit_failures: 3, cooldown_until: new Date(now.getTime() - 60_000).toISOString(), last_error: "rate limited", updated_at: ago(HOUR) }],
-  }) });
-  const result = await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "scheduled", only: ["coingecko"], now: () => now,
-    fetchImpl: providerFetch({ coingecko: "ok" }), sleep: noSleep,
-  });
-  assert.ok(result.due.includes("coingecko"), "an expired cooldown makes the provider due again");
-  assert.equal(result.steps.find((step) => step.step === "coingecko").status, "succeeded");
-  const state = db.rows("provider_refresh_state").find((row) => row.provider === "coingecko");
-  assert.equal(state.consecutive_rate_limit_failures, 0, "a successful retry resets the failure count");
-  assert.equal(state.cooldown_until, null, "a successful retry clears the cooldown");
-});
-
-test("8. a valid Retry-After is respected when it implies a longer cooldown than the computed backoff", async () => {
-  const db = createFakeSupabase({ seed: baseSeed() });
-  const startedAt = new Date("2026-09-29T12:00:00.000Z");
-  await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "scheduled", only: ["coingecko"], now: () => startedAt,
-    fetchImpl: providerFetch({ coingecko: "rate_limited", retryAfterHeader: "5400" }), // 90 minutes
-    sleep: noSleep,
-  });
-  const state = db.rows("provider_refresh_state").find((row) => row.provider === "coingecko");
-  assert.equal(state.consecutive_rate_limit_failures, 1);
-  assert.equal(state.cooldown_until, new Date(startedAt.getTime() + 90 * 60_000).toISOString(), "Retry-After (90 min) beats the 10-minute default backoff for the first failure");
-});
-
-test("12. normal 60-minute CoinGecko due-scheduling is unchanged when there is no cooldown", async () => {
-  const now = new Date("2026-09-29T12:00:00.000Z");
-  const db = createFakeSupabase({ seed: baseSeed() });
-  assert.equal(isProviderDue("coingecko", new Date(now.getTime() - 30 * 60_000).toISOString(), now), false);
-  const result = await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "scheduled", only: ["coingecko"], now: () => now, fetchImpl: providerFetch({ coingecko: "ok" }), sleep: noSleep,
-  });
-  assert.ok(result.due.includes("coingecko"), "with no prior success and no cooldown, CoinGecko is due as before");
-});
-
-test("10. the run lease is unaffected by the new cooldown state mechanism", async () => {
-  const now = new Date("2026-09-29T12:00:00.000Z");
-  const db = createFakeSupabase({ seed: baseSeed({
-    provider_refresh_state: [{ provider: "coingecko", consecutive_rate_limit_failures: 1, cooldown_until: new Date(now.getTime() + 5 * 60_000).toISOString(), last_error: "rate limited", updated_at: ago(60_000) }],
-  }) });
-  const store = new SupabaseRefreshStore(db.client);
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const options = {
-    trigger: "scheduled", now: () => now,
-    collectors: {
-      coingecko: { collect: async () => ({}) },
-      dexscreener: { collect: async () => { await gate; return {}; } },
-      defillama: { collect: async () => ({}) },
-    },
-  };
-  const first = runDataRefresh(db.client, store, options);
-  const second = await runDataRefresh(db.client, store, options);
-  assert.equal(second.status, "busy", "the single-running-run lease still blocks an overlapping run");
-  release();
-  assert.notEqual((await first).status, "busy");
 });
 
 test("deadline sleep stops waiting once the step budget is spent", async () => {

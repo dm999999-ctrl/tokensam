@@ -30,18 +30,14 @@ type CoinGeckoMarketItem = {
 
 export class CoinGeckoApiError extends Error {
   readonly status: number | null;
-  /** Retry-After from the final failing response, in ms, uncapped; null when absent or not applicable. */
-  readonly retryAfterMs: number | null;
 
   constructor(
     message: string,
     status: number | null,
-    retryAfterMs: number | null = null,
   ) {
     super(message);
     this.name = "CoinGeckoApiError";
     this.status = status;
-    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -77,19 +73,12 @@ function splitIntoBatches<T>(items: T[], batchSize: number): T[][] {
   return batches;
 }
 
-/** Raw Retry-After parse, uncapped; null when the header is absent or unparsable. */
-export function parseRetryAfterMs(value: string | null): number | null {
-  if (!value) return null;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return Math.max(seconds * 1000, 0);
-  const dateMs = Date.parse(value) - Date.now();
-  return Number.isFinite(dateMs) ? Math.max(dateMs, 0) : null;
-}
-
-/** Retry-After for this collector's own request pacing: same parse, capped short so a single retry wait stays bounded. */
 export function retryAfterMs(value: string | null, fallbackMs: number): number {
-  const parsed = parseRetryAfterMs(value);
-  return parsed === null ? fallbackMs : Math.min(parsed, 30_000);
+  if (!value) return fallbackMs;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.min(Math.max(seconds * 1000, 0), 30_000);
+  const dateMs = Date.parse(value) - Date.now();
+  return Number.isFinite(dateMs) ? Math.min(Math.max(dateMs, 0), 30_000) : fallbackMs;
 }
 
 async function fetchMarketBatch(
@@ -138,12 +127,9 @@ async function fetchMarketBatch(
     const retryable = response.status === 429 || response.status >= 500;
     if (!retryable || attempt === MAX_ATTEMPTS) {
       // Avoid including request URLs or response bodies in errors and logs.
-      // Exposed to the refresh orchestrator so a final 429 can size its cooldown.
-      const finalRetryAfterMs = response.status === 429 ? parseRetryAfterMs(response.headers.get("retry-after")) : null;
       throw new CoinGeckoApiError(
         `CoinGecko returned HTTP ${response.status}. Check the API plan, key configuration, and usage limits.`,
         response.status,
-        finalRetryAfterMs,
       );
     }
 

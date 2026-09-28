@@ -51,36 +51,3 @@ export const METRICS_TIMEOUT_MS = 90_000;
  * crashed run does not block refreshes for more than one cron interval.
  */
 export const RUN_LEASE_MS = 10 * MINUTE;
-
-/**
- * Rate-limit cooldown policy, per provider.
- *
- * The Cloudflare Worker scheduler calls /api/cron/refresh every 5 minutes
- * (see docs/automated-refresh.md), far more often than a provider's own
- * refresh interval. A provider whose retries (see the provider's own
- * MAX_ATTEMPTS) end in a final HTTP 429 would otherwise stay "due" and get
- * re-attempted on every one of those 5-minute ticks, adding pressure to a
- * rate limiter that is already refusing requests. Once a provider's final
- * attempt fails with a rate-limit error, the orchestrator instead skips it
- * for a cooldown period that doubles with each consecutive rate-limit
- * failure (capped at maxMs), then resets to zero on the next success.
- *
- * Only providers listed here get cooldown behavior; providers absent from
- * this map are never skipped for rate-limiting and run on their normal
- * due schedule.
- */
-export const RATE_LIMIT_COOLDOWN_POLICY: Partial<Record<ProviderStep, { baseMs: number; multiplier: number; maxMs: number }>> = {
-  coingecko: { baseMs: 10 * MINUTE, multiplier: 2, maxMs: 60 * MINUTE },
-};
-
-/**
- * Cooldown duration for the Nth consecutive rate-limit failure (1-indexed):
- * baseMs * multiplier^(n-1), capped at maxMs. Returns null when the provider
- * has no cooldown policy.
- */
-export function computeRateLimitCooldownMs(step: ProviderStep, consecutiveFailures: number): number | null {
-  const policy = RATE_LIMIT_COOLDOWN_POLICY[step];
-  if (!policy) return null;
-  const exponent = Math.max(consecutiveFailures - 1, 0);
-  return Math.min(policy.baseMs * policy.multiplier ** exponent, policy.maxMs);
-}

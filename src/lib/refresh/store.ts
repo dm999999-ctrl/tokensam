@@ -1,19 +1,10 @@
-import type { ProviderStep, RefreshStep } from "./config.ts";
+import type { RefreshStep } from "./config.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
 export type RunStatus = "running" | "succeeded" | "partial" | "failed" | "skipped";
 export type StepStatus = "succeeded" | "failed" | "timed_out" | "skipped";
 export type RefreshTrigger = "scheduled" | "manual";
-
-export type ProviderCooldownState = {
-  provider: ProviderStep;
-  consecutiveRateLimitFailures: number;
-  /** ISO timestamp; the provider is skipped while this is in the future. Null when no cooldown is active. */
-  cooldownUntil: string | null;
-  lastError: string | null;
-  updatedAt: string;
-};
 
 export type StepRecord = {
   step: RefreshStep;
@@ -34,13 +25,6 @@ export interface RefreshStore {
   finishRun(runId: number, status: Exclude<RunStatus, "running">, finishedAt: Date, summary: Record<string, unknown>, error: string | null): Promise<void>;
   lastSuccessfulSteps(): Promise<Partial<Record<RefreshStep, string>>>;
   latestRun(): Promise<LatestRun | null>;
-
-  /** Null when the provider has never recorded a rate-limit failure. */
-  getProviderCooldown(provider: ProviderStep): Promise<ProviderCooldownState | null>;
-  /** Upserts the provider's rate-limit failure state (atomic on the provider's own row). */
-  recordProviderRateLimitFailure(provider: ProviderStep, now: Date, cooldownUntil: Date, consecutiveFailures: number, lastError: string): Promise<void>;
-  /** Resets consecutive failures to 0 and clears any active cooldown after a successful refresh. */
-  clearProviderCooldown(provider: ProviderStep, now: Date): Promise<void>;
 }
 
 const STEPS: RefreshStep[] = ["coingecko", "defillama", "dexscreener", "defillama_coins", "metrics"];
@@ -144,50 +128,5 @@ export class SupabaseRefreshStore implements RefreshStore {
     if (!data) return null;
     const row = data as { id: number; status: RunStatus; started_at: string; finished_at: string | null };
     return { id: row.id, status: row.status, startedAt: row.started_at, finishedAt: row.finished_at };
-  }
-
-  async getProviderCooldown(provider: ProviderStep): Promise<ProviderCooldownState | null> {
-    const { data, error } = await this.client.from("provider_refresh_state")
-      .select("provider,consecutive_rate_limit_failures,cooldown_until,last_error,updated_at")
-      .eq("provider", provider).maybeSingle();
-    fail(error, `read ${provider} cooldown state`);
-    if (!data) return null;
-    const row = data as {
-      provider: string;
-      consecutive_rate_limit_failures: number;
-      cooldown_until: string | null;
-      last_error: string | null;
-      updated_at: string;
-    };
-    return {
-      provider: row.provider as ProviderStep,
-      consecutiveRateLimitFailures: row.consecutive_rate_limit_failures,
-      cooldownUntil: row.cooldown_until,
-      lastError: row.last_error,
-      updatedAt: row.updated_at,
-    };
-  }
-
-  async recordProviderRateLimitFailure(provider: ProviderStep, now: Date, cooldownUntil: Date, consecutiveFailures: number, lastError: string): Promise<void> {
-    // The refresh run lease already serializes runs, so this upsert never races another run's write.
-    const { error } = await this.client.from("provider_refresh_state").upsert(
-      {
-        provider,
-        consecutive_rate_limit_failures: consecutiveFailures,
-        cooldown_until: cooldownUntil.toISOString(),
-        last_error: lastError,
-        updated_at: now.toISOString(),
-      },
-      { onConflict: "provider" },
-    );
-    fail(error, `record ${provider} rate-limit failure`);
-  }
-
-  async clearProviderCooldown(provider: ProviderStep, now: Date): Promise<void> {
-    const { error } = await this.client.from("provider_refresh_state").upsert(
-      { provider, consecutive_rate_limit_failures: 0, cooldown_until: null, last_error: null, updated_at: now.toISOString() },
-      { onConflict: "provider" },
-    );
-    fail(error, `clear ${provider} cooldown state`);
   }
 }
