@@ -182,18 +182,31 @@ export async function persistProviderSnapshots(
   // row up to the current page's offset on *each* request, so cost grows with page depth across
   // the loop. `id > cursor` lets each page pick up exactly where the previous one left off, so
   // total cost stays close to one pass over the matching rows regardless of how many pages this
-  // takes. Confirmed against production: an equivalent deep OFFSET page (offset 13000, matching
-  // a real CoinGecko-shaped filter) took ~3.4s; the same page reached via `id > cursor` took
-  // ~8ms — this is what actually exhausted the 90s CoinGecko refresh budget in production run
-  // 665 (data_refresh_steps id 492), where existingKeysLookup was still running, unfinished,
-  // when the step was aborted.
+  // takes (fixed in 2935c37).
+  //
+  // Two further costs remained even after that fix, both confirmed against production:
+  //  1. `id > 0` on the first page still forces Postgres to scan (and discard) every row from the
+  //     start of this table's whole history before reaching the recent rows this query actually
+  //     wants, because nothing bounds the scan by `observed_at` before `id` takes over as the sort
+  //     key. That cost grows every day as the table grows, independent of how much data this one
+  //     run touches — this is what was still consuming the entire 90s budget in production run 674
+  //     (data_refresh_steps id 515), after the keyset fix was already live.
+  //  2. Evaluating `token_id = ANY(<230-ish item array>)` as a per-row Postgres filter is
+  //     comparatively expensive CPU work (an EXPLAIN ANALYZE on production measured ~4.2s of added
+  //     execution time from this alone, against ~15k candidate rows) for a condition that, for a
+  //     full-universe CoinGecko refresh, passes for the vast majority of rows anyway.
+  // token_metric_observations_provider_observed_id_idx (see the matching migration) directly
+  // covers (provider_id, observed_at, id), so the DB-side WHERE now only needs provider_id and the
+  // observed_at window — both genuinely selective and index-bound regardless of table size — and
+  // `token_id` membership (unchanged semantics: still every one of `tokenIds`) is instead checked
+  // in JS against a Set, which is O(1) per row instead of Postgres's O(m) linear array scan.
+  const tokenIdSet = new Set(tokenIds);
   let cursorId = 0;
   for (;;) {
     const { data, error } = await client
       .from("token_metric_observations")
       .select("id, token_id, chain_id, metric_id, observed_at, window_days")
       .in("provider_id", providerIds)
-      .in("token_id", tokenIds)
       .gte("observed_at", startAt)
       .lte("observed_at", endAt)
       .gt("id", cursorId)
@@ -203,7 +216,7 @@ export async function persistProviderSnapshots(
     const page = (data ?? []) as {
       id: number; token_id: string; chain_id: string; metric_id: string; observed_at: string; window_days: number | null;
     }[];
-    for (const row of page) existingKeys.add(observationKey(row));
+    for (const row of page) if (tokenIdSet.has(row.token_id)) existingKeys.add(observationKey(row));
     if (page.length < 1000) break;
     cursorId = page[page.length - 1].id;
   }
