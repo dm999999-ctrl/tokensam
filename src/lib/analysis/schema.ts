@@ -7,10 +7,11 @@
 import {
   buildEvidenceIndex,
   findAnalyticalLanguage,
+  findCausalLanguage,
   findDirectionalLanguage,
   findExternalConcept,
+  findLeakedEvidenceMarker,
   findOtherAsset,
-  findUnmappedExplanationIssue,
   findUnsupportedNamedPeriod,
   overviewPeriods,
   sentenceCount,
@@ -92,6 +93,15 @@ export type AnalysisMetadata = {
   validation: { droppedSourceIds: number; untraceableFactualStatements: number };
   /** Non-fatal evidence-contract observations (e.g. analytical wording, an overview period already grounded elsewhere in the section). */
   validationWarnings?: string[];
+  /**
+   * Present only on reports from the deterministic Deep Analysis Engine (analysis/engine/*), never
+   * on the earlier AI-provider-generated reports: which analytical-rule version produced the
+   * findings/narrative, and the same "as of" instant already in contextAsOf, named for the engine's
+   * own report metadata. Their absence on a stored report identifies it as pre-engine.
+   */
+  engineVersion?: string;
+  analysisVersion?: string;
+  dataSnapshotAt?: string | null;
 };
 
 export type TokenAnalysis = ModelAnalysis & { metadata: AnalysisMetadata };
@@ -283,10 +293,22 @@ function citedItems(ids: string[], check: Check): EvidenceItem[] {
  * Language rules that apply to every piece of model text.
  * `concept: "warning"` is used for forward-looking research questions/rationales, where naming a
  * concept to investigate is not the same as asserting it as fact (see furtherResearchQuestions).
+ *
+ * Naming a legitimate Token Samurai data provider (CoinGecko, DeFiLlama, DEX Screener,
+ * GeckoTerminal) is never itself a violation, mapped or not — Token Samurai genuinely uses all of
+ * them, so "no DeFiLlama mapping is available for this token" and "further research could examine
+ * GeckoTerminal pool data" are both accurate. Only a specific fact attributed to a provider that
+ * this context does not contain is a violation, and the grounding rules below already catch that
+ * (an invented number or period), regardless of which provider, if any, the text names.
  */
-function languageRules(value: string, path: string, check: Check, options: { unmappedCheck?: boolean; concept?: "fatal" | "warning" } = {}): void {
+function languageRules(value: string, path: string, check: Check, options: { concept?: "fatal" | "warning" } = {}): void {
+  const marker = findLeakedEvidenceMarker(value);
+  if (marker) check.violations.push(`${path}: contains the internal evidence marker "${marker}"; cite it in sourceIds instead of writing it in the text.`);
   for (const directional of findDirectionalLanguage(value)) {
     check.violations.push(`${path}: directional/sentiment language ("${directional}"); describe observed changes neutrally.`);
+  }
+  for (const causal of findCausalLanguage(value)) {
+    check.violations.push(`${path}: causal language ("${causal}"); the supplied evidence is observational and never establishes that one factor caused another — describe an observed relationship instead.`);
   }
   for (const analytical of findAnalyticalLanguage(value)) {
     check.warnings.push(`${path}: analytical language ("${analytical}") — only a warning while the underlying claim is otherwise grounded.`);
@@ -300,17 +322,6 @@ function languageRules(value: string, path: string, check: Check, options: { unm
   }
   const asset = findOtherAsset(value, context.text, context.tokenSymbol);
   if (asset) check.violations.push(`${path}: refers to ${asset}, a distinct asset the research context does not establish for this token.`);
-  if (options.unmappedCheck === false) return;
-  const unmapped = findUnmappedExplanationIssue(value, context.unmappedProviders);
-  if (unmapped) check.violations.push(`${path}: ${unmapped}.`);
-}
-
-/** A title/detail or question/rationale pair must state the unmapped-provider reason somewhere in the pair. */
-function unmappedPairRule(label: string, explanation: string, path: string, check: Check): void {
-  const context = check.evidence.context;
-  if (!context) return;
-  const issue = findUnmappedExplanationIssue(`${label} ${explanation}`, context.unmappedProviders);
-  if (issue) check.violations.push(`${path}: ${issue}.`);
 }
 
 /** Numbers and named periods in evidence-bearing text must come from the cited items. */
@@ -361,14 +372,20 @@ function section(value: unknown, path: string, check: Check): AnalysisSection {
   });
 
   // Overviews are short syntheses; evidence-derived facts belong in sourced statements. A named
-  // period (e.g. "24 hours") already established by this section's own cited evidence is only a
-  // warning — the underlying fact is grounded, it's just described in the synthesis too — but a
-  // period the section's evidence does not establish, or any other number, is still fatal.
+  // period (e.g. "24 hours") or a number/date already established by this section's own cited
+  // evidence is only a warning — the underlying fact is grounded, it's just described in the
+  // synthesis too — but a period, number, or date the section's evidence does not establish is
+  // still fatal, exactly like a statement's own grounding rule (4c).
   const sectionCited = citedItems(sectionIds, check);
   const { grounded, ungrounded, residual } = overviewPeriods(overview, sectionCited);
   for (const period of grounded) check.warnings.push(`${path}.overview: names a period ("${period}") already established by this section's own cited evidence.`);
   for (const period of ungrounded) check.violations.push(`${path}.overview: names a period ("${period}"); time-based claims belong in sourced statements.`);
-  if (/\d/.test(residual)) check.violations.push(`${path}.overview: contains numbers or dates; state evidence-derived facts as sourced statements.`);
+  const ungroundedOverviewNumbers = ungroundedNumbers(residual, sectionCited);
+  if (ungroundedOverviewNumbers.length) {
+    check.violations.push(`${path}.overview: number(s) ${ungroundedOverviewNumbers.join(", ")} do not match any value in the cited sources.`);
+  } else if (/\d/.test(residual)) {
+    check.warnings.push(`${path}.overview: contains a number or date already established by this section's own cited evidence.`);
+  }
   const sentences = sentenceCount(overview);
   if (sentences > MAX_OVERVIEW_SENTENCES) check.violations.push(`${path}.overview: longer than ${MAX_OVERVIEW_SENTENCES} sentences.`);
   if (statements.length === 0 && sentences > 1) check.violations.push(`${path}: has no statements, so its overview may only be a one-sentence note.`);
@@ -402,10 +419,9 @@ export function validateModelAnalysis(raw: unknown, evidenceOrIds: EvidenceIndex
       check.violations.push(`${path}: an evidence-based risk must cite observed or calculated data.`);
     }
     for (const [field, value] of [["title", risk.title], ["detail", risk.detail]] as const) {
-      languageRules(value, `${path}.${field}`, check, { unmappedCheck: false });
+      languageRules(value, `${path}.${field}`, check);
       groundingRules(value, `${path}.${field}`, risk.sourceIds, check);
     }
-    unmappedPairRule(risk.title, risk.detail, path, check);
     return risk;
   });
 
@@ -433,11 +449,10 @@ export function validateModelAnalysis(raw: unknown, evidenceOrIds: EvidenceIndex
       sourceIds: sourceIds(item.sourceIds, `${path}.sourceIds`, check),
     };
     for (const [field, value] of [["question", question.question], ["rationale", question.rationale]] as const) {
-      languageRules(value, `${path}.${field}`, check, { unmappedCheck: false, concept: "warning" });
+      languageRules(value, `${path}.${field}`, check, { concept: "warning" });
       if (question.sourceIds.length === 0 && /\d/.test(value)) check.violations.push(`${path}.${field}: states figures without citing their sources.`);
       else groundingRules(value, `${path}.${field}`, question.sourceIds, check);
     }
-    unmappedPairRule(question.question, question.rationale, path, check);
     return question;
   });
 

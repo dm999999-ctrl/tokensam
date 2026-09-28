@@ -153,6 +153,12 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
         {model.snapshot.cards.length > 0 ? (
           <div className="tile-grid">{model.snapshot.cards.map((item) => <Tile key={item.id} item={item} emphasis />)}</div>
         ) : <p className="muted-copy">No token-level market figures are stored for this token.</p>}
+        {model.snapshot.onChain.length > 0 ? (
+          <div className="subsection">
+            <h3>On-chain trading</h3>
+            <div className="tile-grid">{model.snapshot.onChain.map((item) => <Tile key={item.id} item={item} />)}</div>
+          </div>
+        ) : null}
         {model.snapshot.changes.length > 0 ? (
           <div className="snapshot-changes">{model.snapshot.changes.map((item) => <Tile key={item.id} item={item} />)}</div>
         ) : null}
@@ -205,14 +211,6 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
         </section>
       ) : null}
 
-      {marketStructure.available ? (
-        <section className="profile-section" id="market-structure" aria-labelledby="structure-title">
-          <SectionHead eyebrow="On-chain DEX markets" title="Market structure" id="structure-title" />
-          <p className="scope-line">{marketStructure.scopeLine}</p>
-          <div className="tile-grid tile-grid-3">{marketStructure.cards.map((item) => <Tile key={item.id} item={item} />)}</div>
-        </section>
-      ) : null}
-
       {history.available ? (
         <section className="profile-section" id="history" aria-labelledby="history-title">
           <SectionHead eyebrow="Token performance" title="Market history" id="history-title" />
@@ -223,6 +221,14 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
               <HistoryCharts data={data.history} series={["tvlUsd"]} label="TVL history" />
             </div>
           ) : null}
+        </section>
+      ) : null}
+
+      {marketStructure.available ? (
+        <section className="profile-section" id="market-structure" aria-labelledby="structure-title">
+          <SectionHead eyebrow="On-chain DEX markets" title="Trading &amp; Liquidity" id="structure-title" />
+          <p className="scope-line">{marketStructure.scopeLine}</p>
+          <div className="tile-grid tile-grid-3">{marketStructure.cards.map((item) => <Tile key={item.id} item={item} />)}</div>
         </section>
       ) : null}
 

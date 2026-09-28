@@ -99,7 +99,8 @@ test("9b. a research question naming an unestablished concept to investigate pas
 test("1. a factual overview with an empty statement array fails", () => {
   const output = validBitcoin();
   output.executiveSummary = { overview: "Bitcoin traded at approximately $84,388 with a market cap of about $1.69 trillion.", statements: [] };
-  expectViolation(output, /executiveSummary\.overview: contains numbers or dates/, "numeric overview");
+  // No statements at all means no evidence is cited by this section, so neither number is grounded.
+  expectViolation(output, /executiveSummary\.overview: number\(s\) 84,388, 1\.69 do not match any value in the cited sources/, "numeric overview");
   const paragraph = validBitcoin();
   paragraph.liquidityMarketStructure = { overview: "DEX metrics are unavailable by design. Derived DEX ratios therefore cannot be calculated.", statements: [] };
   expectViolation(paragraph, /has no statements, so its overview may only be a one-sentence note/, "overview paragraph without statements");
@@ -166,13 +167,19 @@ test("5b. an overview period already established by this section's own cited sta
   expectViolation(ungroundedPeriod, /tokenomics\.overview: names a period \("30-day"\)/, "a period this section's evidence never establishes still fails");
 });
 
-test("6. an incorrect explanation for missing DeFiLlama data fails (Bitcoin has no DeFiLlama mapping)", () => {
+test("6. a data gap about DeFiLlama fails only when it makes an ungrounded factual claim, not merely for naming DeFiLlama or giving its own reason", () => {
+  // This still fails, but for the number/period it invents ("24 hours" not established by scope:defillama),
+  // not for naming DeFiLlama or for the specific reason given — mentioning a legitimate Token Samurai
+  // provider is never itself a violation (see the shared evidence-validation semantics change).
   const output = validBitcoin();
   output.dataGaps[0].detail = "No market-cap/TVL or price/TVL aligned observations exist within the last 24 hours, rendering divergence metrics unavailable.";
-  expectViolation(output, /DeFiLlama.*context's reason is that DeFiLlama has no mapping/, "invented reason");
+  expectViolation(output, /number\(s\) 24 do not match any value in the cited sources/, "an invented number, regardless of the provider named");
+  expectViolation(output, /"24 hours" is not a period established by the cited sources/, "an invented period, regardless of the provider named");
+  // A vague, non-"no mapping" explanation for the same provider now passes: it claims no specific
+  // fact, so it is treated like any other unavailable-data statement, not policed by provider name.
   const vague = validBitcoin();
   vague.dataGaps[0].detail = "Historical observations for DeFiLlama TVL, fees, and revenue are absent.";
-  expectViolation(vague, /without stating the context's reason \(no DeFiLlama mapping/, "reason omitted");
+  assert.deepEqual(violations(vague), [], "a provider mention with no ungrounded fact passes");
 });
 
 test("6b. the unmapped-provider reason may be stated anywhere in a risk or question pair", () => {
@@ -217,17 +224,21 @@ test("stored analyses are re-validated with the context-free rules before displa
 test("the real 2026-09-24 Nemotron Bitcoin output is now rejected, for the reasons the audit identified", () => {
   const found = violations(nemotronOutput);
   const expected = [
-    [/executiveSummary\.overview: contains numbers or dates/, "facts and numbers in overviews"],
-    [/tokenomics\.overview: contains numbers or dates/, "supply figures in the tokenomics overview"],
+    [/executiveSummary\.overview: number\(s\) .*do not match any value in the cited sources/, "facts and numbers in overviews, ungrounded (this section cites nothing)"],
+    [/tokenomics\.overview: number\(s\) .*do not match any value in the cited sources/, "supply figures in the tokenomics overview, ungrounded (this section cites nothing)"],
     [/\("bearish"\)/, "mildly bearish"],
     [/marketPerformance\.overview: names a period \("weekly"\)/, "weekly (a named period in an overview)"],
     [/introduces "issuance"/, "issuance schedule"],
     [/refers to WBTC/, "WBTC as a proxy"],
-    [/dataGaps\[2\]\.detail: explains unavailable DeFiLlama data as .*no mapping/, "wrong DeFiLlama gap reason (aligned observations / last 24 hours)"],
-    [/dataGaps\[1\]\.detail: explains unavailable DeFiLlama data as "Insufficient history"/, "DeFiLlama gap blamed on insufficient history"],
     [/number\(s\) 95\.7 do not match/, "derived 95.7% figure"],
   ];
   for (const [pattern, label] of expected) assert.ok(found.some((item) => pattern.test(item)), `${label} is caught`);
+  // dataGaps[1]/[2] mention DeFiLlama and give their own (not "no mapping") reason for a gap; under
+  // the shared evidence-validation semantics change, naming a legitimate provider and explaining a
+  // gap in its own words is no longer itself a violation — only an actual ungrounded fact would be,
+  // and neither of these two entries states one. The report is still rejected regardless, for the
+  // independent reasons above.
+  assert.ok(!found.some((item) => item.startsWith("dataGaps[1]") || item.startsWith("dataGaps[2]")), "no dataGaps[1]/[2] violation remains once provider-name policing is retired");
   // "Weekly momentum" and "block subsidy" (named only inside a research question) are not
   // rejection reasons by themselves — both are still recorded as warnings, but the report is
   // rejected for the fatal reasons above regardless.

@@ -99,12 +99,8 @@ test("6. the prompt explicitly requires unavailable data to be reported as unava
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /If the needed data is unavailable, say that it is unavailable instead/);
 });
 
-test("7. the evidence validator (evidence-rules.ts, schema.ts, profile-contract.ts) is untouched by this change: only prompt.ts and its version changed", async () => {
-  const { execSync } = await import("node:child_process");
-  const diffNames = execSync("git diff --name-only HEAD", { cwd: process.cwd() }).toString().trim().split("\n").filter(Boolean);
-  const validatorFiles = ["src/lib/analysis/evidence-rules.ts", "src/lib/analysis/schema.ts", "src/lib/analysis/profile-contract.ts", "src/lib/analysis/ai/router.ts"];
-  for (const file of validatorFiles) assert.ok(!diffNames.includes(file), `${file} must not appear in the diff for this change`);
-  assert.equal(PROFILE_PROMPT_VERSION, "profile-5", "the prompt version was bumped so stored analyses record which instructions produced them");
+test("7. the prompt version records the latest strengthening (Production run 3zwsdqzh: marketPerformance period/number grounding)", () => {
+  assert.match(PROFILE_PROMPT_VERSION, /^profile-\d+$/, "a versioned prompt, so stored analyses record which instructions produced them");
 });
 
 test("8. the provider priority list and default order are unchanged by this change", () => {
@@ -117,6 +113,44 @@ test("9. Production run gdj2hhww: the prompt now explicitly covers overview-writ
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /The existence of a metric name or a window label in these instructions is not by itself evidence that this token has that history/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /Naming a provider, metric, or period anywhere in these instructions or in the response schema does not make it available for this token/);
   assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never infer a period from a metric's name.*from a history-series definition, from an API or schema naming convention, or from general knowledge/);
+});
+
+test("10. Production run svtndn2v: the prompt now flatly bars naming an unmapped provider in an overview or research question, and bars inferring a period from a calculated metric's mere existence", () => {
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never name DeFiLlama or DEX Screener in a section overview or in a research question\/rationale unless that provider is mapped/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Being a well-known data provider, being normally useful for that section, appearing in this schema or these instructions, or being something you know about from general knowledge never justifies naming it there/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /describe that section's gap generically instead \("this section's data is unavailable for this token"\) without naming the provider/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /from the mere existence of a calculated metric \(a calc: field carries only the period its own period\/label states, never a commonly-associated one like 24 hours\)/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /A metric that would normally be a 24-hour, 7-day, or 30-day change elsewhere does not make that period available here unless this statement's own cited field states it/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /never write the number without its period, or the period without a matching number/);
+});
+
+test("11. Production run 3zwsdqzh: the prompt explicitly applies period/number grounding to marketPerformance statements, not only overviews", () => {
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /This applies with full force to marketPerformance statements, not only to overviews/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /re-read this statement's own cited field's period\/label text and confirm it states that literal period/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Do not write "24-hour", "7 days", or a percentage change merely because that is how such a metric is conventionally reported/);
+});
+
+test("12. Production run (Cardano fixture): the prompt explicitly bans writing internal evidence IDs into prose, causal-claim language, and merging distinct periods into one 'consistent' claim", () => {
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never write an ID itself \(for example "obs:price", "hist:price_30d", "calc:volume_to_market_cap", "scope:defillama"\) inside a statement's, overview's, risk's, data gap's, or question's text/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Never claim or imply causation, and never use causal language \(caused, due to, because of, led to, resulted in, drove, driven by, as a result of, attributable\/attributed to\)/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Use precise, evidence-derived language, not characterization words \("stable", "significant", "consistent"\) the data does not itself support/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /do not merge them into one statement describing them as similar, consistent, or the same/);
+  assert.match(PROFILE_PROMPT_VERSION, /^profile-\d+$/, "a versioned prompt (bumped further for the Mistral-grounding review), so stored analyses record which instructions produced them");
+});
+
+test("13. Mistral-grounding review: the prompt explicitly requires splitting independently-sourced facts into separate statements, and gives a concrete valid/invalid example", () => {
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /If a sentence would state two or more independently-sourced facts.*do not combine them into one statement citing only one of them/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /Split them into separate statement objects, one per fact, each citing only the field\(s\) that fact actually rests on/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /EXAMPLE \(illustrates the shape of a valid vs\. an invalid statement/);
+  assert.match(PROFILE_SYSTEM_INSTRUCTION, /the market-capitalization clause has no field of its own in sourceIds — this fails 4c and 4h/);
+  // The example must teach the schema's real citation mechanism (sourceIds), never an inline
+  // "(obs:...)" marker in the text — that would itself trip the leaked-evidence-marker rule
+  // (evidence-rules.ts findLeakedEvidenceMarker) added for the Cardano review. Every prose sentence
+  // in the example's "text" fields must therefore be marker-free.
+  const exampleBlock = PROFILE_SYSTEM_INSTRUCTION.slice(PROFILE_SYSTEM_INSTRUCTION.indexOf("EXAMPLE (illustrates"), PROFILE_SYSTEM_INSTRUCTION.indexOf("Note what makes the valid version work"));
+  for (const text of [...exampleBlock.matchAll(/"text": "([^"]+)"/g)].map((m) => m[1])) {
+    assert.doesNotMatch(text, /\b(?:obs|hist|calc|scope):[a-z]/i, `the example's own "text" must not itself contain a leaked marker: "${text}"`);
+  }
 });
 
 let passed = 0;

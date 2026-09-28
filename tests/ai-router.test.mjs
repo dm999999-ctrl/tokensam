@@ -47,7 +47,10 @@ function validReport() {
 }
 function invalidReport() {
   const report = validReport();
-  report.executiveSummary.overview = "Bitcoin is bullish and traded near $84,388.";
+  // Two independent violations: directional language, and a number the cited evidence never
+  // established (unlike the real BTC price this section's own statement cites, $84,388 would be
+  // grounded and only a warning now — see profile-payload.test.mjs P25+).
+  report.executiveSummary.overview = "Bitcoin is bullish and its market cap has reached $999B.";
   return report;
 }
 const evidence = buildEvidenceIndex(context);
@@ -439,7 +442,7 @@ test("24z. Task 3 production scenario: GLM fails fast (HTTP 429), Mistral then g
   assert.equal(result.provider.id, "mistral");
   const mistralAttempt = result.attempts.find((item) => item.providerId === "mistral");
   // Only one later candidate here (none, since mistral is last), so mistral gets its own full cap.
-  assert.equal(mistralAttempt.timeoutMs, 120_000, "well above the ~47.7s the equal-share formula gave it, and its own observed ~41.5s completion time");
+  assert.equal(mistralAttempt.timeoutMs, 60_000, "well above the ~47.7s the equal-share formula gave it, and its own observed ~41.5s completion time");
   assert.equal(calls.glm.length, 2, "GLM's bounded retry (Task 1) still ran before falling back");
 });
 
@@ -474,15 +477,33 @@ test("24y. Task 5: SiliconFlow generates via json_object mode against the correc
   assert.equal(calls[0].init.headers.authorization, "Bearer sk", "standard OpenAI-compatible Bearer auth, matching GLM/Mistral");
 });
 
+test("24z-modelscope. ModelScope generates via json_object mode against the correct base URL, model, and Bearer auth, once configured with a real Production token", async () => {
+  const modelscope = buildProviders({ MODELSCOPE_API_TOKEN: "read-only-token-not-a-real-secret", MODELSCOPE_MODEL: "Qwen/Qwen3.5-72B-Instruct" }).get("modelscope");
+  const calls = [];
+  const fetchImpl = async (url, init) => { calls.push({ url: String(url), init }); return chatOk()(); };
+  const outcome = await modelscope.generateStructuredReport(request, { timeoutMs: 10_000, fetchImpl });
+  assert.equal(outcome.ok, true);
+  assert.equal(calls[0].url, "https://api-inference.modelscope.cn/v1/chat/completions", "the exact Production base URL, from the registry default (MODELSCOPE_BASE_URL is not set)");
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.model, "Qwen/Qwen3.5-72B-Instruct", "the exact Production model, read from MODELSCOPE_MODEL — never hard-coded or defaulted");
+  assert.deepEqual(body.response_format, { type: "json_object" }, "json_schema is a documented ModelScope bug (modelscope/modelscope#1801); json_object is used instead");
+  assert.equal(calls[0].init.headers.authorization, "Bearer read-only-token-not-a-real-secret", "standard OpenAI-compatible Bearer auth, matching every other OpenAI-compatible provider");
+  assert.ok(!JSON.stringify(calls[0]).includes("gemini"), "sanity: this call is scoped to ModelScope only");
+});
+
 test("24x. Task 6: ModelScope HTTP 401 is classified as configuration (not transient): never retried, and it is distinguishable from a fixable infrastructure failure", async () => {
   const env = { MODELSCOPE_API_TOKEN: "mt", MODELSCOPE_MODEL: "Qwen/Qwen3.5-72B-Instruct", GEMINI_API_KEY: "gk", AI_PROVIDER_PRIORITY: "modelscope,gemini" };
   const { result, calls, health } = await route({ modelscope: [http(401)], gemini: [geminiOk()] }, { env });
   assert.equal(calls.modelscope.length, 1, "a 401 is never retried (only transient categories get Task 1's bounded retry)");
   assert.equal(result.attempts.find((item) => item.providerId === "modelscope").category, "configuration");
   // A real, working ModelScope 401 in this same code path (correct Bearer header, correct base
-  // URL, correct request body — verified in test 24y) means the credential itself is invalid or
-  // expired; the router correctly marks it "configuration_error" (a 30-minute probe cooldown, not
+  // URL, correct request body — verified in test 24z-modelscope) means the credential itself is
+  // invalid, expired, or lacks Inference-API scope (a "read only" token type on ModelScope's
+  // dashboard, for example, may not be authorized to call API-Inference at all — that is an
+  // account/token-type issue on ModelScope's side, not something this code can detect or work
+  // around); the router correctly marks it "configuration_error" (a 30-minute probe cooldown, not
   // an infinite retry loop) rather than treating it as a fixable transient/infrastructure failure.
+  // This test deliberately does NOT weaken that classification or add a fallback that hides it.
   assert.equal(health.get("modelscope", Date.now()).status, "configuration_error");
   assert.equal(result.provider.id, "gemini", "the router falls through cleanly to the next provider");
 });
@@ -545,12 +566,12 @@ test("25. with all six providers eligible, the first attempt's budget reserves m
   assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope", "gemini"], "every provider is actually attempted, none skipped for \"deadline\"");
   assert.ok(result.attempts.every((item) => item.skipReason !== "deadline"), "none of the six is starved before it even gets a turn");
   // At the very first attempt, remaining is exactly 240_000 and 5 later providers are reserved
-  // minAttemptMs (20_000) each = 100_000: GLM's budget is min(120_000, 240_000 - 100_000) =
-  // 120_000 — its own full cap, since plenty of budget remains. This is the intended, more
+  // minAttemptMs (20_000) each = 100_000: GLM's budget is min(60_000, 240_000 - 100_000) =
+  // 60_000 — its own full cap, since plenty of budget remains. This is the intended, more
   // realistic allocation (Task 3): an early provider isn't punished down to a bare equal share
   // just because others are queued, as long as their reserved floors are still honored.
   const glmAttempt = attempted.find((item) => item.providerId === "glm");
-  assert.equal(glmAttempt.timeoutMs, 120_000, "GLM gets its own full cap when the reserved floors for later providers still leave enough room");
+  assert.equal(glmAttempt.timeoutMs, 60_000, "GLM gets its own full cap when the reserved floors for later providers still leave enough room");
   assert.equal(calls.gemini.length, 1);
 });
 
@@ -561,13 +582,13 @@ test("26. worst case — every provider fully consumes its own allocated budget,
   // Reserving minAttemptMs (20_000) per later provider, deducted before this one's own budget is
   // computed, guarantees every later provider at least that floor no matter what an earlier one
   // consumes — even in the adversarial case where each provider takes exactly what it was given:
-  //   glm:         reserve 5*20_000=100_000 -> budget min(120_000, 240_000-100_000)      = 120_000
-  //   mistral:     reserve 4*20_000= 80_000 -> budget min(120_000, 120_000- 80_000)      =  40_000
-  //   openrouter:  reserve 3*20_000= 60_000 -> budget min(150_000,  80_000- 60_000)      =  20_000
-  //   siliconflow: reserve 2*20_000= 40_000 -> budget min(120_000,  60_000- 40_000)      =  20_000
-  //   modelscope:  reserve 1*20_000= 20_000 -> budget min(120_000,  40_000- 20_000)      =  20_000
-  //   gemini:      reserve 0        -> budget min( 90_000,  20_000-      0)      =  20_000
-  const expected = [120_000, 40_000, 20_000, 20_000, 20_000, 20_000];
+  //   glm:         reserve 5*20_000=100_000 -> budget min(60_000, 240_000-100_000=140_000) = 60_000
+  //   mistral:     reserve 4*20_000= 80_000 -> budget min(60_000, 180_000- 80_000=100_000) = 60_000
+  //   openrouter:  reserve 3*20_000= 60_000 -> budget min(60_000, 120_000- 60_000= 60_000) = 60_000
+  //   siliconflow: reserve 2*20_000= 40_000 -> budget min(60_000,  60_000- 40_000= 20_000) = 20_000
+  //   modelscope:  reserve 1*20_000= 20_000 -> budget min(60_000,  40_000- 20_000= 20_000) = 20_000
+  //   gemini:      reserve 0        -> budget min(90_000,  20_000-      0= 20_000) = 20_000
+  const expected = [60_000, 60_000, 60_000, 20_000, 20_000, 20_000];
   const providers = ["glm", "mistral", "openrouter", "siliconflow", "modelscope"];
   const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
   const { result } = await route(
@@ -630,6 +651,56 @@ test("30B. requirement F, quantified: after GLM's real 102.555s single (unretrie
   const mistralAttempt = result.attempts.find((item) => item.providerId === "mistral");
   assert.equal(mistralAttempt.timeoutMs, 57_445, "min(120_000 cap, max(20_000, (240_000-102_555) - 4*20_000 reserved for openrouter/siliconflow/modelscope/gemini))");
   assert.ok(mistralAttempt.timeoutMs > 41_500, "comfortably above Mistral's own observed ~41.5s completion time");
+});
+
+// ---- Requirements 2-4: the reported 3zwsdqzh cascade (GLM ~62.5s incl. one bounded retry,
+// Mistral 32.4s validation failure, OpenRouter 60s timeout, SiliconFlow two full ~43.35s timeouts
+// = ~87s, ModelScope and Gemini skipped:deadline — ~245s total, over the 240s budget). A bounded
+// in-adapter retry (adapters.ts) now checks the SAME reservation the router itself enforces before
+// taking a second attempt: if a retry would eat into what later candidates are owed, it is skipped
+// and the failure is returned immediately, exactly like running out of attempts. These tests
+// reproduce the reported cascade's real timing to prove the fix, with no validator or architecture
+// change: SiliconFlow's second attempt is skipped once the budget is tight, and the providers after
+// it (Requirement 2's stated goal) get a real, meaningful attempt instead of "skipped:deadline".
+
+test("31. requirement 2-3: the 3zwsdqzh cascade — GLM retries once (affordable), Mistral fails validation, OpenRouter times out, then SiliconFlow's second retry is skipped once it would eat into ModelScope/Gemini's reserved share, and ModelScope gets a real attempt instead of being starved", async () => {
+  let now = 0;
+  const clock = () => now;
+  const deadlineAt = now + 240_000;
+  const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
+  const { result, calls } = await route(
+    {
+      glm: [advanceBy(60_000, http(429)), advanceBy(470, http(429))],
+      mistral: [advanceBy(32_400, chatOk(invalidReport()))],
+      openrouter: [advanceBy(60_000, timeout())],
+      siliconflow: [advanceBy(47_130, timeout())],
+      modelscope: [advanceBy(1_000, chatOk())],
+    },
+    { env: SIX_ENV, clock, deadlineAt },
+  );
+  assert.equal(calls.glm.length, 2, "GLM's retry was affordable here (huge slack remained) and is unaffected by the budget-aware check");
+  assert.equal(calls.mistral.length, 1, "validation failures are never retried, unaffected");
+  assert.equal(calls.openrouter.length, 1, "OpenRouter has no in-adapter retry to begin with, unaffected");
+  assert.equal(calls.siliconflow.length, 1, "requirement 3: SiliconFlow's second attempt is skipped — remaining (40,000ms) minus the reserved share for ModelScope/Gemini (40,000ms) cannot afford another backoff+timeout (49,130ms)");
+  const attempted = result.attempts.filter((item) => item.action === "attempted");
+  assert.deepEqual(attempted.map((item) => item.providerId), ["glm", "mistral", "openrouter", "siliconflow", "modelscope"], "requirement 2: ModelScope gets a real attempt — not \"skipped:deadline\" as in the reported cascade");
+  assert.equal(result.provider.id, "modelscope");
+  assert.equal(now, 201_000, "well inside the 240s deadline, with meaningful budget still available for ModelScope and (if needed) Gemini");
+});
+
+test("32. requirement 4: GLM's 429 retry is skipped when it would starve the only remaining provider, even though 429 is still a technically-retryable category", async () => {
+  let now = 0;
+  const clock = () => now;
+  const deadlineAt = now + 90_000;
+  const advanceBy = (ms, respond) => () => { now += ms; return respond(); };
+  const { result, calls } = await route(
+    { glm: [advanceBy(60_000, http(429)), http(429)], mistral: [chatOk()] },
+    { env: { ...SIX_ENV, AI_PROVIDER_PRIORITY: "glm,mistral" }, clock, deadlineAt },
+  );
+  assert.equal(calls.glm.length, 1, "remaining after attempt 1 (30,000ms) minus Mistral's reserved share (20,000ms) cannot afford another backoff+timeout (62,000ms), so the retry is skipped");
+  assert.equal(result.provider.id, "mistral", "the router still falls back normally, well within the 90s deadline");
+  const glmAttempt = result.attempts.find((item) => item.providerId === "glm");
+  assert.equal(glmAttempt.category, "transient", "429 handling is otherwise unchanged: still classified transient, still cooled down, never a permanent failure");
 });
 
 let failures = 0;

@@ -21,7 +21,7 @@ export type SectionId =
   | "overview" | "market" | "fundamentals" | "tokenomics" | "market-structure" | "history" | "technical" | "analysis" | "sources";
 
 export type ProfileModel = {
-  snapshot: { cards: Card[]; changes: Card[] };
+  snapshot: { cards: Card[]; onChain: Card[]; changes: Card[] };
   /** Historical Signals: token-scope market series, plus the associated protocol's TVL series (kept separate by scope). */
   history: { available: true; series: HistoryChartKey[]; tvl: boolean } | { available: false; note: SectionNote };
   fundamentals:
@@ -105,14 +105,26 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
     calculatedMetrics.filter((item) => item.category === category && metricSection(item) === section)
       .map((item) => displays.get(item.id)).filter((item): item is MetricDisplay => item !== undefined).map(fromMetric);
 
-  // A. Market snapshot: token scope only.
+  // A. Market snapshot: token scope only. On-chain trading is a headline echo of verified DEX
+  // data (see section D, Trading & Liquidity, for the deeper detail) — shown only when a curated
+  // DEX mapping exists, and only the individual metrics that are actually available; never a
+  // fabricated zero, and never an empty group when nothing on-chain is available.
   const volumeToMcap = metric("volume_to_market_cap");
+  const onChainVolume = metric("dex_aggregate_volume_24h_usd");
+  const onChainLiquidity = metric("dex_aggregate_liquidity_usd");
+  const onChainBuySell = metric("dex_buy_sell_ratio");
   const snapshot = {
     cards: present([
       card("market_cap", "Market cap", formatUsd(token.marketCapUsd, true)),
       card("volume_24h", "Volume · 24h", formatUsd(token.volume24hUsd, true)),
       volumeToMcap ? fromMetric(volumeToMcap) : null,
     ]),
+    onChain: dexMapped ? present([
+      onChainVolume ? fromMetric(onChainVolume) : null,
+      onChainLiquidity ? fromMetric(onChainLiquidity) : null,
+      card("transactions_24h", "Transactions · 24h", formatCount(data.dexActivity.transactions24h)),
+      onChainBuySell ? fromMetric(onChainBuySell) : null,
+    ]) : [],
     changes: inSection("market", "growth"),
   };
 
@@ -185,7 +197,7 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
       distinct(primaryShare, aggregateShare),
     ]);
     marketStructure = cards.length > 0
-      ? { available: true, scopeLine: "On-chain DEX pairs for this exact token address; centralised exchanges excluded.", cards }
+      ? { available: true, scopeLine: "On-chain DEX trading conditions for this exact token address; centralised exchanges excluded.", cards }
       : { available: false, note: { title: "DEX markets", reason: "No exact-address DEX market data is currently stored for this token." } };
   }
 
@@ -237,17 +249,19 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
     indicators: (groups.find((group) => group.category === "divergence")?.indicators ?? []).filter((indicator) => indicator.status !== "unavailable"),
   };
 
-  // Research order: overview → market → fundamentals → tokenomics → market structure → history (evidence)
-  // → technical (derived from it, with cross-metric analysis inside) → AI → sources. Sections without
-  // data are omitted — except Technical, which is persistent: data availability only ever changes an
-  // indicator's own state, never whether the section (or its nav entry) appears.
+  // Research order: overview → market → fundamentals → tokenomics → history (evidence) → trading &
+  // liquidity (current on-chain trading conditions) → technical (derived from history, with
+  // cross-metric analysis inside) → AI → sources. Sections without data are omitted — except
+  // Technical, which is persistent: data availability only ever changes an indicator's own state,
+  // never whether the section (or its nav entry) appears. The "market-structure" id is kept stable
+  // (deep links, scroll targets, tests) even though its visible label is now "Trading & Liquidity".
   const sections: ProfileModel["sections"] = [
     { id: "overview", label: "Overview" },
     { id: "market", label: "Market" },
     ...(fundamentals.available ? [{ id: "fundamentals" as const, label: "Fundamentals" }] : []),
     ...(tokenomics.available ? [{ id: "tokenomics" as const, label: "Tokenomics" }] : []),
-    ...(marketStructure.available ? [{ id: "market-structure" as const, label: "Market Structure" }] : []),
     ...(history.available ? [{ id: "history" as const, label: "History" }] : []),
+    ...(marketStructure.available ? [{ id: "market-structure" as const, label: "Trading & Liquidity" }] : []),
     { id: "technical" as const, label: "Technical" },
     { id: "analysis", label: "AI Analysis" },
     { id: "sources", label: "Sources" },

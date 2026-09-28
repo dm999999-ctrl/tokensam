@@ -72,6 +72,16 @@ export type GenerateOptions = {
   diagnostics?: DiagnosticsOptions;
   /** Injectable for tests; defaults to a real timer. Used only for a bounded in-adapter retry backoff. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Global deadline and the router's reservation for every later candidate provider, given only so
+   * a bounded in-adapter retry can check it would not eat into that reservation before attempting
+   * it (see adapters.ts `generateWithOpenAiCompatible`). Omitted outside the router (e.g. a direct
+   * adapter test): a retry is then always allowed, exactly as before this budget-aware check existed.
+   */
+  deadlineAt?: number;
+  reservedForLaterMs?: number;
+  /** Injectable for tests; defaults to Date.now. Only used together with deadlineAt above. */
+  clock?: () => number;
 };
 
 export interface AIProvider {
