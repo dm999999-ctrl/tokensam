@@ -222,19 +222,22 @@ export function buildProfilePayload(data: LiveTokenProfileData): ProfilePayload 
   }
 
   // ---- Technical indicators and cross-metric analysis ----
+  // Unavailable indicators carry no reading and no provenance — they are not evidence, so the AI
+  // payload only ever sees the ones that actually calculated (available or stale).
   const indicatorField = (indicator: TechnicalIndicator, section: string) => {
     const readings = indicator.readings.map((reading) => { const text = formatReading(reading); return text === null ? null : `${reading.label}: ${text}`; }).filter(Boolean).join(" · ");
     const firstNumeric = indicator.readings.find((reading) => typeof reading.value === "number");
     return field({
       id: `calc:ind_${indicator.id}`, section, label: indicator.name, value: readings || "—",
       raw: typeof firstNumeric?.value === "number" ? firstNumeric.value : null, scope: "calculated",
-      period: indicator.periodLabel, note: [indicator.state, indicator.summary].filter(Boolean).join(" · ") || null, asOf: indicator.provenance.observationEnd,
+      period: indicator.periodLabel, note: [indicator.state, indicator.summary].filter(Boolean).join(" · ") || null, asOf: indicator.provenance!.observationEnd,
     });
   };
-  for (const group of model.technical) for (const indicator of group.indicators) fields.push(indicatorField(indicator, `Technical indicators · ${group.label}`));
+  const wasCalculated = (indicator: TechnicalIndicator) => indicator.status !== "unavailable";
+  for (const group of model.technical) for (const indicator of group.indicators.filter(wasCalculated)) fields.push(indicatorField(indicator, `Technical indicators · ${group.label}`));
   const crossSection = "Cross-metric analysis";
   for (const card of [...model.divergence.comparisons, ...model.divergence.signals]) fields.push(fromCard(card, crossSection, "calculated", {}));
-  for (const indicator of model.divergence.indicators) fields.push(indicatorField(indicator, crossSection));
+  for (const indicator of model.divergence.indicators.filter(wasCalculated)) fields.push(indicatorField(indicator, crossSection));
 
   // ---- Sources & methodology: data freshness and the reference price ----
   for (const row of model.methodology.freshness) {

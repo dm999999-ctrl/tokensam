@@ -39,11 +39,19 @@ export type IndicatorProvenance = {
   calculatedAt: string;
 };
 
+/**
+ * available: calculated from the freshest usable contiguous run.
+ * stale: calculable, but the newest usable sample is older than the indicator's freshness
+ *   allowance; shown anyway with its true (older) date rather than hidden.
+ * unavailable: could not be calculated at all (see `reason`); no readings.
+ */
+export type IndicatorStatus = "available" | "stale" | "unavailable";
+
 export type TechnicalIndicator = {
   id: string;
   name: string;
   category: IndicatorCategory;
-  available: true;
+  status: IndicatorStatus;
   /** Parameter values, e.g. { period: 20, deviations: 2 }. */
   parameters: Record<string, number | string>;
   /** Plain description of the window, e.g. "20 daily closes". */
@@ -52,10 +60,16 @@ export type TechnicalIndicator = {
   summary: string;
   description: string;
   formula: string;
+  /** Populated only when status is "available" or "stale". */
   readings: IndicatorReading[];
   /** Neutral, rule-defined state (never a trading signal), e.g. "Higher high, higher low". */
   state: string | null;
-  provenance: IndicatorProvenance;
+  /** Set only when status is "unavailable". */
+  reason?: "missing_input" | "insufficient_history" | "not_calculable" | "protocol_not_mapped";
+  /** Human-readable reason, shown only when status is "unavailable". */
+  detail?: string;
+  /** null only when status is "unavailable" (nothing was calculated). */
+  provenance: IndicatorProvenance | null;
 };
 
 export type TechnicalIndicatorGroup = { category: IndicatorCategory; label: string; indicators: TechnicalIndicator[] };

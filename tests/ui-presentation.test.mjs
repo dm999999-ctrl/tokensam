@@ -126,7 +126,7 @@ test("3. calculated metrics are placed by scope, never in the wrong section", ()
 
 // ---- Token Profile model ----
 
-test("4. native assets (BTC/ETH/BNB): one explanation per unavailable section and no wrapped substitution", () => {
+test("4. native assets (BTC/ETH/BNB): one explanation per unavailable section and no wrapped substitution; Technical stays in the nav regardless", () => {
   for (const id of ["bitcoin-btc", "ethereum-eth", "bnb-bnb"]) {
     const model = buildProfileModel(profileData(id));
     assert.equal(model.fundamentals.available, false);
@@ -134,6 +134,7 @@ test("4. native assets (BTC/ETH/BNB): one explanation per unavailable section an
     assert.equal(model.marketStructure.available, false);
     assert.match(model.marketStructure.note.reason, /wrapped assets are not substituted/);
     assert.ok(!model.sections.some((section) => section.id === "fundamentals" || section.id === "market-structure"), "unavailable sections are not in the nav");
+    assert.ok(model.sections.some((section) => section.id === "technical"), "Technical Analysis is a persistent section, present even with no technical indicator data");
     assert.equal("notComputed" in model.methodology, false, "no visible list of metrics that could not be computed");
   }
 });
