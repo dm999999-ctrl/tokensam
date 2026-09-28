@@ -144,6 +144,77 @@ test("a deadline that passes mid-run completes tokens already in flight and skip
   assert.equal(outcomes[2].status, "skipped_time_budget");
 });
 
+test("an HTTP attempt whose normal 20s timeout would exceed deadlineAt is capped to the remaining budget", async () => {
+  const originalTimeout = AbortSignal.timeout;
+  const capturedTimeouts = [];
+  AbortSignal.timeout = (ms) => { capturedTimeouts.push(ms); return originalTimeout(ms); };
+  try {
+    const now0 = new Date("2026-01-01T00:00:00.000Z");
+    const fetchImpl = fixedResponse({ data: [] });
+    await fetchGeckoTerminalSnapshotsTolerant([aave], {
+      fetchImpl, sleep: noSleep, now: () => now0, deadlineAt: now0.getTime() + 5_000, // only 5s left, well under the 20s ceiling
+    });
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+  assert.deepEqual(capturedTimeouts, [5_000], "the per-attempt timeout is capped at the remaining deadline budget, not the full 20s");
+});
+
+test("an HTTP attempt keeps the full 20s ceiling when the deadline is far away", async () => {
+  const originalTimeout = AbortSignal.timeout;
+  const capturedTimeouts = [];
+  AbortSignal.timeout = (ms) => { capturedTimeouts.push(ms); return originalTimeout(ms); };
+  try {
+    const now0 = new Date("2026-01-01T00:00:00.000Z");
+    const fetchImpl = fixedResponse({ data: [] });
+    await fetchGeckoTerminalSnapshotsTolerant([aave], {
+      fetchImpl, sleep: noSleep, now: () => now0, deadlineAt: now0.getTime() + 10 * 60_000, // 10 minutes of budget
+    });
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+  assert.deepEqual(capturedTimeouts, [20_000], "plenty of deadline budget never shortens the existing 20s ceiling");
+});
+
+test("a retry cooldown that would cross deadlineAt is not slept, and the token is a time-budget cutoff, not an ordinary failure", async () => {
+  const delays = [];
+  const now0 = new Date("2026-01-01T00:00:00.000Z");
+  // A 429's cooldown floor (20s) plus this tiny remaining budget always crosses the deadline.
+  const fetchImpl = async () => new Response("", { status: 429, headers: { "retry-after": "0" } });
+  const { outcomes, snapshots } = await fetchGeckoTerminalSnapshotsTolerant([aave], {
+    fetchImpl, sleep: async (ms) => delays.push(ms), now: () => now0, deadlineAt: now0.getTime() + 10,
+  });
+  assert.deepEqual(delays, [], "the 20s+ cooldown sleep must never run once it would itself cross the deadline");
+  assert.equal(outcomes[0].status, "skipped_time_budget", "a deadline cutoff is distinguishable from an ordinary 'failed' token");
+  assert.equal(outcomes[0].attempts, 1, "the one HTTP attempt that was actually made is still counted");
+  assert.equal(snapshots.length, 0);
+});
+
+test("the cursor does not advance past a token cut off by the time budget mid-retry, not just one skipped before it started", async () => {
+  const now0 = new Date("2026-01-01T00:00:00.000Z");
+  const fetchImpl = async () => new Response("", { status: 429, headers: { "retry-after": "0" } });
+  const { outcomes, nextTokenId } = await fetchGeckoTerminalSnapshotsTolerant([aave, jupiter, uni], {
+    fetchImpl, sleep: noSleep, now: () => now0, deadlineAt: now0.getTime() + 10,
+  });
+  assert.deepEqual(outcomes.map((o) => o.status), ["skipped_time_budget", "skipped_time_budget", "skipped_time_budget"]);
+  assert.equal(nextTokenId, aave.tokenId, "the next run must resume at aave — the token the time budget cut off — never skip past it as though it were attempted");
+});
+
+test("normal retries remain unchanged when sufficient deadline budget remains", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls === 1) return new Response("", { status: 500 });
+    return new Response(JSON.stringify({ data: [] }), { status: 200 });
+  };
+  const now0 = new Date("2026-01-01T00:00:00.000Z");
+  const { outcomes } = await fetchGeckoTerminalSnapshotsTolerant([aave], {
+    fetchImpl, sleep: noSleep, now: () => now0, deadlineAt: now0.getTime() + 10 * 60_000,
+  });
+  assert.equal(outcomes[0].status, "succeeded", "plenty of deadline budget never turns a normal recovered retry into a time-budget cutoff");
+  assert.equal(outcomes[0].attempts, 2);
+});
+
 test("minRequestIntervalMs may only raise pacing above the built-in floor, never lower it", async () => {
   const delays = [];
   const fetchImpl = fixedResponse({ data: [] });

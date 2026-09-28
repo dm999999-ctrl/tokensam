@@ -62,6 +62,21 @@ export class GeckoTerminalApiError extends Error {
   }
 }
 
+/**
+ * Thrown by `getPools()` when a caller-supplied `deadlineAt` is reached mid-token —
+ * before an HTTP attempt would have meaningful time left, or before a planned
+ * retry/429-cooldown sleep would itself cross the deadline. Distinct from
+ * `GeckoTerminalApiError` so the scheduled collector can classify this token as a
+ * time-budget cutoff (`skipped_time_budget`) rather than an ordinary provider failure,
+ * and so the rotation cursor does not advance past it (see `fetchGeckoTerminalSnapshotsTolerant`).
+ */
+export class GeckoTerminalTimeBudgetExceededError extends Error {
+  constructor() {
+    super("GeckoTerminal request budget exhausted before this token could be completed.");
+    this.name = "GeckoTerminalTimeBudgetExceededError";
+  }
+}
+
 export type GeckoTerminalAsset = ProviderAsset & {
   gtNetworkId: string;
   tokenAddress: string;
@@ -240,24 +255,43 @@ function retryAfterMs(value: string | null, fallback: number): number {
   return Number.isFinite(dateMs) ? Math.min(Math.max(dateMs, 0), 30_000) : fallback;
 }
 
+/**
+ * `deadlineAt`/`now` are optional and only used by the scheduled collector (see
+ * `fetchGeckoTerminalSnapshotsTolerant`); the manual, all-or-nothing sync path
+ * (`GeckoTerminalMarketDataProvider.fetchSnapshots`) never passes them, so its
+ * behavior — a fixed 20 s timeout per attempt, unconstrained retry/backoff sleeps —
+ * is unchanged. When a deadline is supplied:
+ *   - each attempt's own HTTP timeout is capped at `min(20_000, deadlineAt - now())`,
+ *     never longer than the existing 20 s ceiling;
+ *   - a token with no meaningful time left before even starting an attempt, or whose
+ *     next planned retry/429-cooldown sleep would itself cross `deadlineAt`, throws
+ *     `GeckoTerminalTimeBudgetExceededError` instead of attempting or sleeping — the
+ *     caller classifies this as a time-budget cutoff, never an ordinary failure.
+ */
 async function getPools(
   network: string,
   address: string,
-  options: { fetchImpl: typeof fetch; sleep: (ms: number) => Promise<void> },
+  options: { fetchImpl: typeof fetch; sleep: (ms: number) => Promise<void>; now?: () => Date; deadlineAt?: number },
 ): Promise<GeckoTerminalPool[]> {
+  const now = options.now ?? (() => new Date());
   const url = new URL(`networks/${encodeURIComponent(network)}/tokens/${encodeURIComponent(address)}/pools`, BASE_URL);
   url.searchParams.set("page", "1");
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const remainingMs = options.deadlineAt !== undefined ? options.deadlineAt - now().getTime() : null;
+    if (remainingMs !== null && remainingMs <= 0) throw new GeckoTerminalTimeBudgetExceededError();
+    const timeoutMs = remainingMs !== null ? Math.min(20_000, remainingMs) : 20_000;
     let response: Response;
     try {
       response = await options.fetchImpl(url, {
         method: "GET",
         headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
       if (attempt === MAX_ATTEMPTS) throw new GeckoTerminalApiError("GeckoTerminal request failed due to a network error.", null);
-      await options.sleep(500 * 2 ** (attempt - 1));
+      const backoffMs = 500 * 2 ** (attempt - 1);
+      if (options.deadlineAt !== undefined && now().getTime() + backoffMs >= options.deadlineAt) throw new GeckoTerminalTimeBudgetExceededError();
+      await options.sleep(backoffMs);
       continue;
     }
     if (response.ok) {
@@ -271,11 +305,11 @@ async function getPools(
       throw new GeckoTerminalApiError(`GeckoTerminal returned HTTP ${response.status}.`, response.status);
     }
     const fallback = 500 * 2 ** (attempt - 1);
-    await options.sleep(
-      response.status === 429
-        ? Math.max(retryAfterMs(response.headers.get("retry-after"), fallback), RATE_LIMIT_COOLDOWN_FLOOR_MS)
-        : fallback,
-    );
+    const plannedSleepMs = response.status === 429
+      ? Math.max(retryAfterMs(response.headers.get("retry-after"), fallback), RATE_LIMIT_COOLDOWN_FLOOR_MS)
+      : fallback;
+    if (options.deadlineAt !== undefined && now().getTime() + plannedSleepMs >= options.deadlineAt) throw new GeckoTerminalTimeBudgetExceededError();
+    await options.sleep(plannedSleepMs);
   }
   throw new GeckoTerminalApiError("GeckoTerminal request exhausted its retry limit.", null);
 }
@@ -439,10 +473,19 @@ export async function fetchGeckoTerminalSnapshotsTolerant(
     if (index > 0) await sleep(requestInterval);
     const stats = { requests: 0, rateLimited: false };
     try {
-      const pools = await getPools(asset.gtNetworkId, asset.tokenAddress, { fetchImpl: observingFetch(fetchImpl, stats), sleep });
+      const pools = await getPools(asset.gtNetworkId, asset.tokenAddress, {
+        fetchImpl: observingFetch(fetchImpl, stats), sleep, now, deadlineAt: options.deadlineAt,
+      });
       snapshots.push(normalizeGeckoTerminalToken(asset, pools, now().toISOString()));
       outcomes.push({ tokenId: asset.tokenId, status: "succeeded", attempts: stats.requests, rateLimited: stats.rateLimited });
     } catch (error) {
+      // A deadline cutoff mid-token (an in-flight attempt or retry sleep that would have
+      // crossed deadlineAt) is a time-budget cutoff, never an ordinary provider failure:
+      // it must not advance the rotation cursor past this token (see nextTokenId below).
+      if (error instanceof GeckoTerminalTimeBudgetExceededError) {
+        outcomes.push({ tokenId: asset.tokenId, status: "skipped_time_budget", attempts: stats.requests, rateLimited: stats.rateLimited });
+        continue;
+      }
       outcomes.push({
         tokenId: asset.tokenId,
         status: "failed",
