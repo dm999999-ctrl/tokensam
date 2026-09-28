@@ -173,7 +173,7 @@ export const coingeckoTokenIds: Record<string, string> = {
   "ethereum-mask": "mask-network",
   "ethereum-ankr": "ankr",
   "ethereum-perp": "perpetual-protocol",
-  "ethereum-woo": "woo",
+  "ethereum-woo": "woo-network",
   "ethereum-gfi": "goldfinch",
   "ethereum-sd": "stader",
   "ethereum-celr": "celer-network",
