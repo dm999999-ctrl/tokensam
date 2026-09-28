@@ -8,12 +8,15 @@ import {
   DUE_TOLERANCE_MS,
   METRICS_TIMEOUT_MS,
   PROVIDER_STEPS,
+  RATE_LIMIT_COOLDOWN_POLICY,
   REFRESH_POLICY,
   RUN_LEASE_MS,
+  computeRateLimitCooldownMs,
   type ProviderStep,
   type RefreshStep,
 } from "./config.ts";
-import type { RefreshStore, RefreshTrigger, RunStatus, StepRecord } from "./store.ts";
+import { classifyProviderError } from "./provider-errors.ts";
+import type { ProviderCooldownState, RefreshStore, RefreshTrigger, RunStatus, StepRecord } from "./store.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 type Sleep = (durationMs: number) => Promise<void>;
@@ -136,6 +139,11 @@ export function isProviderDue(step: ProviderStep, lastSuccessAt: string | undefi
   return now.getTime() - Date.parse(lastSuccessAt) >= REFRESH_POLICY[step].intervalMs - DUE_TOLERANCE_MS;
 }
 
+/** True while a recorded cooldown is still in the future; false once it has expired or was never set. */
+export function isProviderInCooldown(cooldownUntil: string | null | undefined, now: Date): boolean {
+  return Boolean(cooldownUntil) && Date.parse(cooldownUntil as string) > now.getTime();
+}
+
 export function overallStatus(steps: StepRecord[]): Exclude<RunStatus, "running"> {
   const providers = steps.filter((step) => step.step !== "metrics");
   const attempted = providers.filter((step) => step.status !== "skipped");
@@ -173,7 +181,38 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
   try {
     const lastSuccess = await store.lastSuccessfulSteps();
     const candidates = PROVIDER_STEPS.filter((step) => !options.only || options.only.includes(step));
-    const due = candidates.filter((step) => options.force || isProviderDue(step, lastSuccess[step], now()));
+
+    // Only providers with a rate-limit cooldown policy (see RATE_LIMIT_COOLDOWN_POLICY)
+    // need a cooldown lookup; every other provider runs on its normal due schedule.
+    const cooldownStates = new Map<ProviderStep, ProviderCooldownState | null>();
+    await Promise.all(candidates.filter((step) => RATE_LIMIT_COOLDOWN_POLICY[step]).map(async (step) => {
+      cooldownStates.set(step, await store.getProviderCooldown(step));
+    }));
+
+    // A provider in cooldown is skipped outright: force bypasses the normal due/freshness
+    // check, but never an active rate-limit cooldown, so force cannot re-hammer a limited
+    // provider the moment after it failed.
+    const inCooldownNow = (step: ProviderStep) => isProviderInCooldown(cooldownStates.get(step)?.cooldownUntil, now());
+    const due = candidates.filter((step) => {
+      if (inCooldownNow(step)) return false;
+      const willRun = options.force || isProviderDue(step, lastSuccess[step], now());
+      const cooldown = cooldownStates.get(step);
+      if (willRun && cooldown?.cooldownUntil) {
+        console.log(`${REFRESH_POLICY[step].label} cooldown expired; attempting refresh`);
+      }
+      return willRun;
+    });
+
+    for (const step of candidates) {
+      if (due.includes(step) || !inCooldownNow(step)) continue;
+      const until = cooldownStates.get(step)!.cooldownUntil as string;
+      console.log(`Skipping ${REFRESH_POLICY[step].label} because provider cooldown is active until ${until}`);
+      const startedAt = now().toISOString();
+      await record({
+        step, status: "skipped", startedAt, finishedAt: now().toISOString(), detail: {},
+        error: `Provider cooldown active until ${until}.`,
+      });
+    }
 
     // Different providers have independent rate limits, so they run concurrently;
     // each collector still serializes and paces its own requests.
@@ -199,8 +238,26 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
           REFRESH_POLICY[step].label,
         );
         await record({ step, status: "succeeded", startedAt, finishedAt: now().toISOString(), detail: summarize(result), error: null });
+        // A successful refresh clears any prior rate-limit history, whether or not
+        // this provider has a cooldown policy (the upsert is a cheap no-op otherwise).
+        if (RATE_LIMIT_COOLDOWN_POLICY[step]) {
+          await store.clearProviderCooldown(step, now());
+        }
       } catch (error) {
         const timedOut = deadline.signal.aborted || error instanceof RefreshTimeoutError;
+        if (!timedOut && RATE_LIMIT_COOLDOWN_POLICY[step]) {
+          const failure = classifyProviderError(error);
+          if (failure.kind === "rate_limited") {
+            const previous = cooldownStates.get(step);
+            const consecutiveFailures = (previous?.consecutiveRateLimitFailures ?? 0) + 1;
+            const backoffMs = computeRateLimitCooldownMs(step, consecutiveFailures) ?? 0;
+            // Never a shorter cooldown than a meaningful Retry-After from the provider.
+            const cooldownMs = Math.max(backoffMs, failure.retryAfterMs ?? 0);
+            const cooldownUntil = new Date(now().getTime() + cooldownMs);
+            await store.recordProviderRateLimitFailure(step, now(), cooldownUntil, consecutiveFailures, errorMessage(error));
+            console.log(`${REFRESH_POLICY[step].label} rate limited; entering cooldown until ${cooldownUntil.toISOString()}`);
+          }
+        }
         await record({
           step,
           status: timedOut ? "timed_out" : "failed",
