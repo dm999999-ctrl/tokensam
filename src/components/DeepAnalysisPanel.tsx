@@ -6,13 +6,13 @@ import type { AnalysisState } from "@/lib/analysis/service";
 import type { AnalysisSection, AnalysisStatement, SectionKey, TokenAnalysis } from "@/lib/analysis/schema";
 
 const SECTIONS: { key: SectionKey; letter: string; title: string }[] = [
-  { key: "executiveSummary", letter: "A", title: "Executive Investment Assessment" },
-  { key: "marketPerformance", letter: "B", title: "Market Performance & Regime" },
-  { key: "fundamentalPerformance", letter: "C", title: "Fundamental Analysis" },
-  { key: "valuation", letter: "D", title: "Valuation Analysis" },
-  { key: "marketFundamentalRelationships", letter: "E", title: "Cross-Domain Analysis" },
-  { key: "liquidityMarketStructure", letter: "F", title: "Market Structure & Liquidity" },
-  { key: "tokenomics", letter: "G", title: "Tokenomics & Supply" },
+  { key: "executiveSummary", letter: "A", title: "Executive summary" },
+  { key: "marketPerformance", letter: "B", title: "Market performance" },
+  { key: "fundamentalPerformance", letter: "C", title: "Fundamental performance" },
+  { key: "valuation", letter: "D", title: "Valuation relationships" },
+  { key: "marketFundamentalRelationships", letter: "E", title: "Price vs fundamentals" },
+  { key: "liquidityMarketStructure", letter: "F", title: "Liquidity / market structure" },
+  { key: "tokenomics", letter: "G", title: "Tokenomics" },
 ];
 
 const KIND_LABEL: Record<AnalysisStatement["kind"], string> = {
@@ -74,7 +74,7 @@ function AnalysisBody({ analysis }: { analysis: TokenAnalysis }) {
       {SECTIONS.map(({ key, letter, title }) => <Section key={key} letter={letter} title={title} section={analysis[key]} sources={sources} />)}
 
       <section className="ai-section">
-        <h3><span>H</span>Key Investment Risks</h3>
+        <h3><span>H</span>Risks / areas requiring attention</h3>
         {analysis.risks.length === 0 ? <p className="ai-empty">No evidence-supported risks were identified in the supplied data.</p> : (
           <ul className="ai-statements">
             {analysis.risks.map((risk, index) => (
@@ -89,7 +89,7 @@ function AnalysisBody({ analysis }: { analysis: TokenAnalysis }) {
       </section>
 
       <section className="ai-section">
-        <h3><span>I</span>Data Quality & Analytical Limitations</h3>
+        <h3><span>I</span>Data gaps and uncertainties</h3>
         {analysis.dataGaps.length === 0 ? <p className="ai-empty">No data gaps were listed.</p> : (
           <ul className="ai-statements">
             {analysis.dataGaps.map((gap, index) => (
