@@ -549,7 +549,7 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
     const latestRead = readLatest(client, tokenIds);
     const [latest, tvlHistory, logos, fdv, calculatedRows, volume7d] = await Promise.all([
       latestRead,
-      readObservationWindow<DbObservation>(client, tokenIds, [{ providerId: "defillama", metricId: "tvl_usd" }], tvlSince),
+      readObservationWindow<DbObservation>(client, tokenIds, [{ providerId: "defillama", metricId: "tvl_usd" }], tvlSince).catch((error) => {\n        console.error("Dashboard TVL history read failed (30D TVL change shown as unavailable):", error);\n        return [] as DbObservation[];\n      }),
       readTokenLogos(client, tokenIds),
       readReportedFdv(client, tokenIds),
       // Calculated columns are optional context: a failed read hides them instead of failing the page.
