@@ -399,27 +399,59 @@ async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]):
 
 /** Logos from stored CoinGecko /coins/markets payloads; cosmetic, so failures yield no logos. */
 async function readTokenLogos(client: SupabaseAdminClient, tokenIds: string[]): Promise<Record<string, string>> {
+  const columns = "token_id,collected_at,endpoint_label,image:payload->>image,payload_id:payload->>id";
+  const logos: Record<string, string> = {};
+
+  // The latest-raw view is an optimization, not the source of truth for logos:
+  // its newest record can be a history/backfill record without an image. A
+  // failure here must not discard logos that are already present in raw history.
   try {
-    const columns = "token_id,collected_at,endpoint_label,image:payload->>image,payload_id:payload->>id";
     const latest = await client.from("latest_raw_provider_records").select(columns)
       .eq("provider_id", "coingecko").in("token_id", tokenIds);
-    if (latest.error) throw latest.error;
-    const logos = logosFromRecords((latest.data ?? []) as unknown as LogoRecord[]);
-    // The newest CoinGecko record can be a history backfill (no image); look back for a markets record.
-    const missing = tokenIds.filter((id) => !logos[id]);
-    if (missing.length > 0) {
-      const since = new Date(Date.now() - 14 * DAY_MS).toISOString();
-      const older = await client.from("raw_provider_records").select(columns)
-        .eq("provider_id", "coingecko").eq("endpoint_label", COINGECKO_MARKETS_ENDPOINT).in("token_id", missing)
-        .is("excluded_reason", null).gte("collected_at", since)
-        .order("collected_at", { ascending: false }).limit(missing.length * 48);
-      if (!older.error) Object.assign(logos, logosFromRecords((older.data ?? []) as unknown as LogoRecord[]));
+    if (latest.error) {
+      console.error("Latest CoinGecko logo read failed; falling back to raw logo history:", latest.error);
+    } else {
+      Object.assign(logos, logosFromRecords((latest.data ?? []) as unknown as LogoRecord[]));
     }
-    return logos;
   } catch (error) {
-    console.error("Token logo read failed (logos fall back to monograms):", error);
-    return {};
+    console.error("Latest CoinGecko logo read threw; falling back to raw logo history:", error);
   }
+
+  // Logos are persistent metadata, not a freshness-sensitive metric. If the
+  // newest raw record has no image, recover the newest valid /coins/markets
+  // logo from raw history regardless of age. Batch the lookup so a large
+  // token universe cannot create one oversized PostgREST IN query.
+  const missing = tokenIds.filter((id) => !logos[id]);
+  if (missing.length > 0) {
+    const TOKEN_BATCH_SIZE = 50;
+    const batches = Array.from(
+      { length: Math.ceil(missing.length / TOKEN_BATCH_SIZE) },
+      (_, index) => missing.slice(index * TOKEN_BATCH_SIZE, (index + 1) * TOKEN_BATCH_SIZE),
+    );
+
+    const results = await Promise.allSettled(batches.map(async (batch) => {
+      const older = await client.from("raw_provider_records").select(columns)
+        .eq("provider_id", "coingecko").eq("endpoint_label", COINGECKO_MARKETS_ENDPOINT)
+        .in("token_id", batch).is("excluded_reason", null)
+        .order("collected_at", { ascending: false })
+        .limit(5000);
+      if (older.error) throw older.error;
+      return logosFromRecords((older.data ?? []) as unknown as LogoRecord[]);
+    }));
+
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") {
+        Object.assign(logos, result.value);
+      } else {
+        console.error(
+          "CoinGecko logo history batch " + (index + 1) + "/" + batches.length + " failed:",
+          result.reason,
+        );
+      }
+    }
+  }
+
+  return logos;
 }
 
 type GeckoTerminalRawPool = {
