@@ -2,8 +2,12 @@
 // (AGENTS.md #34). Upserts on `coingecko_id`, so re-running Phase A never
 // duplicates a candidate row; it only updates the columns a fresh check
 // produced. No existing table (`tokens`, `provider_token_mappings`, etc.) is
-// written to here (AGENTS.md #26, #30).
+// written to here (AGENTS.md #26, #30) except `chains`, and only to ensure a
+// row a candidate's already-resolved `chain_id` needs actually exists (see
+// `ensureChainRows` below) — never a raw CoinGecko platform key, never a
+// guess: only canonical (id, name) pairs from `coingecko-chain-map.ts`.
 
+import { CHAIN_ID_TO_NAME } from "./coingecko-chain-map.ts";
 import type { UniverseCandidate } from "./types.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
@@ -166,7 +170,31 @@ export async function loadExistingCandidates(client: SupabaseAdminClient): Promi
   return rows.map(rowToCandidate);
 }
 
+/**
+ * Upsert whichever `chains` rows this candidate batch's already-resolved
+ * `chain_id` values reference, so `universe_candidates_chain_id_fkey` always
+ * has a target. `public.chains` is otherwise populated only by
+ * `run-coingecko-collection.ts`'s Dashboard collector, which may not yet have
+ * run against every chain in the current canonical model on a given Supabase
+ * instance — a chain ID being canonically valid (AGENTS.md #6, #12,
+ * `resolveCanonicalChainId`) does not guarantee the row already exists. Every
+ * id/name pair here comes from `CHAIN_ID_TO_NAME` (canonical-tokens.ts),
+ * never from CoinGecko or any other provider payload.
+ */
+async function ensureChainRows(client: SupabaseAdminClient, candidates: UniverseCandidate[]): Promise<void> {
+  const chainIds = new Set(candidates.map((candidate) => candidate.chainId).filter((chainId): chainId is string => chainId !== null));
+  if (chainIds.size === 0) return;
+  const rows = [...chainIds].map((chainId) => {
+    const name = CHAIN_ID_TO_NAME.get(chainId);
+    if (!name) throw new Error(`No canonical name for chain ID "${chainId}"; resolveCanonicalChainId must never return an ID outside CHAIN_ID_TO_NAME.`);
+    return { id: chainId, name };
+  });
+  const { error } = await client.from("chains").upsert(rows, { onConflict: "id" });
+  assertNoError(error, "upsert chains");
+}
+
 export async function persistCandidates(client: SupabaseAdminClient, candidates: UniverseCandidate[], now: () => Date = () => new Date()): Promise<{ upserted: number }> {
+  await ensureChainRows(client, candidates);
   const updatedAt = now().toISOString();
   const rows = candidates.map((candidate) => candidateToRow(candidate, updatedAt));
   for (let index = 0; index < rows.length; index += CHUNK_SIZE) {

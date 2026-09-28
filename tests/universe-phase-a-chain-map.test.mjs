@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { CANONICAL_CHAIN_IDS, COINGECKO_PLATFORM_TO_CHAIN_ID, resolveCanonicalChainId } from "../src/lib/universe/coingecko-chain-map.ts";
+import { CANONICAL_CHAIN_IDS, CHAIN_ID_TO_NAME, COINGECKO_PLATFORM_TO_CHAIN_ID, resolveCanonicalChainId } from "../src/lib/universe/coingecko-chain-map.ts";
 import { resolvePlatformIdentity } from "../src/lib/universe/coingecko-discovery.ts";
 
 const cases = [];
@@ -23,6 +23,13 @@ test("each documented naming-difference mapping resolves to its real canonical c
 test("an unknown CoinGecko platform key resolves to null, never a guess", () => {
   assert.equal(resolveCanonicalChainId("some-brand-new-l2-nobody-has-heard-of"), null);
   assert.equal(resolveCanonicalChainId(""), null);
+});
+
+test("every canonical chain ID has a name, so persist.ts can always upsert a missing chains row (never guessed, never blank)", () => {
+  for (const chainId of CANONICAL_CHAIN_IDS) {
+    assert.ok(CHAIN_ID_TO_NAME.has(chainId), `"${chainId}" is missing from CHAIN_ID_TO_NAME`);
+    assert.ok(CHAIN_ID_TO_NAME.get(chainId).length > 0);
+  }
 });
 
 test("every mapped value is a real row in the current chains catalog: no candidate can violate the chains foreign key", () => {

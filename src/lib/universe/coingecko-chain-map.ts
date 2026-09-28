@@ -8,11 +8,18 @@
 // exactly the bug this module fixes (a CoinGecko platform key is not
 // guaranteed to equal, or even resemble, the canonical chain ID).
 //
-// The valid target set is derived directly from `canonicalTokens`, the same
-// source `run-coingecko-collection.ts` upserts into `public.chains`, so this
-// resolver can never hand back an ID that isn't a real, current chains row —
-// not by curation discipline alone, but structurally: `resolveCanonicalChainId`
-// refuses to return anything outside that set.
+// The valid target set is derived directly from `canonicalTokens`, so this
+// resolver can never hand back a chain ID outside Token Samurai's own
+// canonical model. That alone is *not* sufficient to satisfy the live
+// `chains` foreign key, though: `public.chains` rows are only ever created by
+// `run-coingecko-collection.ts`'s Dashboard collector, which may not have run
+// against every chain in the current (Phase 16, 104-chain) canonical set on
+// a given Supabase instance yet — a canonically-valid, code-verified chain ID
+// can still be a foreign key that doesn't exist as a row *yet*. `persist.ts`
+// closes that gap by upserting the chain rows a candidate batch actually
+// needs (id + canonical name, from `CHAIN_ID_TO_NAME` below — never a raw
+// CoinGecko platform key) before writing `universe_candidates`, the same
+// pattern `run-coingecko-collection.ts` already uses.
 //
 // A mapping is included only when the CoinGecko platform slug is well-known
 // and stable (used consistently across DeFiLlama, DEX Screener and other
@@ -22,8 +29,11 @@
 
 import { canonicalTokens } from "../../data/canonical-tokens.ts";
 
-/** Every chain ID `public.chains` actually has a row for (via the same upsert `run-coingecko-collection.ts` uses). */
+/** Every chain ID Token Samurai's canonical model recognizes (the same set `run-coingecko-collection.ts` derives `chains` rows from). */
 export const CANONICAL_CHAIN_IDS: ReadonlySet<string> = new Set(canonicalTokens.map((token) => token.chainId));
+
+/** Canonical chain ID -> its display name, for upserting `public.chains` rows Phase A discovers a need for. Never sourced from raw CoinGecko/provider data. */
+export const CHAIN_ID_TO_NAME: ReadonlyMap<string, string> = new Map(canonicalTokens.map((token) => [token.chainId, token.chainName]));
 
 /**
  * CoinGecko platform key -> canonical Token Samurai chain ID.

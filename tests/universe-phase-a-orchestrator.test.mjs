@@ -294,6 +294,45 @@ test("a candidate confirmed absent from /coins/list across the configured thresh
   assert.equal(futuresFinal.absentFromSourceStreak, 3);
 });
 
+test("persistCandidates ensures the referenced chains row exists, even on a Supabase instance that has never collected that chain before", async () => {
+  // Reproduces the live universe_candidates_chain_id_fkey failure: a chain ID
+  // that is canonically valid (resolveCanonicalChainId would confidently
+  // return it) but has no row yet in this database's `chains` table, because
+  // `public.chains` is otherwise only ever populated by the Dashboard
+  // collector (run-coingecko-collection.ts), which this Supabase instance may
+  // not have run against every current canonical chain.
+  const { client, rows } = createFakeSupabase({ seed: { chains: [], universe_candidates: [] } });
+  const candidate = {
+    ...(await import("../src/lib/universe/types.ts")).newCandidateFromMarket({ id: "polygon-native-example", symbol: "EXPOL", name: "Example on Polygon" }, NOW),
+    chainId: "polygon",
+    contractAddress: "0x1234567890123456789012345678901234567890",
+    identityStatus: "valid",
+  };
+
+  await persistCandidates(client, [candidate], () => new Date(NOW));
+
+  const chainRows = rows("chains");
+  assert.equal(chainRows.length, 1, "the missing chains row was created");
+  assert.equal(chainRows[0].id, "polygon");
+  assert.equal(chainRows[0].name, "Polygon", "the name comes from the canonical catalog, never guessed or left blank");
+
+  const candidateRows = rows("universe_candidates");
+  assert.equal(candidateRows[0].chain_id, "polygon");
+});
+
+test("persistCandidates upserts chains without duplicating an already-present row, and skips entirely when no candidate has a chain", async () => {
+  const { client, rows } = createFakeSupabase({ seed: { chains: [{ id: "bnb-chain", name: "BNB Chain" }], universe_candidates: [] } });
+  const { newCandidateFromMarket } = await import("../src/lib/universe/types.ts");
+  const onBnb = { ...newCandidateFromMarket({ id: "bnb-example", symbol: "EXBNB", name: "Example on BNB" }, NOW), chainId: "bnb-chain" };
+  const native = { ...newCandidateFromMarket({ id: "native-example", symbol: "NATV", name: "Native Example" }, NOW), chainId: null, isNative: true };
+
+  await persistCandidates(client, [onBnb, native], () => new Date(NOW));
+
+  const chainRows = rows("chains");
+  assert.equal(chainRows.length, 1, "the already-present chains row is not duplicated, and a null chainId never causes a chains write");
+  assert.equal(chainRows[0].name, "BNB Chain");
+});
+
 test("persisting the same candidate pool twice (idempotent re-run) never duplicates rows", async () => {
   const { client, rows } = createFakeSupabase({ seed: { universe_candidates: [] } });
   const first = await runUniverseValidation({
