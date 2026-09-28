@@ -110,24 +110,34 @@ export async function runCoinGeckoCollection(
     now: options.now,
   });
 
+  const collectorStart = Date.now();
   // Fetch and validate first; failed provider responses do not modify Supabase.
+  const httpStart = Date.now();
   const snapshots = await provider.fetchSnapshots(assets);
+  const httpMs = Date.now() - httpStart;
   if (snapshots.length === 0) {
     throw new Error("CoinGecko returned no records for the configured canonical token mappings.");
   }
 
+  const prepareDbStart = Date.now();
   await prepareDatabase(client);
+  const prepareDbMs = Date.now() - prepareDbStart;
+  const persistStart = Date.now();
   const persisted = await persistProviderSnapshots(client, snapshots);
+  const persistMs = Date.now() - persistStart;
   const returnedIds = new Set(snapshots.map((snapshot) => snapshot.asset.externalAssetId));
   const missingAssetIds = assets
     .filter((asset) => !returnedIds.has(asset.externalAssetId))
     .map((asset) => asset.externalAssetId);
 
+  const { timingMs: persistTimingMs, ...persistCounts } = persisted;
   return {
     provider: "coingecko",
     mappedAssets: assets.length,
     returnedAssets: snapshots.length,
     missingAssetIds,
-    ...persisted,
+    ...persistCounts,
+    // Timing diagnostics only (durations in ms); no request/response bodies, keys, or headers.
+    timingMs: { totalMs: Date.now() - collectorStart, httpMs, prepareDbMs, persistMs, ...persistTimingMs },
   };
 }

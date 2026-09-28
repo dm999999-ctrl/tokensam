@@ -30,15 +30,19 @@ function assertNoError(error: { message: string } | null, operation: string): vo
   if (error) throw new Error(`Supabase ${operation} failed: ${error.message}`);
 }
 
+/** Chunks are independent inserts (no shared state or ordering requirement), so they run concurrently
+ *  instead of one at a time — the wall-clock cost here is per-round-trip network latency, not server work. */
 async function writeInChunks(
   client: SupabaseAdminClient,
   table: "token_metric_observations",
   rows: Record<string, unknown>[],
 ): Promise<void> {
-  for (let index = 0; index < rows.length; index += CHUNK_SIZE) {
-    const { error } = await client.from(table).insert(rows.slice(index, index + CHUNK_SIZE));
+  const chunks: Record<string, unknown>[][] = [];
+  for (let index = 0; index < rows.length; index += CHUNK_SIZE) chunks.push(rows.slice(index, index + CHUNK_SIZE));
+  await Promise.all(chunks.map(async (chunk) => {
+    const { error } = await client.from(table).insert(chunk);
     assertNoError(error, `insert into ${table}`);
-  }
+  }));
 }
 
 function observationKey(row: {
@@ -61,8 +65,8 @@ function observationKey(row: {
 export async function persistProviderSnapshots(
   client: SupabaseAdminClient,
   snapshots: ProviderSnapshot[],
-): Promise<{ rawRecords: number; observations: number; pairMappings: number }> {
-  if (snapshots.length === 0) return { rawRecords: 0, observations: 0, pairMappings: 0 };
+): Promise<{ rawRecords: number; observations: number; pairMappings: number; timingMs: Record<string, number> }> {
+  if (snapshots.length === 0) return { rawRecords: 0, observations: 0, pairMappings: 0, timingMs: {} };
 
   const rawRows = snapshots.map((snapshot) => ({
     provider_id: snapshot.providerId,
@@ -74,21 +78,40 @@ export async function persistProviderSnapshots(
     response_status: "success",
     payload: snapshot.rawPayload,
   }));
-  const insertedRawRows: { id: number; token_id: string; chain_id: string }[] = [];
-  for (const rawBatch of chunkRawRows(rawRows)) {
-    const { data, error } = await client
-      .from("raw_provider_records")
-      .insert(rawBatch)
-      .select("id, token_id, chain_id");
-    assertNoError(error, "insert into raw_provider_records");
-    insertedRawRows.push(...(data ?? []));
-  }
+
+  const providers = [...new Set(snapshots.map((snapshot) => snapshot.providerId))];
+  const tokenIdsForMapping = [...new Set(snapshots.map((snapshot) => snapshot.asset.tokenId))];
+
+  // Raw-record chunk inserts and the mapping-ID lookup are independent of each other
+  // (mapping lookup needs no raw-record IDs), so run them concurrently rather than
+  // paying for each Supabase round trip's network latency one at a time.
+  const rawInsertStart = Date.now();
+  const mappingLookupStart = rawInsertStart;
+  const [insertedRawRows, mappingRows] = await Promise.all([
+    (async () => {
+      const chunks = chunkRawRows(rawRows);
+      const results = await Promise.all(chunks.map(async (rawBatch) => {
+        const { data, error } = await client
+          .from("raw_provider_records")
+          .insert(rawBatch)
+          .select("id, token_id, chain_id");
+        assertNoError(error, "insert into raw_provider_records");
+        return (data ?? []) as { id: number; token_id: string; chain_id: string }[];
+      }));
+      return results.flat();
+    })(),
+    (async () => {
+      const { data, error } = await client.from("provider_token_mappings")
+        .select("id,provider_id,token_id").in("provider_id", providers).in("token_id", tokenIdsForMapping);
+      assertNoError(error, "read provider mapping IDs");
+      return (data ?? []) as { id: number; provider_id: string; token_id: string }[];
+    })(),
+  ]);
+  const rawInsertMs = Date.now() - rawInsertStart;
+  const mappingLookupMs = Date.now() - mappingLookupStart;
 
   const rawIdByTokenAndChain = new Map(
-    (insertedRawRows ?? []).map((row: { id: number; token_id: string; chain_id: string }) => [
-      `${row.token_id}:${row.chain_id}`,
-      row.id,
-    ]),
+    insertedRawRows.map((row) => [`${row.token_id}:${row.chain_id}`, row.id]),
   );
   const pairRows = snapshots.flatMap((snapshot) =>
     (snapshot.providerPairs ?? []).map((pair) => ({
@@ -115,14 +138,7 @@ export async function persistProviderSnapshots(
   }
   // Mapping IDs identify the provider mapping each observation was collected under.
   const mappingIds = new Map<string, number>();
-  {
-    const providers = [...new Set(snapshots.map((snapshot) => snapshot.providerId))];
-    const tokens = [...new Set(snapshots.map((snapshot) => snapshot.asset.tokenId))];
-    const { data, error } = await client.from("provider_token_mappings")
-      .select("id,provider_id,token_id").in("provider_id", providers).in("token_id", tokens);
-    assertNoError(error, "read provider mapping IDs");
-    for (const row of (data ?? []) as { id: number; provider_id: string; token_id: string }[]) mappingIds.set(`${row.provider_id}:${row.token_id}`, row.id);
-  }
+  for (const row of mappingRows) mappingIds.set(`${row.provider_id}:${row.token_id}`, row.id);
   const observationRows = snapshots.flatMap((snapshot) =>
     snapshot.observations.map((observation) => ({
       token_id: observation.tokenId,
@@ -149,6 +165,7 @@ export async function persistProviderSnapshots(
   const startAt = new Date(Math.min(...observedTimes)).toISOString();
   const endAt = new Date(Math.max(...observedTimes)).toISOString();
   const existingKeys = new Set<string>();
+  const existingKeysStart = Date.now();
 
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await client
@@ -163,6 +180,7 @@ export async function persistProviderSnapshots(
     for (const row of data ?? []) existingKeys.add(observationKey(row));
     if (!data || data.length < 1000) break;
   }
+  const existingKeysMs = Date.now() - existingKeysStart;
 
   const newObservationRows = observationRows.filter(
     (row) => !existingKeys.has(observationKey(row as {
@@ -173,6 +191,13 @@ export async function persistProviderSnapshots(
       window_days: number | null;
     })),
   );
+  const observationInsertStart = Date.now();
   await writeInChunks(client, "token_metric_observations", newObservationRows);
-  return { rawRecords: rawRows.length, observations: newObservationRows.length, pairMappings: pairRows.length };
+  const observationInsertMs = Date.now() - observationInsertStart;
+  return {
+    rawRecords: rawRows.length,
+    observations: newObservationRows.length,
+    pairMappings: pairRows.length,
+    timingMs: { rawInsertMs, mappingLookupMs, existingKeysMs, observationInsertMs },
+  };
 }
