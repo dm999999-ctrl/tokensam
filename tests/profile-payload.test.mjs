@@ -654,6 +654,58 @@ test("P42. a calc: statement is accepted only when its own inputs/period are gro
   assert.ok(invented.some((item) => /"7 days" is not a period established by the cited sources/.test(item)));
 });
 
+// ---- Risk profile: 7D/30D/90D volatility must genuinely differ by window, never resample the same
+// rolling-7-day reading under three labels. (historical-series.ts's own rollingVolatility/riskProfile
+// are unchanged and correctly power the Market History chart — see risk-profile.test.mjs's own
+// coverage of that; this covers the single-figure AI-report field this module builds from it.) ----
+
+/** A UTC-midnight timestamp `daysAgo` days before the most recent UTC midnight — real-time based (no
+ *  hardcoded past date), so `dailyCloses`'s "nearest 00:00 UTC" sampling picks it up regardless of
+ *  what day the test actually runs on. */
+function utcMidnight(daysAgo) {
+  const now = new Date();
+  const midnightToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return new Date(midnightToday - daysAgo * 24 * HOUR).toISOString();
+}
+
+function dailyPriceRows(tokenId, values) {
+  let id = 90_000;
+  return values.map(([daysAgo, price]) => ({
+    id: id++, token_id: tokenId, chain_id: "bitcoin", provider_id: "coingecko", metric_id: "price_usd", value: price,
+    status: "available", observed_at: utcMidnight(daysAgo), collected_at: utcMidnight(daysAgo), window_days: null, note: null,
+  }));
+}
+
+test("P43. 7D and 30D risk-profile volatility genuinely differ when the underlying daily closes actually have a different character (previously both silently resampled the same rolling-7-day figure)", async () => {
+  // Calm for days 94..7 (small wiggle), choppy for the most recent week (days 6..0) — a real
+  // difference in realized volatility between the 7-day and 30-day lookback.
+  const values = [];
+  for (let d = 94; d >= 0; d -= 1) {
+    const choppy = d < 7;
+    values.push([d, 80000 + d * 20 + Math.sin(d * (choppy ? 2.3 : 0.4)) * (choppy ? 4000 : 300)]);
+  }
+  const seedData = seed("bitcoin-btc", "bitcoin", []);
+  seedData.token_metric_observations = dailyPriceRows("bitcoin-btc", values);
+  const btc = await profile("bitcoin-btc", seedData);
+  const payload = buildProfilePayload(btc);
+  const risk7d = field(payload, "hist:risk_7d");
+  const risk30d = field(payload, "hist:risk_30d");
+  assert.ok(risk7d && risk30d, "both windows produce a risk-profile field from 95 days of daily closes");
+  assert.notEqual(risk7d.value, risk30d.value, "the 7D and 30D cards must state different readings, not the same rolling-7-day figure twice");
+});
+
+test("P44. a risk-profile window without enough consecutive daily closes for its own lookback omits volatility rather than fabricating or resampling a shorter window's figure", async () => {
+  // Only 40 days of history: not enough for a genuine 90-consecutive-day volatility lookback.
+  const values = [];
+  for (let d = 39; d >= 0; d -= 1) values.push([d, 80000 + Math.sin(d * 0.5) * 1000]);
+  const seedData = seed("bitcoin-btc", "bitcoin", []);
+  seedData.token_metric_observations = dailyPriceRows("bitcoin-btc", values);
+  const btc = await profile("bitcoin-btc", seedData);
+  const payload = buildProfilePayload(btc);
+  const risk90d = field(payload, "hist:risk_90d");
+  if (risk90d) assert.doesNotMatch(risk90d.value, /volatility/i, "no genuine 90-day volatility can be computed from only 40 days of history, so it must not appear at all — never a duplicated 7D/30D figure standing in for it");
+});
+
 let failures = 0;
 for (const { name, run } of cases) {
   try {
