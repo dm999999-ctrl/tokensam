@@ -339,6 +339,18 @@ export function liquidityFindings(payload: ProfilePayload): Finding[] {
 
 // ---- 10. Tokenomics ----
 
+/**
+ * The field's own value already reads "41.0% circulating (4.1B of 10B SUI)" (see
+ * profile-payload.ts's `composition` label) — a self-contained clause built for standalone display.
+ * Appending "of maximum supply" after it verbatim (as the narrative used to) doubles up "circulating
+ * ... of maximum supply." This pulls out just the parenthetical breakdown so the narrative composer
+ * can build its own grammatical sentence around the finding's own `raw` percentage instead, without
+ * fabricating any figure the field did not already report.
+ */
+function parenthetical(value: string): string | null {
+  return /\(([^)]+)\)/.exec(value)?.[1] ?? null;
+}
+
 export function tokenomicsFindings(payload: ProfilePayload): Finding[] {
   const fields = byId(payload);
   const findings: Finding[] = [];
@@ -347,7 +359,7 @@ export function tokenomicsFindings(payload: ProfilePayload): Finding[] {
     findings.push({
       category: "tokenomics", findingType: "low_circulating_share", severity: "moderate",
       evidenceIds: [circulatingShare.id], observationPeriods: [circulatingShare.period],
-      data: { value: circulatingShare.value, raw: circulatingShare.raw },
+      data: { value: circulatingShare.value, raw: circulatingShare.raw, breakdown: parenthetical(circulatingShare.value) },
     });
   }
   const mcapOfFdv = shown(fields, "calc:market_cap_of_fdv");
@@ -363,10 +375,20 @@ export function tokenomicsFindings(payload: ProfilePayload): Finding[] {
   let statedSupplyRelationship = false;
   if (circulating && total && circulating.raw !== null && total.raw !== null) {
     statedSupplyRelationship = true;
+    // The raw numbers decide the fact (never rounded for that comparison), but a displayed compact
+    // figure (e.g. "20.09M") can round two genuinely different raw values to the identical string.
+    // Flag that collision so the narrative composer can fall back to full, still-evidence-grounded
+    // precision instead of asserting "below" between two numbers that read as equal — see the
+    // module comment on never writing a number the cited field's own raw value does not support.
+    const displaysCollide = circulating.raw < total.raw && circulating.value === total.value;
     findings.push({
       category: "tokenomics", findingType: circulating.raw >= total.raw ? "circulating_equals_total" : "circulating_below_total",
       severity: "low", evidenceIds: [circulating.id, total.id], observationPeriods: [circulating.period, total.period],
-      data: { circulatingValue: circulating.value, totalValue: total.value },
+      data: {
+        circulatingValue: circulating.value, totalValue: total.value,
+        circulatingRaw: circulating.raw, totalRaw: total.raw,
+        displaysCollide: displaysCollide ? "yes" : "no",
+      },
     });
   }
   const uncapped = fields.get("obs:maximum_supply");
@@ -413,7 +435,7 @@ export function divergenceFindings(payload: ProfilePayload): Finding[] {
     if (!field || field.raw !== 1) continue;
     findings.push({
       category: "marketFundamentalRelationships", findingType: id.replace("calc:divergence_", "divergence_"), severity: "moderate",
-      evidenceIds: [field.id], observationPeriods: [field.period], data: { label: field.label },
+      evidenceIds: [field.id], observationPeriods: [field.period], data: { label: field.label, intervalHours: field.intervalHours },
     });
   }
   for (const id of DIVERGENCE_POINTS_IDS) {
@@ -421,7 +443,7 @@ export function divergenceFindings(payload: ProfilePayload): Finding[] {
     if (!field || field.raw === null || Math.abs(field.raw) < DIVERGENCE_MIN_POINTS) continue;
     findings.push({
       category: "marketFundamentalRelationships", findingType: `points_${id.replace(/^calc:|_pct_points$/g, "")}`, severity: "low",
-      evidenceIds: [field.id], observationPeriods: [field.period], data: { label: field.label, value: field.value, raw: field.raw },
+      evidenceIds: [field.id], observationPeriods: [field.period], data: { label: field.label, value: field.value, raw: field.raw, intervalHours: field.intervalHours },
     });
   }
   return findings;
@@ -444,7 +466,7 @@ export function riskFindings(payload: ProfilePayload): Finding[] {
     if (field.raw < 0 && Math.abs(field.raw) < SHARP_DRAWDOWN_PCT) continue;
     findings.push({
       category: "risk", findingType: field.raw >= 0 ? "elevated_volatility" : "sharp_drawdown", severity: "high",
-      evidenceIds: [field.id], observationPeriods: [field.period], data: { value: field.value, period: field.period },
+      evidenceIds: [field.id], observationPeriods: [field.period], data: { value: field.value, period: field.period, raw: field.raw },
     });
   }
   // A large FDV/market-cap gap (already surfaced in valuation) is also a risk-relevant dilution characteristic.

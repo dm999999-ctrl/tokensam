@@ -45,6 +45,14 @@ export type PayloadField = {
   periodRequired: boolean;
   note: string | null;
   asOf: string | null;
+  /**
+   * The real measured duration (hours) of a calculated metric's own aligned interval, when known —
+   * the same number already computed for display (see ui/format.ts's `intervalBetween`), never
+   * inferred from a label string. Distinguishes a genuine multi-day comparison from a
+   * snapshot-to-snapshot one (e.g. ~1 hour) for the deterministic engine's horizon classification.
+   * `null` when the interval could not be established (never treated as "known to be short").
+   */
+  intervalHours: number | null;
 };
 
 export type ScopeNote = {
@@ -68,13 +76,13 @@ const PERIOD_24H = "24H (rolling 24 hours, as reported by the provider)";
 const PERIOD_7D = "7D (rolling 7 days, as reported by the provider)";
 const PERIOD_30D_TVL = "30D (TVL observations about 30 days apart)";
 
-function field(input: Omit<PayloadField, "status" | "period" | "periodRequired" | "note" | "asOf" | "raw"> & Partial<Pick<PayloadField, "period" | "note" | "asOf" | "raw">>): PayloadField {
+function field(input: Omit<PayloadField, "status" | "period" | "periodRequired" | "note" | "asOf" | "raw" | "intervalHours"> & Partial<Pick<PayloadField, "period" | "note" | "asOf" | "raw" | "intervalHours">>): PayloadField {
   const period = input.period ?? null;
-  return { raw: null, note: null, asOf: null, ...input, period, periodRequired: period !== null, status: "shown" };
+  return { raw: null, note: null, asOf: null, intervalHours: null, ...input, period, periodRequired: period !== null, status: "shown" };
 }
 
 function notReported(id: string, section: string, label: string, scope: PayloadScope, asOf: string | null = null): PayloadField {
-  return { id, section, label, value: "Not reported", raw: null, status: "not_reported", scope, period: null, periodRequired: false, note: "No valid stored value, so the profile does not show one.", asOf };
+  return { id, section, label, value: "Not reported", raw: null, status: "not_reported", scope, period: null, periodRequired: false, note: "No valid stored value, so the profile does not show one.", asOf, intervalHours: null };
 }
 
 /** Risk-profile percentages exactly as the history chart header formats them. */
@@ -115,7 +123,7 @@ export function buildProfilePayload(data: LiveTokenProfileData): ProfilePayload 
       const kind = presentMetric(metric)?.kind;
       const period = card.interval && (kind === "change" || kind === "points" || kind === "flag") ? (card.note ?? card.interval.label) : null;
       const note = [card.interval?.range ? `Measured ${card.interval.range}` : null, metric.sourceScopes ? `Input scopes: ${metric.sourceScopes}` : null].filter(Boolean).join(" · ") || null;
-      return field({ id: `calc:${card.id}`, section, label: card.label, value: card.value, raw: metric.value, scope: "calculated", period, note, asOf: metric.calculatedAt });
+      return field({ id: `calc:${card.id}`, section, label: card.label, value: card.value, raw: metric.value, scope: "calculated", period, note, asOf: metric.calculatedAt, intervalHours: card.interval?.hours ?? null });
     }
     const known = observed[card.id];
     return field({

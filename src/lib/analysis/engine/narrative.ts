@@ -22,7 +22,9 @@
  */
 
 import type { Finding, Horizon, MultiHorizonPattern } from "./findings.ts";
+import type { ThesisDriver } from "./synthesis.ts";
 import { magnitudeWord, type MomentumPeriodKey } from "./thresholds.ts";
+import { formatCount } from "../../ui/format.ts";
 
 export type RawStatement = { kind: "observed" | "calculated"; text: string; sourceIds: string[]; period: string | null };
 export type RawRisk = { title: string; basis: "evidence" | "data_limitation"; detail: string; sourceIds: string[] };
@@ -78,13 +80,32 @@ function directionWord(raw: number): "increase" | "decrease" {
   return raw >= 0 ? "increase" : "decrease";
 }
 
+/**
+ * Reformats a supply figure at full, comma-grouped precision from its own cited raw number, reusing
+ * the unit/symbol already present in the field's own compact display string (e.g. "20.09M BTC" →
+ * "BTC"). Used only when the compact display of two distinct raw values collides (see
+ * `circulating_below_total`); never invents a unit or a digit the raw number does not itself have.
+ */
+function preciseSupply(raw: number, compactDisplay: string): string {
+  const symbol = compactDisplay.trim().split(/\s+/).pop();
+  const count = formatCount(raw) ?? String(raw);
+  return symbol ? `${count} ${symbol}` : count;
+}
+
 // ---- Market performance: multi-horizon momentum ----
 
 function patternOf(finding: Finding): MultiHorizonPattern {
   return finding.findingType.replace("multi_horizon_", "") as MultiHorizonPattern;
 }
 
-/** The qualitative relationship clause between the shortest and longest horizon (shared logic; wording differs by placement). */
+/**
+ * The qualitative relationship clause between the shortest and longest horizon (shared logic;
+ * wording differs by placement). Callers must only reach this for a genuinely `consistent_up_*` or
+ * `consistent_down_*` pattern, where paceClassification's per-day rate comparison is meaningful —
+ * never for a reversal or mixed pattern, whose shortest/longest horizons disagree in direction and
+ * for which "pace" is not a coherent comparison (see detailMultiHorizonStatement/
+ * summaryMultiHorizonStatement's explicit reversal/mixed branches, which never call this).
+ */
 function paceClause(pattern: MultiHorizonPattern, shortest: Horizon, longest: Horizon, placement: Placement): string {
   if (shortest.key === longest.key) return "";
   const longWord = HORIZON_WORD[longest.key];
@@ -154,6 +175,13 @@ function detailMultiHorizonStatement(finding: Finding): RawStatement {
     text = `Price was essentially unchanged across the available observation windows (${joinList(horizons.map((horizon) => HORIZON_LABEL[horizon.key]))}).`;
   } else if (pattern === "mixed") {
     text = `Price moved ${joinList(parts)}, without a single consistent direction across the available windows.`;
+  } else if (pattern === "reversal_to_down" || pattern === "reversal_to_up") {
+    // A reversal is a change in direction, not a pace comparison — it must never be described as a
+    // "consistent pace" (which paceClause's fallback branch would otherwise say for any pattern that
+    // is not literally accelerating/decelerating, since a reversal's shortest/longest horizons have
+    // opposite signs and paceClassification was never meant to compare them).
+    const turn = pattern === "reversal_to_down" ? "turned negative" : "turned positive";
+    text = `Price moved ${joinList(parts)}. The longer-term ${HORIZON_WORD[longest.key]} trend has been ${pattern === "reversal_to_down" ? "positive" : "negative"}, but the most recent ${HORIZON_WORD[shortest.key]} movement has ${turn}, marking a reversal within the observed history.`;
   } else {
     text = `Price moved ${joinList(parts)}.${paceClause(pattern, shortest, longest, "detail")}`;
   }
@@ -267,9 +295,17 @@ export function liquidityStatement(finding: Finding, placement: Placement): RawS
 
 export function tokenomicsStatement(finding: Finding, placement: Placement): RawStatement {
   if (finding.findingType === "low_circulating_share") {
+    // The field's own value is already a self-contained clause ("41.0% circulating (4.1B of 10B
+    // SUI)"); appending "of maximum supply" after it verbatim reads as "...circulating (...) of
+    // maximum supply" — an awkward double phrasing. The percentage is reformatted fresh from the
+    // same cited raw number (the module's established pattern, see `pct()`), with the field's own
+    // parenthetical breakdown carried over unchanged, never fabricated.
+    const raw = finding.data.raw as number;
+    const breakdown = finding.data.breakdown;
+    const share = `${raw.toFixed(1)}%`;
     const text = placement === "summary"
       ? "A majority of this token's eventual total supply has yet to enter circulation."
-      : `Circulating supply represents ${str(finding.data.value)} of maximum supply, so a majority of eventual total supply has yet to enter circulation.`;
+      : `${share} of maximum supply is currently circulating${breakdown ? ` (${str(breakdown)})` : ""}, so a majority of eventual total supply has yet to enter circulation.`;
     return { kind: statementKind(finding), text, sourceIds: finding.evidenceIds, period: primaryPeriod(finding) };
   }
   if (finding.findingType === "market_cap_of_fdv") {
@@ -285,9 +321,18 @@ export function tokenomicsStatement(finding: Finding, placement: Placement): Raw
     return { kind: statementKind(finding), text, sourceIds: finding.evidenceIds, period: primaryPeriod(finding) };
   }
   if (finding.findingType === "circulating_below_total") {
+    // The raw values are genuinely different (that is what put this finding here at all), but a
+    // compact display figure can round both to the same string (e.g. "20.09M" for two values a few
+    // hundred tokens apart) — asserting "below" between two textually identical numbers would
+    // contradict the evidence as displayed. When that collision happens, fall back to full,
+    // comma-grouped precision from the same cited raw numbers (never a fabricated or estimated
+    // figure) so the relationship stated is truthful at the precision actually shown.
+    const collide = finding.data.displaysCollide === "yes";
+    const circulatingText = collide ? preciseSupply(finding.data.circulatingRaw as number, str(finding.data.circulatingValue)) : str(finding.data.circulatingValue);
+    const totalText = collide ? preciseSupply(finding.data.totalRaw as number, str(finding.data.totalValue)) : str(finding.data.totalValue);
     const text = placement === "summary"
       ? "A portion of this token's already-issued supply is not yet in circulation."
-      : `Circulating supply (${str(finding.data.circulatingValue)}) is below total supply (${str(finding.data.totalValue)}), indicating a portion of already-issued tokens is not yet in circulation.`;
+      : `Circulating supply (${circulatingText}) is below total supply (${totalText}), indicating a portion of already-issued tokens is not yet in circulation.`;
     return { kind: statementKind(finding), text, sourceIds: finding.evidenceIds, period: primaryPeriod(finding) };
   }
   if (finding.findingType === "supply_uncapped") {
@@ -535,15 +580,39 @@ const RESEARCH_QUESTIONS: { when: (categories: Set<string>) => boolean; question
   },
 ];
 
-export function furtherResearchQuestions(findings: Finding[]): RawQuestion[] {
+/**
+ * Whether `thesisDrivers` (the synthesis layer's deterministic materiality ranking — see
+ * engine/synthesis.ts) contains a driver whose underlying finding(s) match one of these substrings
+ * of its content-derived findingId (`category:findingType:evidenceIds`). A finding merely existing
+ * is not enough to warrant a research question — see the module comment on `furtherResearchQuestions`
+ * below: only findings synthesis judged material enough to become a Thesis Driver qualify, so a lone
+ * low-materiality finding (e.g. a token whose only signal is supply structure) never triggers a
+ * "does the momentum persist" question it has no momentum driver to support.
+ */
+function hasDriverMatching(thesisDrivers: ThesisDriver[], test: (driver: ThesisDriver) => boolean): boolean {
+  return thesisDrivers.some(test);
+}
+
+/**
+ * Research questions are the report's forward-looking section, so they must be warranted by
+ * something the analysis actually judged material — never generated merely because a finding of a
+ * given category happens to exist (see the calibration note above `hasDriverMatching`). Two
+ * exceptions are legitimate even without a Thesis Driver: missing/insufficient history and an
+ * unmapped provider are themselves the story (thin data is a genuine research prompt on its own),
+ * so those two remain keyed off the raw findings rather than the synthesis ranking.
+ */
+export function furtherResearchQuestions(findings: Finding[], thesisDrivers: ThesisDriver[]): RawQuestion[] {
   const categories = new Set<string>();
   for (const finding of findings) {
-    if (finding.findingType.startsWith("multi_horizon_consistent_up")) categories.add("positive_momentum");
-    if (finding.findingType.startsWith("multi_horizon_consistent_down")) categories.add("negative_momentum");
     if (finding.findingType.startsWith("insufficient_history_")) categories.add("missing_history");
     if (finding.findingType.startsWith("unmapped_")) categories.add("mapping_limitation");
-    if (finding.category === "marketFundamentalRelationships" && finding.findingType.startsWith("divergence_")) categories.add("divergence");
-    if (finding.findingType === "dilution_gap" || finding.findingType === "fdv_market_cap_gap" || finding.findingType.startsWith("ratio_")) categories.add("valuation_expansion");
   }
+  if (hasDriverMatching(thesisDrivers, (driver) => driver.findingIds.some((id) => id.includes(":multi_horizon_consistent_up")))) categories.add("positive_momentum");
+  if (hasDriverMatching(thesisDrivers, (driver) => driver.findingIds.some((id) => id.includes(":multi_horizon_consistent_down")))) categories.add("negative_momentum");
+  if (hasDriverMatching(thesisDrivers, (driver) => driver.relationshipType === "price_fundamental_divergence")) categories.add("divergence");
+  if (hasDriverMatching(thesisDrivers, (driver) =>
+    driver.relationshipType === "valuation_activity_relationship" || driver.relationshipType === "market_momentum_valuation" || driver.relationshipType === "supply_valuation_exposure"
+    || driver.findingIds.some((id) => id.includes(":fdv_market_cap_gap:") || id.includes(":dilution_gap:") || id.includes(":ratio_")),
+  )) categories.add("valuation_expansion");
   return RESEARCH_QUESTIONS.filter((entry) => entry.when(categories)).map((entry) => ({ question: entry.question, rationale: entry.rationale, sourceIds: [] }));
 }

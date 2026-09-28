@@ -19,9 +19,9 @@ import { synthesize, type SynthesisResult } from "./synthesis.ts";
 import { MAX_FINDINGS_PER_SECTION } from "./thresholds.ts";
 
 /** Bumped whenever the analytical rules (findings.ts/thresholds.ts) change in a way that could change output. */
-export const ENGINE_VERSION = "2";
+export const ENGINE_VERSION = "3";
 /** Bumped whenever the report structure/narrative composition (narrative.ts/report.ts) changes. */
-export const ANALYSIS_VERSION = "2";
+export const ANALYSIS_VERSION = "3";
 
 const SEVERITY_WEIGHT = { high: 3, moderate: 2, low: 1 } as const;
 
@@ -60,7 +60,7 @@ type RawReport = Record<SectionKey, RawSection> & {
 };
 
 /** Deterministically build the raw (pre-validation) report from a set of extracted findings. */
-function buildRawReport(payload: ProfilePayload, findings: Finding[]): RawReport {
+function buildRawReport(payload: ProfilePayload, findings: Finding[], synthesis: SynthesisResult): RawReport {
   const byCategory = new Map<FindingCategory, Finding[]>();
   for (const finding of findings) byCategory.set(finding.category, [...(byCategory.get(finding.category) ?? []), finding]);
 
@@ -92,7 +92,7 @@ function buildRawReport(payload: ProfilePayload, findings: Finding[]): RawReport
   const risks = topFindings(byCategory.get("risk") ?? [], MAX_FINDINGS_PER_SECTION).map(riskItem);
   const dataGaps = topFindings(byCategory.get("dataQuality") ?? [], MAX_FINDINGS_PER_SECTION * 2).map(dataGapItem);
 
-  return { ...sections, risks, dataGaps, furtherResearchQuestions: furtherResearchQuestions(findings) };
+  return { ...sections, risks, dataGaps, furtherResearchQuestions: furtherResearchQuestions(findings, synthesis.thesisDrivers) };
 }
 
 export type EngineReport = {
@@ -104,10 +104,12 @@ export type EngineReport = {
   warnings: string[];
   /**
    * Phase 1 of the research-report redesign (see engine/synthesis.ts): the deterministic
-   * relationship/materiality/thesis-driver analysis computed from this same finding set. Not yet
-   * consumed by `buildRawReport`/narrative.ts — the production report above is unchanged and does
-   * not read this field. Exposed here only so the synthesis layer is available to the pipeline and
-   * independently testable/inspectable; wiring it into the rendered narrative is Phase 2.
+   * relationship/materiality/thesis-driver analysis computed from this same finding set. As of the
+   * Phase 1 calibration pass, `buildRawReport` consumes only `synthesis.thesisDrivers` — and only to
+   * decide which Further Research Questions are warranted (see narrative.ts's
+   * `furtherResearchQuestions`), never to rewrite Executive Assessment/section prose. The full
+   * narrative rewrite driven by relationships/materiality is still Phase 2. Exposed here in full so
+   * the synthesis layer remains independently testable/inspectable beyond that one integration point.
    */
   synthesis: SynthesisResult;
 };
@@ -123,10 +125,10 @@ export type EngineReport = {
  */
 export function buildEngineReport(payload: ProfilePayload): EngineReport {
   const findings = extractFindings(payload);
-  const raw = buildRawReport(payload, findings);
+  const synthesis = synthesize(findings);
+  const raw = buildRawReport(payload, findings, synthesis);
   const evidence = buildProfileEvidenceIndex(payload);
   const { analysis, counters, warnings } = validateModelAnalysis(raw, evidence);
   const sources = profileSourceLabels(payload, analysis);
-  const synthesis = synthesize(findings);
   return { analysis, findingCount: findings.length, dataSnapshotAt: payload.dataAsOf, sources, counters, warnings, synthesis };
 }

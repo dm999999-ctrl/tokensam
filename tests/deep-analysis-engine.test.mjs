@@ -683,8 +683,30 @@ test("further research questions are grounded in the findings actually present, 
   const momentumReport = buildEngineReport(DECEL_UP);
   assert.ok(momentumReport.analysis.furtherResearchQuestions.some((q) => /positive momentum/i.test(q.question)));
 
-  const divergenceReport = buildEngineReport(await payloadFor(DIVERGENCE_TOKEN, divergencePayload("divergence_price_up_tvl_down")));
-  assert.ok(divergenceReport.analysis.furtherResearchQuestions.some((q) => /divergence/i.test(q.question)));
+  // Calibration (Phase 1 synthesis calibration pass): research questions must now be warranted by an
+  // actual Thesis Driver (see synthesis.ts/narrative.ts's furtherResearchQuestions), not merely by a
+  // finding of the right category existing. `divergencePayload`'s own fixture (a single price point,
+  // a single TVL point, no real history) is exactly the kind of thin, single-observation relationship
+  // the calibration says must NOT pad the questions section with "does this persist" — it never
+  // clears the materiality floor once the data-gap penalty from its own missing history applies, so
+  // the divergence question is correctly absent here now (this replaces the old assertion, which
+  // expected a question from evidence this thin — an analytically incorrect expectation under the
+  // corrected model). A separate, materially-supported divergence fixture below confirms the question
+  // still fires when the relationship really is one of the token's genuine analytical drivers.
+  const thinDivergenceReport = buildEngineReport(await payloadFor(DIVERGENCE_TOKEN, divergencePayload("divergence_price_up_tvl_down")));
+  assert.ok(!thinDivergenceReport.analysis.furtherResearchQuestions.some((q) => /divergence/i.test(q.question)), "a single thin, data-gap-limited divergence observation must not pad the questions section");
+
+  const materialDivergencePayload = await payloadFor(DIVERGENCE_TOKEN, seed(DIVERGENCE_TOKEN, "ethereum", [
+    ["coingecko", "price_usd", 11], ["coingecko", "price_usd", 11.1, 5], ["coingecko", "price_usd", 11.3, 12],
+    ["coingecko", "price_usd", 10.5, 24 * 6.9], ["coingecko", "price_usd", 10.2, 24 * 29], ["coingecko", "price_usd", 9.5, 24 * 88],
+    ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 1_000_000],
+    ["coingecko", "price_change_7d_pct", 4.8, 0.5, { window_days: 7 }],
+    ["defillama", "tvl_usd", 500_000_000, 2], ["defillama", "tvl_usd", 510_000_000, 5], ["defillama", "tvl_usd", 520_000_000, 12],
+    ["defillama", "tvl_usd", 600_000_000, 24 * 6.9], ["defillama", "tvl_usd", 700_000_000, 24 * 29], ["defillama", "tvl_usd", 800_000_000, 24 * 88],
+    ["defillama", "fees_24h_usd", 10_000, 2], ["defillama", "revenue_24h_usd", 5_000, 2],
+  ], CALCULATED_METRICS.filter((metric) => metric.category === "divergence").map((metric) => ({ metric: metric.id, value: metric.id === "divergence_price_up_tvl_down" ? 1 : 0 }))));
+  const materialDivergenceReport = buildEngineReport(materialDivergencePayload);
+  assert.ok(materialDivergenceReport.analysis.furtherResearchQuestions.some((q) => /divergence/i.test(q.question)), "a divergence backed by enough history to have complete data quality clears the materiality floor and does warrant the question");
 
   const gapReport = buildEngineReport(NO_FUNDAMENTALS);
   assert.ok(gapReport.analysis.furtherResearchQuestions.some((q) => /mapping/i.test(q.question)));

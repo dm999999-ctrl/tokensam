@@ -56,6 +56,9 @@ export type HorizonClass = "snapshot" | "short_term" | "medium_term" | "structur
 
 const HORIZON_WEIGHT: Record<HorizonClass, number> = { snapshot: 2, short_term: 4, medium_term: 6, structural: 8 };
 
+/** Matches ui/format.ts's `intervalBetween`: below this, a measured interval is snapshot-to-snapshot, not a trend. */
+const SHORT_ALIGNED_INTERVAL_HOURS = 24;
+
 /** Every risk-history evidence ID names its own window explicitly (hist:risk_7d/30d/90d) — read directly, not guessed. */
 function riskHorizonFromEvidenceId(id: string | undefined): HorizonClass {
   if (!id) return "short_term";
@@ -82,8 +85,20 @@ export function classifyHorizon(finding: Finding): HorizonClass {
   }
   // Divergence flags and percentage-point comparisons (marketFundamentalRelationships) are
   // measured over the metrics engine's own "aligned interval," whose length is not guaranteed —
-  // see the module comment. Never treated as medium/structural regardless of magnitude.
-  if (finding.category === "marketFundamentalRelationships") return "short_term";
+  // see the module comment. Never treated as medium/structural regardless of magnitude. When the
+  // real measured duration is known and is itself very short (the same <24h "snapshot-to-snapshot,
+  // not a trend" threshold the Token Profile UI already uses — see ui/format.ts's `intervalBetween`),
+  // demote it one tier further, to snapshot: a ~37-minute-aligned divergence is a valid observation,
+  // but it must never carry the same temporal weight as a genuine multi-day comparison merely
+  // because both currently classify under the same finding category. When the duration is unknown
+  // (`intervalHours` is null — most fixtures/payloads that predate this calibration), the prior,
+  // conservative short_term classification is unchanged: absence of duration data is never treated
+  // as evidence the interval was short.
+  if (finding.category === "marketFundamentalRelationships") {
+    const intervalHours = finding.data.intervalHours;
+    if (typeof intervalHours === "number" && Number.isFinite(intervalHours) && intervalHours < SHORT_ALIGNED_INTERVAL_HOURS) return "snapshot";
+    return "short_term";
+  }
   // Everything else this engine currently extracts is a point-in-time read: valuation ratios,
   // FDV/MC and market-cap/FDV shares, supply-share facts (a design characteristic in principle,
   // but this engine has only a single snapshot read of it, never a supply time series, so it is
@@ -212,7 +227,37 @@ export type RedundancyGroup = {
   horizon: HorizonClass;
   /** More than one member expressing the same signal at different windows is itself persistence. */
   persistence: Persistence;
+  /**
+   * Whether the members' own numeric magnitude (each finding's `data.raw`, when present — e.g. an
+   * elevated-volatility reading's own %) actually agrees, or only their category+findingType label
+   * does. Two same-typed findings collapse into one signal either way (a genuine restatement of the
+   * same condition observed at a different window is still one condition), but a later narrative
+   * layer should say "elevated across the available windows" for a "uniform" group and something
+   * that reflects a real range (e.g. "ranging from X% to Y%") for a "varied" one — never the same
+   * sentence for both. This module never renders either sentence itself (Phase 2); it only records
+   * which is honest, from the same raw numbers already on each member, never inferring or estimating
+   * a magnitude a finding did not itself report. "unknown" when a member carries no numeric `raw`.
+   */
+  valueSpread: "uniform" | "varied" | "unknown";
 };
+
+/** Relative spread above which a redundancy group's members are "materially different," not noise. */
+const VALUE_SPREAD_RELATIVE_THRESHOLD = 0.2;
+
+function numericRaw(finding: Finding): number | null {
+  const raw = finding.data.raw;
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : null;
+}
+
+function valueSpreadOf(members: Finding[]): "uniform" | "varied" | "unknown" {
+  const raws = members.map(numericRaw);
+  if (raws.some((raw) => raw === null)) return "unknown";
+  const magnitudes = (raws as number[]).map(Math.abs);
+  const max = Math.max(...magnitudes);
+  const min = Math.min(...magnitudes);
+  if (max === 0) return "uniform";
+  return (max - min) / max > VALUE_SPREAD_RELATIVE_THRESHOLD ? "varied" : "uniform";
+}
 
 /**
  * Findings that share both category and findingType are, by construction, restatements of the
@@ -260,6 +305,7 @@ export function collapseRedundant(findings: Finding[]): { survivors: Finding[]; 
       memberCount: members.length,
       horizon: classifyHorizon(representative),
       persistence: "persistent", // the same signal recurring across windows is, by definition, repeated evidence
+      valueSpread: valueSpreadOf(members),
     });
   }
   return { survivors, groups: groups.sort((a, b) => a.id.localeCompare(b.id)) };
