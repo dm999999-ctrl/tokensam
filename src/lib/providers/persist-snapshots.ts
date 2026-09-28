@@ -1,4 +1,5 @@
 import type { ProviderSnapshot } from "./types";
+import type { CollectorDiagnostics } from "../refresh/collector-diagnostics.ts";
 
 type SupabaseAdminClient = ReturnType<
   typeof import("../supabase/admin").createSupabaseAdminClient
@@ -61,10 +62,14 @@ function observationKey(row: {
   ].join("|");
 }
 
-/** Persist generic normalized provider snapshots and their source JSON. */
+/** Persist generic normalized provider snapshots and their source JSON.
+ *  `diagnostics` is optional, diagnostic-only stage timing (see
+ *  collector-diagnostics.ts); only the CoinGecko caller currently passes it,
+ *  so every other provider's behavior here is unchanged. */
 export async function persistProviderSnapshots(
   client: SupabaseAdminClient,
   snapshots: ProviderSnapshot[],
+  diagnostics?: CollectorDiagnostics,
 ): Promise<{ rawRecords: number; observations: number; pairMappings: number; timingMs: Record<string, number> }> {
   if (snapshots.length === 0) return { rawRecords: 0, observations: 0, pairMappings: 0, timingMs: {} };
 
@@ -87,6 +92,8 @@ export async function persistProviderSnapshots(
   // paying for each Supabase round trip's network latency one at a time.
   const rawInsertStart = Date.now();
   const mappingLookupStart = rawInsertStart;
+  diagnostics?.start("coingecko.persist.rawRecordsInsert");
+  diagnostics?.start("coingecko.persist.mappingLookup");
   const [insertedRawRows, mappingRows] = await Promise.all([
     (async () => {
       const chunks = chunkRawRows(rawRows);
@@ -98,12 +105,14 @@ export async function persistProviderSnapshots(
         assertNoError(error, "insert into raw_provider_records");
         return (data ?? []) as { id: number; token_id: string; chain_id: string }[];
       }));
+      diagnostics?.end("coingecko.persist.rawRecordsInsert");
       return results.flat();
     })(),
     (async () => {
       const { data, error } = await client.from("provider_token_mappings")
         .select("id,provider_id,token_id").in("provider_id", providers).in("token_id", tokenIdsForMapping);
       assertNoError(error, "read provider mapping IDs");
+      diagnostics?.end("coingecko.persist.mappingLookup");
       return (data ?? []) as { id: number; provider_id: string; token_id: string }[];
     })(),
   ]);
@@ -166,6 +175,7 @@ export async function persistProviderSnapshots(
   const endAt = new Date(Math.max(...observedTimes)).toISOString();
   const existingKeys = new Set<string>();
   const existingKeysStart = Date.now();
+  diagnostics?.start("coingecko.persist.existingKeysLookup");
 
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await client
@@ -180,6 +190,7 @@ export async function persistProviderSnapshots(
     for (const row of data ?? []) existingKeys.add(observationKey(row));
     if (!data || data.length < 1000) break;
   }
+  diagnostics?.end("coingecko.persist.existingKeysLookup");
   const existingKeysMs = Date.now() - existingKeysStart;
 
   const newObservationRows = observationRows.filter(
@@ -192,7 +203,9 @@ export async function persistProviderSnapshots(
     })),
   );
   const observationInsertStart = Date.now();
+  diagnostics?.start("coingecko.persist.observationInsert");
   await writeInChunks(client, "token_metric_observations", newObservationRows);
+  diagnostics?.end("coingecko.persist.observationInsert");
   const observationInsertMs = Date.now() - observationInsertStart;
   return {
     rawRecords: rawRows.length,
