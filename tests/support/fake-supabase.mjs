@@ -77,6 +77,7 @@ export function createFakeSupabase({ seed = {}, views = true, missingTables = []
     update(values) { this.op = "update"; this.values = values; return this; }
     eq(column, value) { this.filters.push((row) => row[column] === value); return this; }
     in(column, values) { this.filters.push((row) => values.includes(row[column])); return this; }
+    gt(column, value) { this.filters.push((row) => compare(row[column], value) > 0); return this; }
     gte(column, value) { this.filters.push((row) => compare(row[column], value) >= 0); return this; }
     lte(column, value) { this.filters.push((row) => compare(row[column], value) <= 0); return this; }
     lt(column, value) { this.filters.push((row) => compare(row[column], value) < 0); return this; }

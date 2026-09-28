@@ -177,18 +177,35 @@ export async function persistProviderSnapshots(
   const existingKeysStart = Date.now();
   diagnostics?.start("coingecko.persist.existingKeysLookup");
 
-  for (let offset = 0; ; offset += 1000) {
+  // Keyset pagination on `id` (this table's primary key, monotonically increasing on every
+  // insert) instead of OFFSET-based `.range()`: OFFSET makes Postgres re-scan and discard every
+  // row up to the current page's offset on *each* request, so cost grows with page depth across
+  // the loop. `id > cursor` lets each page pick up exactly where the previous one left off, so
+  // total cost stays close to one pass over the matching rows regardless of how many pages this
+  // takes. Confirmed against production: an equivalent deep OFFSET page (offset 13000, matching
+  // a real CoinGecko-shaped filter) took ~3.4s; the same page reached via `id > cursor` took
+  // ~8ms — this is what actually exhausted the 90s CoinGecko refresh budget in production run
+  // 665 (data_refresh_steps id 492), where existingKeysLookup was still running, unfinished,
+  // when the step was aborted.
+  let cursorId = 0;
+  for (;;) {
     const { data, error } = await client
       .from("token_metric_observations")
-      .select("token_id, chain_id, metric_id, observed_at, window_days")
+      .select("id, token_id, chain_id, metric_id, observed_at, window_days")
       .in("provider_id", providerIds)
       .in("token_id", tokenIds)
       .gte("observed_at", startAt)
       .lte("observed_at", endAt)
-      .range(offset, offset + 999);
+      .gt("id", cursorId)
+      .order("id", { ascending: true })
+      .limit(1000);
     assertNoError(error, "check existing observations");
-    for (const row of data ?? []) existingKeys.add(observationKey(row));
-    if (!data || data.length < 1000) break;
+    const page = (data ?? []) as {
+      id: number; token_id: string; chain_id: string; metric_id: string; observed_at: string; window_days: number | null;
+    }[];
+    for (const row of page) existingKeys.add(observationKey(row));
+    if (page.length < 1000) break;
+    cursorId = page[page.length - 1].id;
   }
   diagnostics?.end("coingecko.persist.existingKeysLookup");
   const existingKeysMs = Date.now() - existingKeysStart;
