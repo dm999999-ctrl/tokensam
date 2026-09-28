@@ -15,6 +15,7 @@ import { extractFindings, type Finding, type FindingCategory } from "./findings.
 import {
   dataGapItem, executiveOverview, furtherResearchQuestions, riskItem, sectionOverview, statementForFinding,
 } from "./narrative.ts";
+import { synthesize, type SynthesisResult } from "./synthesis.ts";
 import { MAX_FINDINGS_PER_SECTION } from "./thresholds.ts";
 
 /** Bumped whenever the analytical rules (findings.ts/thresholds.ts) change in a way that could change output. */
@@ -101,6 +102,14 @@ export type EngineReport = {
   sources: Record<string, string>;
   counters: { droppedSourceIds: number; untraceableFactualStatements: number };
   warnings: string[];
+  /**
+   * Phase 1 of the research-report redesign (see engine/synthesis.ts): the deterministic
+   * relationship/materiality/thesis-driver analysis computed from this same finding set. Not yet
+   * consumed by `buildRawReport`/narrative.ts — the production report above is unchanged and does
+   * not read this field. Exposed here only so the synthesis layer is available to the pipeline and
+   * independently testable/inspectable; wiring it into the rendered narrative is Phase 2.
+   */
+  synthesis: SynthesisResult;
 };
 
 /**
@@ -118,5 +127,6 @@ export function buildEngineReport(payload: ProfilePayload): EngineReport {
   const evidence = buildProfileEvidenceIndex(payload);
   const { analysis, counters, warnings } = validateModelAnalysis(raw, evidence);
   const sources = profileSourceLabels(payload, analysis);
-  return { analysis, findingCount: findings.length, dataSnapshotAt: payload.dataAsOf, sources, counters, warnings };
+  const synthesis = synthesize(findings);
+  return { analysis, findingCount: findings.length, dataSnapshotAt: payload.dataAsOf, sources, counters, warnings, synthesis };
 }
