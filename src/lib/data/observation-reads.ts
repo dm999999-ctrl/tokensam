@@ -84,8 +84,13 @@ export async function readLatestObservations<T extends Row>(client: SupabaseAdmi
     return latestPerMetric(all.rows);
   };
 
-  const results = await Promise.all(batches.map(readBatch));
-  return mergeById(...results);
+  const results = await Promise.allSettled(batches.map(readBatch));
+  const successful: T[][] = [];
+  for (const [index, result] of results.entries()) {
+    if (result.status === "fulfilled") successful.push(result.value);
+    else console.error("Latest observation batch " + (index + 1) + "/" + batches.length + " failed:", result.reason);
+  }
+  return mergeById(...successful);
 }
 /** Observations for specific provider metrics since a cutoff (bounded history for series). */
 export async function readObservationWindow<T extends Row>(
