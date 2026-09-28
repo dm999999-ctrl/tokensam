@@ -29,8 +29,10 @@ pnpm install   # or npm install
 npx wrangler secret put CRON_SECRET   # paste the same value as the Vercel project's CRON_SECRET
 ```
 
-Set `TARGET_BASE_URL` in `wrangler.toml` to the production deployment's URL
-(no trailing slash needed), then:
+Set `REFRESH_URL` in `wrangler.toml` to the Vercel production **base** URL —
+not the complete `/api/cron/refresh` URL — e.g. `https://tokensam.vercel.app`
+(no trailing slash needed). The Worker appends `/api/cron/refresh` and
+`/api/cron/geckoterminal` to it itself. Then:
 
 ```bash
 npx wrangler deploy

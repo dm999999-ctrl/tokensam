@@ -12,9 +12,12 @@ compatibility_date = "2026-09-28"
 [triggers]
 crons = ["*/5 * * * *"]
 
-# Set with `wrangler secret put CRON_SECRET` — must equal the Vercel
-# deployment's own CRON_SECRET so isAuthorizedRefreshRequest() accepts it.
-# TARGET_BASE_URL is a plain (non-secret) var; set it below or with
-# `wrangler deploy --var TARGET_BASE_URL:https://<your-deployment>.vercel.app`.
+# CRON_SECRET must equal the Vercel deployment's own CRON_SECRET so
+# isAuthorizedRefreshRequest() accepts it. It is a secret, not a var: set it
+# with `wrangler secret put CRON_SECRET` (or the Cloudflare dashboard), and
+# never commit it here.
+# REFRESH_URL is the Vercel production BASE URL, not a complete route URL —
+# the Worker appends /api/cron/refresh and /api/cron/geckoterminal to it
+# itself (see src/index.ts). It is a plain (non-secret) var.
 [vars]
-TARGET_BASE_URL = "https://tokensam.vercel.app"
+REFRESH_URL = "https://tokensam.vercel.app"

@@ -1,6 +1,6 @@
 export interface Env {
   /** Base URL of the Vercel deployment, e.g. "https://tokensam.vercel.app" (no trailing slash needed). */
-  TARGET_BASE_URL: string;
+  REFRESH_URL: string;
   /** Must equal the Vercel deployment's own CRON_SECRET (see src/lib/refresh/auth.ts). Set as a Wrangler secret. */
   CRON_SECRET: string;
 }
@@ -50,13 +50,13 @@ async function callRoute(baseUrl: string, path: string, secret: string): Promise
  * this Worker's own CPU-time budget.
  */
 async function run(env: Env): Promise<RouteResult[]> {
-  if (!env.TARGET_BASE_URL || !env.CRON_SECRET) {
-    console.error("refresh-scheduler: TARGET_BASE_URL and CRON_SECRET must both be configured (see wrangler.toml).");
+  if (!env.REFRESH_URL || !env.CRON_SECRET) {
+    console.error("refresh-scheduler: REFRESH_URL and CRON_SECRET must both be configured (see wrangler.toml).");
     return [];
   }
   const results: RouteResult[] = [];
   for (const path of ["/api/cron/refresh", "/api/cron/geckoterminal"]) {
-    const result = await callRoute(env.TARGET_BASE_URL, path, env.CRON_SECRET);
+    const result = await callRoute(env.REFRESH_URL, path, env.CRON_SECRET);
     results.push(result);
     if (result.error) console.error(`refresh-scheduler: ${path} request failed: ${result.error}`);
     else console.log(`refresh-scheduler: ${path} -> ${result.status} ${result.body.slice(0, 500)}`);
