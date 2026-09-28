@@ -4,7 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import type { LiveTokenProfileData } from "@/types/token";
 import type { AnalysisState } from "@/lib/analysis/service";
-import { buildProfileModel, type Card } from "@/lib/ui/profile-model";
+import { buildProfileModel, type Card, type PoolRow } from "@/lib/ui/profile-model";
 import { buildProfilePayload, formatProfilePayloadText } from "@/lib/analysis/profile-payload";
 import { formatChange, formatUsd, formatUtc, shortAddress } from "@/lib/ui/format";
 import { HistoryCharts } from "@/components/HistoricalSection";
@@ -60,6 +60,25 @@ function MetricList({ title, items }: { title: string; items: Card[] }) {
   );
 }
 
+/** One row per on-chain pool: DEX, pool address (copyable), and its own liquidity/volume. */
+function PoolList({ pools }: { pools: PoolRow[] }) {
+  if (pools.length === 0) return null;
+  return (
+    <ul className="pool-list">
+      {pools.map((pool) => (
+        <li key={pool.id} className="pool-row">
+          <span className="pool-dex chip">{pool.dexLabel}</span>
+          <span className="address"><code title={pool.pairAddress}>{shortAddress(pool.pairAddress)}</code><CopyButton value={pool.pairAddress} label="pool address" /></span>
+          <span className="pool-figures">
+            {pool.liquidity ? <span><small>Liquidity</small>{pool.liquidity}</span> : null}
+            {pool.volume24h ? <span><small>Volume · 24h</small>{pool.volume24h}</span> : null}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Signals({ items, title = "Divergence signals" }: { items: Card[]; title?: string }) {
   if (items.length === 0) return null;
   const interval = items.find((item) => item.note)?.note;
@@ -91,7 +110,7 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
   const price = formatUsd(token.priceUsd);
   const marketCap = formatUsd(token.marketCapUsd, true);
   // Sections without data are simply omitted (page and nav); no "not available" cards are rendered.
-  const { fundamentals, marketStructure, tokenomics, history, technical, divergence } = model;
+  const { fundamentals, marketStructure, dexMarkets, onchainIdentity, tokenomics, history, technical, divergence } = model;
   const hasCrossMetric = divergence.comparisons.length + divergence.signals.length + divergence.indicators.length > 0;
 
   const reveal = (id: string) => window.requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -229,6 +248,36 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
           <SectionHead eyebrow="On-chain DEX markets" title="Trading &amp; Liquidity" id="structure-title" />
           <p className="scope-line">{marketStructure.scopeLine}</p>
           <div className="tile-grid tile-grid-3">{marketStructure.cards.map((item) => <Tile key={item.id} item={item} />)}</div>
+        </section>
+      ) : null}
+
+      {dexMarkets.available ? (
+        <section className="profile-section" id="dex-markets" aria-labelledby="dex-markets-title">
+          <SectionHead eyebrow="On-chain DEX pools" title="DEX Markets" id="dex-markets-title" />
+          <p className="scope-line">{dexMarkets.scopeLine}</p>
+          {dexMarkets.cards.length > 0 ? <div className="tile-grid tile-grid-3">{dexMarkets.cards.map((item) => <Tile key={item.id} item={item} />)}</div> : null}
+          {dexMarkets.dexes.length > 0 ? (
+            <p className="scope-line">DEXs: {dexMarkets.dexes.map((dex) => <span key={dex} className="chip chip-quiet">{dex}</span>)}</p>
+          ) : null}
+          <PoolList pools={dexMarkets.pools} />
+        </section>
+      ) : null}
+
+      {onchainIdentity.available ? (
+        <section className="profile-section" id="onchain-identity" aria-labelledby="onchain-identity-title">
+          <SectionHead eyebrow="On-chain identity" title="Contract / On-chain Identity" id="onchain-identity-title" />
+          <div className="metric-list">
+            <dl>
+              <div className="metric-row">
+                <dt>Network</dt>
+                <dd>{onchainIdentity.network}</dd>
+              </div>
+              <div className="metric-row">
+                <dt>Contract address</dt>
+                <dd className="address"><code title={onchainIdentity.contractAddress}>{shortAddress(onchainIdentity.contractAddress)}</code><CopyButton value={onchainIdentity.contractAddress} label="contract address" /></dd>
+              </div>
+            </dl>
+          </div>
         </section>
       ) : null}
 

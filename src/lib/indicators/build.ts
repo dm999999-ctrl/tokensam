@@ -118,3 +118,23 @@ export function evaluateTechnicalIndicators(rows: ObservationRow[], options: Ind
 export function buildTechnicalIndicators(rows: ObservationRow[], options: IndicatorOptions): TechnicalIndicatorsView {
   return evaluateTechnicalIndicators(rows, options).view;
 }
+
+/**
+ * Adds indicators computed outside the daily-series pipeline above (for example
+ * cross-sectional GeckoTerminal pool/DEX concentration, which has no daily
+ * series to sample from `SERIES_RULES`) into their category group, keeping the
+ * same category order. This is the smallest extension point for an indicator
+ * that isn't a function of `IndicatorInput` daily samples; it does not add a
+ * second indicator engine, just merges pre-built `TechnicalIndicator` objects.
+ */
+export function withExtraIndicators(view: TechnicalIndicatorsView, extra: TechnicalIndicator[]): TechnicalIndicatorsView {
+  if (extra.length === 0) return view;
+  const groups = INDICATOR_CATEGORIES
+    .map((category) => ({
+      category,
+      label: CATEGORY_LABELS[category],
+      indicators: [...(view.groups.find((group) => group.category === category)?.indicators ?? []), ...extra.filter((indicator) => indicator.category === category)],
+    }))
+    .filter((group) => group.indicators.length > 0);
+  return { ...view, groups };
+}

@@ -1,0 +1,217 @@
+import { geckoTerminalTokenMappings } from "../../data/geckoterminal-token-mappings.ts";
+import {
+  configuredGeckoTerminalAssets,
+  fetchGeckoTerminalSnapshotsTolerant,
+  GeckoTerminalMarketDataProvider,
+  getUnmappedGeckoTerminalTokens,
+} from "./geckoterminal.ts";
+import { geckoTerminalSyncLockTableExists, resolveGeckoTerminalStartTokenId, withGeckoTerminalSyncLock } from "./geckoterminal-sync-lock.ts";
+import { persistProviderSnapshots } from "./persist-snapshots.ts";
+
+type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
+
+const REQUIRED_METRICS = [
+  "price_usd",
+  "volume_24h_usd",
+  "liquidity_usd",
+  "price_change_24h_pct",
+  "transactions_24h_count",
+  "buys_24h_count",
+  "sells_24h_count",
+  "fdv_usd",
+  "market_cap_usd",
+];
+
+// Longer than any realistic run (scheduled runs bound themselves to a caller-provided
+// deadline well under this; a manual sync of 63 tokens is ~7 minutes with no throttling),
+// short enough that a crashed run self-heals well within a day's cadence.
+const LOCK_LEASE_MS = 15 * 60 * 1000;
+
+function throwOnSupabaseError(error: { message: string } | null, action: string): void {
+  if (error) throw new Error(`Supabase ${action} failed: ${error.message}`);
+}
+
+async function verifySchema(client: SupabaseAdminClient) {
+  // These metrics and provider_pairs already exist from the DEX Screener migration;
+  // GeckoTerminal reuses them rather than creating duplicate token-level metrics.
+  const { error: pairTableError } = await client.from("provider_pairs").select("pair_address").limit(0);
+  if (pairTableError) {
+    throw new Error("Apply supabase/migrations/20260923120000_dexscreener_market_structure.sql in the Supabase SQL Editor before running the GeckoTerminal collector.");
+  }
+  const { data, error } = await client.from("metric_definitions").select("id").in("id", REQUIRED_METRICS);
+  throwOnSupabaseError(error, "check GeckoTerminal metric definitions");
+  const present = new Set((data ?? []).map((row: { id: string }) => row.id));
+  const missing = REQUIRED_METRICS.filter((metricId) => !present.has(metricId));
+  if (missing.length > 0) {
+    throw new Error("The GeckoTerminal metric catalog is incomplete. Apply supabase/migrations/20260923120000_dexscreener_market_structure.sql.");
+  }
+  const { data: providerRow, error: providerLookupError } = await client
+    .from("data_providers")
+    .select("id")
+    .eq("id", "geckoterminal")
+    .maybeSingle();
+  throwOnSupabaseError(providerLookupError, "check the GeckoTerminal data provider registration");
+  if (!providerRow) {
+    throw new Error("Apply supabase/migrations/20260929090000_geckoterminal_provider.sql in the Supabase SQL Editor before running the GeckoTerminal collector.");
+  }
+  if (!(await geckoTerminalSyncLockTableExists(client))) {
+    throw new Error("Apply supabase/migrations/20260930090000_geckoterminal_scheduled_collection.sql in the Supabase SQL Editor before running the GeckoTerminal collector.");
+  }
+}
+
+async function upsertGeckoTerminalMappings(client: SupabaseAdminClient, assets: { chainId: string; tokenId: string; externalAssetId: string; tokenAddress: string }[]): Promise<void> {
+  if (assets.length === 0) return;
+  const mappings = assets.map((asset) => ({
+    provider_id: "geckoterminal",
+    chain_id: asset.chainId,
+    token_id: asset.tokenId,
+    external_asset_id: asset.externalAssetId,
+    external_contract_address: asset.tokenAddress,
+    scope: "market",
+    verification_method: "exact_chain_address",
+  }));
+  const { error } = await client.from("provider_token_mappings").upsert(mappings, { onConflict: "provider_id,chain_id,external_asset_id" });
+  throwOnSupabaseError(error, "upsert GeckoTerminal token mappings");
+}
+
+/**
+ * Manual, all-or-nothing collection (used by `pnpm geckoterminal:sync`):
+ * fetches every mapped token before writing anything, exactly as before.
+ * Now also takes the shared GeckoTerminal sync lock, so it cannot run at the
+ * same time as a scheduled collection (or another manual run).
+ */
+export async function runGeckoTerminalCollection(
+  client: SupabaseAdminClient,
+  options: { tokenIds?: string[]; fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void>; now?: () => Date } = {},
+) {
+  // Fail before provider calls if the Supabase migration has not been applied.
+  await verifySchema(client);
+  return withGeckoTerminalSyncLock(client, "manual", LOCK_LEASE_MS, async () => {
+    const assets = configuredGeckoTerminalAssets().filter((asset) => !options.tokenIds || options.tokenIds.includes(asset.tokenId));
+    const provider = new GeckoTerminalMarketDataProvider(options);
+    const snapshots = await provider.fetchSnapshots(assets);
+    if (snapshots.length !== assets.length) throw new Error("GeckoTerminal returned an incomplete token collection.");
+
+    await upsertGeckoTerminalMappings(client, assets);
+    const persisted = await persistProviderSnapshots(client, snapshots);
+    const unavailable = snapshots.flatMap((snapshot) =>
+      snapshot.observations
+        .filter((item) => item.status === "unavailable")
+        .map((item) => ({ tokenId: item.tokenId, metricId: item.metricId })),
+    );
+
+    return {
+      provider: "geckoterminal",
+      tokensInUniverse: geckoTerminalTokenMappings.length,
+      mappedTokens: assets.length,
+      unmappedTokens: getUnmappedGeckoTerminalTokens(),
+      returnedTokens: snapshots.length,
+      ...persisted,
+      unavailable,
+    };
+  });
+}
+
+export type GeckoTerminalScheduledResult = {
+  provider: "geckoterminal";
+  attempted: number;
+  succeeded: string[];
+  failed: { tokenId: string; error: string }[];
+  skipped: string[];
+  rawRecords: number;
+  observations: number;
+  pairMappings: number;
+  unavailable: { tokenId: string; metricId: string }[];
+  rateLimitEvents: number;
+  retries: number;
+  durationMs: number;
+  /** Token id this run started its rotation from (null means index 0). */
+  startTokenId: string | null;
+  /**
+   * Token id the *next* scheduled run should start from. The caller (the cron
+   * route) persists this in `geckoterminal_sync_runs.summary` via
+   * `finishGeckoTerminalSyncLock`; `resolveGeckoTerminalStartTokenId` reads it
+   * back on the next run. This is what makes rotation resumable across
+   * invocations without a dedicated cursor table.
+   */
+  nextTokenId: string | null;
+};
+
+/**
+ * Recurring, partial-failure-tolerant collection for the scheduled cron route
+ * (see src/app/api/cron/geckoterminal/route.ts). Unlike `runGeckoTerminalCollection`,
+ * a single token failing — or the caller's `deadlineAt` passing — does not
+ * discard snapshots already collected for other tokens: every successful
+ * snapshot is persisted, and the run is reported as "succeeded", "partial",
+ * or "failed" by the caller based on this result.
+ *
+ * This function does not take the sync lock itself; the caller (the cron
+ * route) acquires and releases it, since it needs the run id to report a
+ * precise status. It also does not decide scheduling (cadence, whether the
+ * run is due, or the deadline) — that is entirely the caller's job.
+ *
+ * Rotation: by default, this function resolves where to resume from by
+ * reading `geckoterminal_sync_runs` for the previous run's `nextTokenId` (see
+ * `resolveGeckoTerminalStartTokenId`), so a run that only reaches part of the
+ * universe before its deadline picks up exactly where the last one stopped
+ * instead of restarting at the first token every time. Pass `startTokenId`
+ * explicitly (including `null`, meaning "start at index 0") to override this,
+ * which tests use to make rotation deterministic.
+ */
+export async function runGeckoTerminalScheduledCollection(
+  client: SupabaseAdminClient,
+  options: {
+    tokenIds?: string[];
+    fetchImpl?: typeof fetch;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => Date;
+    deadlineAt?: number;
+    minRequestIntervalMs?: number;
+    startTokenId?: string | null;
+  } = {},
+): Promise<GeckoTerminalScheduledResult> {
+  const startedAt = Date.now();
+  await verifySchema(client);
+  const assets = configuredGeckoTerminalAssets().filter((asset) => !options.tokenIds || options.tokenIds.includes(asset.tokenId));
+  const startTokenId = options.startTokenId !== undefined ? options.startTokenId : await resolveGeckoTerminalStartTokenId(client);
+  const { snapshots, outcomes, nextTokenId } = await fetchGeckoTerminalSnapshotsTolerant(assets, {
+    fetchImpl: options.fetchImpl,
+    sleep: options.sleep,
+    now: options.now,
+    deadlineAt: options.deadlineAt,
+    minRequestIntervalMs: options.minRequestIntervalMs,
+    startTokenId,
+  });
+
+  // Only tokens that actually returned a snapshot this run get their mapping refreshed;
+  // a token that failed or was skipped keeps whatever mapping it already had.
+  const succeededTokenIds = new Set(snapshots.map((snapshot) => snapshot.asset.tokenId));
+  await upsertGeckoTerminalMappings(client, assets.filter((asset) => succeededTokenIds.has(asset.tokenId)));
+
+  // Every successful snapshot is persisted, even if others in the same run failed or were skipped.
+  const persisted = snapshots.length > 0
+    ? await persistProviderSnapshots(client, snapshots)
+    : { rawRecords: 0, observations: 0, pairMappings: 0 };
+  const unavailable = snapshots.flatMap((snapshot) =>
+    snapshot.observations
+      .filter((item) => item.status === "unavailable")
+      .map((item) => ({ tokenId: item.tokenId, metricId: item.metricId })),
+  );
+
+  return {
+    provider: "geckoterminal",
+    attempted: assets.length,
+    succeeded: outcomes.filter((outcome) => outcome.status === "succeeded").map((outcome) => outcome.tokenId),
+    failed: outcomes.filter((outcome) => outcome.status === "failed").map((outcome) => ({ tokenId: outcome.tokenId, error: outcome.error ?? "Unknown error." })),
+    skipped: outcomes.filter((outcome) => outcome.status === "skipped_time_budget").map((outcome) => outcome.tokenId),
+    rawRecords: persisted.rawRecords,
+    observations: persisted.observations,
+    pairMappings: persisted.pairMappings,
+    unavailable,
+    rateLimitEvents: outcomes.filter((outcome) => outcome.rateLimited).length,
+    retries: outcomes.reduce((sum, outcome) => sum + Math.max(0, outcome.attempts - 1), 0),
+    durationMs: Date.now() - startedAt,
+    startTokenId: startTokenId ?? null,
+    nextTokenId,
+  };
+}

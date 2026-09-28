@@ -1,7 +1,7 @@
 export type TokenCategory = string;
 
 export type MetricSource = {
-  providerId: "coingecko" | "defillama" | "dexscreener" | "defillama_coins" | "calculated";
+  providerId: "coingecko" | "defillama" | "dexscreener" | "defillama_coins" | "geckoterminal" | "calculated";
   collectedAt: string;
   note?: string | null;
 };
@@ -93,6 +93,37 @@ export type CalculatedMetricView = {
   sourceScopes?: string | null;
 };
 
+/** One on-chain DEX pool for this token's exact GeckoTerminal network/address identity. */
+export type OnchainPool = {
+  pairAddress: string;
+  dexId: string | null;
+  liquidityUsd: number | null;
+  volume24hUsd: number | null;
+  priceUsd: number | null;
+  createdAt: string | null;
+};
+
+/**
+ * GeckoTerminal on-chain market data for this token's exact network/address
+ * identity (market scope). Null when no such identity is mapped for this
+ * token (never fabricated from a wrapped or ticker-matched substitute).
+ */
+export type OnchainMarketsData = {
+  /** Human-readable network name for the on-chain identity below (never a provider-internal slug). */
+  network: string | null;
+  contractAddress: string | null;
+  /** Most liquid pool's reserve, in USD. */
+  liquidityUsd: number | null;
+  /** Summed 24h volume across every matched pool. */
+  volume24hUsd: number | null;
+  priceChange24hPct: number | null;
+  fdvUsd: number | null;
+  marketCapUsd: number | null;
+  /** Distinct DEX identifiers across this token's actual pools only (never every DEX on the network). */
+  dexes: string[];
+  pools: OnchainPool[];
+};
+
 export type LiveTokenProfileData = {
   token: DashboardToken;
   /** Only indicators whose inputs and history exist, grouped by category; null when not calculated. */
@@ -121,4 +152,6 @@ export type LiveTokenProfileData = {
   protocol: { name: string; aggregatesVersions: boolean } | null;
   /** Latest exact-address DEX transaction counts (market scope); null when not stored. */
   dexActivity: { transactions24h: number | null; buys24h: number | null; sells24h: number | null };
+  /** GeckoTerminal on-chain pools and network identity; null when no exact-address mapping exists. */
+  onchainMarkets: OnchainMarketsData | null;
 };

@@ -51,7 +51,7 @@ export function IndicatorCard({ indicator }: { indicator: TechnicalIndicator }) 
 export function TechnicalIndicators({ view, groups }: { view: TechnicalIndicatorsView; groups: TechnicalIndicatorGroup[] }) {
   return (
     <>
-      <p className="scope-line">Calculated from daily closes; each indicator appears only when enough history exists. Analytical measurements, not trading signals.</p>
+      <p className="scope-line">Calculated from daily closes, or from the latest on-chain snapshot where noted; each indicator appears only when enough data exists. Analytical measurements, not trading signals.</p>
       {groups.map((group) => (
         <div key={group.category} className="indicator-group">
           <h3>{group.label}<small>{group.indicators.length}</small></h3>
