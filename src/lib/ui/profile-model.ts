@@ -244,17 +244,15 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
     comparisons: protocolMapped ? inSection("fundamentals", "growth").filter((item) => isComparison(item.id)).map(withHorizon) : [],
     signals,
     signalsHorizon: signals.length > 0 ? horizonLabel(signals.find((item) => item.interval)?.interval?.hours) : null,
-    // Cross-metric analysis stays "shown only when there's real content" (unlike the persistent
-    // Technical section above): an indicator the engine couldn't calculate is not cross-metric content.
-    indicators: (groups.find((group) => group.category === "divergence")?.indicators ?? []).filter((indicator) => indicator.status !== "unavailable"),
+    indicators: groups.find((group) => group.category === "divergence")?.indicators ?? [],
   };
+  const hasCrossMetric = divergence.comparisons.length + divergence.signals.length + divergence.indicators.length > 0;
 
   // Research order: overview → market → fundamentals → tokenomics → history (evidence) → trading &
   // liquidity (current on-chain trading conditions) → technical (derived from history, with
-  // cross-metric analysis inside) → AI → sources. Sections without data are omitted — except
-  // Technical, which is persistent: data availability only ever changes an indicator's own state,
-  // never whether the section (or its nav entry) appears. The "market-structure" id is kept stable
-  // (deep links, scroll targets, tests) even though its visible label is now "Trading & Liquidity".
+  // cross-metric analysis inside) → AI → sources. Sections without data are omitted. The
+  // "market-structure" id is kept stable (deep links, scroll targets, tests) even though its
+  // visible label is now "Trading & Liquidity".
   const sections: ProfileModel["sections"] = [
     { id: "overview", label: "Overview" },
     { id: "market", label: "Market" },
@@ -262,7 +260,8 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
     ...(tokenomics.available ? [{ id: "tokenomics" as const, label: "Tokenomics" }] : []),
     ...(history.available ? [{ id: "history" as const, label: "History" }] : []),
     ...(marketStructure.available ? [{ id: "market-structure" as const, label: "Trading & Liquidity" }] : []),
-    { id: "technical" as const, label: "Technical" },
+    // Cross-metric analysis is a subsection of Technical, not its own nav item.
+    ...(technical.length > 0 || hasCrossMetric ? [{ id: "technical" as const, label: "Technical" }] : []),
     { id: "analysis", label: "AI Analysis" },
     { id: "sources", label: "Sources" },
   ];

@@ -232,27 +232,28 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
         </section>
       ) : null}
 
-      {/* Persistent section: data availability changes an indicator's own state, never whether this section appears. */}
-      <section className="profile-section" id="technical" aria-labelledby="technical-title">
-        <SectionHead eyebrow="Token analysis" title="Technical indicators" id="technical-title" />
-        <TechnicalIndicators view={data.technicalIndicators} groups={technical} />
-        {hasCrossMetric ? (
-          <div className="cross-metric" id="cross-metric" aria-labelledby="cross-metric-title">
-            <header className="cross-metric-head">
-              <p className="eyebrow">Token dynamics</p>
-              <h3 id="cross-metric-title">Cross-metric analysis</h3>
-              <p className="scope-line">How price, volume, market cap and protocol data move relative to each other. Neutral observations, not trading signals.</p>
-            </header>
-            {divergence.indicators.length > 0 ? (
-              <div className="indicator-grid">{divergence.indicators.map((indicator) => <IndicatorCard key={indicator.id} indicator={indicator} />)}</div>
-            ) : null}
-            {divergence.comparisons.length > 0 ? (
-              <div className="split-lists"><MetricList title="Comparisons · measured interval" items={divergence.comparisons} /></div>
-            ) : null}
-            <Signals items={divergence.signals} title={`Divergence flags · ${divergence.signalsHorizon ?? "Snapshot"}`} />
-          </div>
-        ) : null}
-      </section>
+      {technical.length > 0 || hasCrossMetric ? (
+        <section className="profile-section" id="technical" aria-labelledby="technical-title">
+          <SectionHead eyebrow="Token analysis" title="Technical indicators" id="technical-title" />
+          {data.technicalIndicators && technical.length > 0 ? <TechnicalIndicators view={data.technicalIndicators} groups={technical} /> : null}
+          {hasCrossMetric ? (
+            <div className="cross-metric" id="cross-metric" aria-labelledby="cross-metric-title">
+              <header className="cross-metric-head">
+                <p className="eyebrow">Token dynamics</p>
+                <h3 id="cross-metric-title">Cross-metric analysis</h3>
+                <p className="scope-line">How price, volume, market cap and protocol data move relative to each other. Neutral observations, not trading signals.</p>
+              </header>
+              {divergence.indicators.length > 0 ? (
+                <div className="indicator-grid">{divergence.indicators.map((indicator) => <IndicatorCard key={indicator.id} indicator={indicator} />)}</div>
+              ) : null}
+              {divergence.comparisons.length > 0 ? (
+                <div className="split-lists"><MetricList title="Comparisons · measured interval" items={divergence.comparisons} /></div>
+              ) : null}
+              <Signals items={divergence.signals} title={`Divergence flags · ${divergence.signalsHorizon ?? "Snapshot"}`} />
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="profile-section analysis-section" id="analysis" aria-label="Deep AI Analysis">
         {showAnalysis ? null : (

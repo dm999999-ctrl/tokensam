@@ -32,10 +32,8 @@ const volume = (values, opts) => daily("volume_24h_usd", "coingecko", values, op
 const marketCap = (values, opts) => daily("market_cap_usd", "coingecko", values, opts);
 const tvl = (values, opts) => daily("tvl_usd", "defillama", values, opts);
 const evaluate = (rows, protocolMapped = false) => evaluateTechnicalIndicators(rows, { asOf: AS_OF, protocolMapped });
+const ids = (view) => view.groups.flatMap((group) => group.indicators.map((indicator) => indicator.id));
 const byId = (view, id) => view.groups.flatMap((group) => group.indicators).find((indicator) => indicator.id === id);
-/** Every registered indicator always appears; "shown"/"ids" means it actually calculated (available or stale). */
-const ids = (view) => view.groups.flatMap((group) => group.indicators.filter((indicator) => indicator.status !== "unavailable").map((indicator) => indicator.id));
-const statusOf = (view, id) => byId(view, id)?.status;
 const reading = (indicator, label) => indicator.readings.find((item) => item.label === label)?.value;
 
 const full = (opts) => {
@@ -142,28 +140,17 @@ test("aligned inputs use only days present in every series", () => {
 
 // ---- Availability ----
 
-test("price-only history shows price indicators; volume/TVL/divergence indicators stay visible but unavailable, with a specific reason each", () => {
+test("price-only history shows price indicators; volume, TVL and divergence indicators do not appear", () => {
   const { view, omitted } = evaluate(price(wave(90)));
   const shown = ids(view);
   for (const id of ["sma_20", "sma_50", "ema_20", "macd", "linreg_slope_20", "rsi_14", "roc_14", "bollinger_20_2", "historical_volatility_30", "ulcer_index_14", "swing_structure", "closing_range_30"]) {
     assert.ok(shown.includes(id), `${id} shown`);
   }
-  // No protocol mapping (evaluate() defaults protocolMapped to false) → the sole-missing-input case for
-  // TVL gets the more specific "protocol_not_mapped" reason; every other data gap is "missing_input".
-  const expectedReason = {
-    vwma_20: "missing_input", volume_sma_20: "missing_input", obv_20: "missing_input",
-    tvl_change_7d: "protocol_not_mapped", price_vs_tvl_30d: "protocol_not_mapped",
-    market_cap_vs_tvl_30d: "missing_input", price_vs_volume_30d: "missing_input", volume_to_market_cap_30d: "missing_input",
-  };
-  for (const [id, reason] of Object.entries(expectedReason)) {
-    assert.ok(!shown.includes(id), `${id} not calculated`);
-    assert.equal(byId(view, id).status, "unavailable");
-    assert.equal(byId(view, id).reason, reason, id);
-    assert.equal(omitted.find((o) => o.id === id).reason, reason);
+  for (const id of ["vwma_20", "volume_sma_20", "obv_20", "tvl_change_7d", "price_vs_tvl_30d", "market_cap_vs_tvl_30d", "price_vs_volume_30d", "volume_to_market_cap_30d"]) {
+    assert.ok(!shown.includes(id), `${id} hidden`);
+    assert.equal(omitted.find((o) => o.id === id).reason, "missing_input");
   }
-  // The section is persistent: every category with a registered definition still appears — including
-  // ones with nothing calculable right now — instead of disappearing when empty.
-  assert.deepEqual(view.groups.map((g) => g.category), ["trend", "momentum", "volatility", "volume", "market_structure", "on_chain", "divergence"]);
+  assert.deepEqual(view.groups.map((g) => g.category), ["trend", "momentum", "volatility", "market_structure"], "empty categories are not rendered");
 });
 
 test("minimum history is enforced per indicator (30 days: no SMA50, EMA20, MACD or RSI)", () => {
@@ -214,11 +201,8 @@ test("no fabricated values: every shown reading is finite, flat data omits undef
   const rows = full();
   const rowIds = new Set(rows.map((row) => row.id));
   const { view } = evaluate(rows, true);
-  // full() supplies price/volume/marketCap/tvl but not circulatingSupply, so the on_chain
-  // circulating_supply_change_7d indicator stays unavailable even here — that's expected, not a bug.
-  assert.equal(byId(view, "circulating_supply_change_7d").status, "unavailable");
-  for (const indicator of view.groups.flatMap((g) => g.indicators).filter((i) => i.status !== "unavailable")) {
-    assert.equal(indicator.status, "available", `${indicator.id} is fresh, not stale`);
+  for (const indicator of view.groups.flatMap((g) => g.indicators)) {
+    assert.equal(indicator.available, true);
     for (const r of indicator.readings) if (typeof r.value === "number") assert.ok(Number.isFinite(r.value), `${indicator.id} ${r.label}`);
     assert.ok(indicator.provenance.sourceObservationIds.length > 0 && indicator.provenance.sourceObservationIds.every((id) => rowIds.has(id)), `${indicator.id} ids trace to stored rows`);
     assert.equal(indicator.provenance.calculatedAt, AS_OF.toISOString());
@@ -240,7 +224,7 @@ test("divergence wording is neutral and rule-based", () => {
 
 // ---- Presentation ----
 
-test("Technical Analysis is a persistent section: it always renders, with unavailable/stale indicators kept visible on their own cards", () => {
+test("UI receives only available indicators; the Technical section and nav entry exist only with indicators", () => {
   const view = evaluate(full(), true).view;
   const profile = (technicalIndicators) => ({
     token: { id: "aave-aave", name: "Aave", symbol: "AAVE", chain: "Ethereum", category: "DeFi", priceUsd: 1, change24hPct: null, change7dPct: null, marketCapUsd: null, volume24hUsd: null, tvlUsd: null, tvlChange30dPct: null, fees24hUsd: null, revenue24hUsd: null, observedAt: "", metricSources: {} },
@@ -250,20 +234,16 @@ test("Technical Analysis is a persistent section: it always renders, with unavai
     coverage: [], tokenLevelPrice: null, logoUrl: null, protocol: null, dexActivity: { transactions24h: null, buys24h: null, sells24h: null },
   });
   const sections = buildProfileModel(profile(view)).sections.map((s) => s.id);
-  assert.deepEqual(sections, ["overview", "market", "technical", "analysis", "sources"], "technical is always in the nav, in its usual place");
+  assert.deepEqual(sections, ["overview", "market", "technical", "analysis", "sources"], "only sections with content; cross-metric analysis sits inside Technical");
   const model = buildProfileModel(profile(view));
   assert.ok(!model.technical.some((group) => group.category === "divergence"), "cross-metric groups are not repeated under Technical");
   assert.deepEqual(model.divergence.indicators.map((i) => i.category), model.divergence.indicators.map(() => "divergence"));
-  assert.ok(model.divergence.indicators.every((i) => i.status !== "unavailable"), "cross-metric analysis still shows only real content");
-  // The section persists regardless of data state: empty groups, and even a wholly missing
-  // technicalIndicators view (e.g. the live-data.ts calculation-exception fallback), never remove it.
-  assert.ok(buildProfileModel(profile({ ...view, groups: [] })).sections.some((s) => s.id === "technical"), "empty groups still render the persistent section");
-  assert.ok(buildProfileModel(profile(null)).sections.some((s) => s.id === "technical"), "a missing technicalIndicators view still renders the persistent section");
+  assert.ok(!buildProfileModel(profile({ ...view, groups: [] })).sections.some((s) => s.id === "technical"));
+  assert.ok(!buildProfileModel(profile(null)).sections.some((s) => s.id === "technical"));
   const profileSource = readFileSync(new URL("../src/components/TokenProfile.tsx", import.meta.url), "utf8");
-  assert.doesNotMatch(profileSource, /technical\.length > 0 \|\| hasCrossMetric/, "the section is no longer gated on there being any calculated content");
+  assert.match(profileSource, /data.technicalIndicators && technical.length > 0/);
   const component = readFileSync(new URL("../src/components/TechnicalIndicators.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(component, /N\/A|Not available|No data/i, "no placeholders");
-  assert.match(component, /Data unavailable/, "unavailable indicators explain their state instead of disappearing");
   assert.equal(namesProvider(component + JSON.stringify(view.groups.map((g) => g.indicators.map((i) => [i.name, i.description, i.formula, i.readings])))), false, "no provider names in visible text");
 });
 
@@ -271,19 +251,15 @@ test("Technical Analysis is a persistent section: it always renders, with unavai
 
 test("A. indicators stay available when the newest historical sample is older than the 3-day market threshold", () => {
   const rows = full({ endDaysAgo: 5 });
-  const { view } = evaluate(rows, true);
+  const { view, omitted } = evaluate(rows, true);
   const shown = ids(view);
   for (const id of ["sma_20", "sma_50", "ema_20", "macd", "rsi_14", "roc_14", "bollinger_20_2", "historical_volatility_30", "ulcer_index_14",
     "volume_sma_20", "obv_20", "linreg_slope_20", "price_vs_tvl_30d", "market_cap_vs_tvl_30d", "price_vs_volume_30d", "volume_to_market_cap_30d"]) {
     assert.ok(shown.includes(id), `${id} shown with 5-day-old history`);
   }
-  // A 7-day indicator's usual freshness allowance is 3 days; 5 days old is shown anyway, marked stale
-  // rather than hidden — using the most recent usable data instead of treating it as unavailable.
-  assert.equal(statusOf(view, "tvl_change_7d"), "stale", "a 7-day indicator allows 3 days");
+  assert.equal(omitted.find((o) => o.id === "tvl_change_7d").reason, "stale_history", "a 7-day indicator allows 3 days");
   const asOfSample = new Date(TODAY - 5 * DAY_MS).toISOString();
-  for (const indicator of view.groups.flatMap((g) => g.indicators).filter((i) => i.status !== "unavailable")) {
-    assert.equal(indicator.provenance.observationEnd, asOfSample, `${indicator.id} is as of its newest sample`);
-  }
+  for (const indicator of view.groups.flatMap((g) => g.indicators)) assert.equal(indicator.provenance.observationEnd, asOfSample, `${indicator.id} is as of its newest sample`);
   // Values are exactly those calculated on the day of the newest sample: nothing is carried to "now".
   const then = evaluateTechnicalIndicators(rows, { asOf: new Date(TODAY - 5 * DAY_MS + 3600e3), protocolMapped: true }).view;
   const readings = (v) => JSON.stringify(v.groups.flatMap((g) => g.indicators.map((i) => [i.id, i.readings])).filter(([id]) => shown.includes(id)));
@@ -293,60 +269,15 @@ test("A. indicators stay available when the newest historical sample is older th
   assert.equal(readings(evaluate(withSnapshot, true).view), readings(view));
 });
 
-test("B. indicators are marked stale (never hidden) once too old for their usual window, and truly insufficient history still leaves them unavailable", () => {
+test("B. indicators disappear when history is genuinely insufficient or too old for their window", () => {
   assert.deepEqual([7, 10, 13, 15, 25, 3].map(String), [14, 20, 26, 30, 50, 7].map((w) => String(maxHistoryAgeDays(w))));
-  // 8-day-old data is genuine, plentiful history — just stale for short-window indicators. Per the
-  // "use the most recent usable data, including older data when fresh data is unavailable" rule, these
-  // still show (as "stale"), they are not hidden.
-  const eightView = evaluate(full({ endDaysAgo: 8 }), true).view;
-  for (const id of ["rsi_14", "roc_14", "ulcer_index_14"]) assert.equal(statusOf(eightView, id), "stale", `${id}: 14-day indicators usually allow 7 days, but 8-day-old data is still shown`);
-  assert.equal(statusOf(eightView, "sma_20"), "available");
-  assert.equal(statusOf(eightView, "price_vs_tvl_30d"), "available");
-  const sixteenView = evaluate(full({ endDaysAgo: 16 }), true).view;
-  for (const id of ["price_vs_tvl_30d", "market_cap_vs_tvl_30d", "price_vs_volume_30d", "volume_to_market_cap_30d", "historical_volatility_30"]) {
-    assert.equal(statusOf(sixteenView, id), "stale", id);
-  }
-  assert.equal(statusOf(sixteenView, "sma_50"), "available");
-  // Even 26-day-old data is real, sufficient history — shown as stale, never hidden for staleness alone.
-  const twentySixView = evaluate(full({ endDaysAgo: 26 }), true).view;
-  assert.equal(statusOf(twentySixView, "sma_50"), "stale", "older than every window still shows, marked stale");
-  assert.ok(ids(twentySixView).length > 0, "staleness alone never empties the calculated set");
-  // Genuine insufficiency (not enough consecutive days ever collected) is the one thing that still
-  // leaves an indicator unavailable.
-  assert.equal(statusOf(evaluate(price(wave(19))).view, "sma_20"), "unavailable", "19 closes are not enough for SMA(20)");
-  assert.ok(!ids(evaluate(price(wave(19))).view).includes("sma_20"));
-});
-
-test("BTC reproduction: a token whose only observations are once-daily, off-midnight snapshots (e.g. a non-backfilled live-cron token) still gets a full, persistent Technical Analysis section — every indicator unavailable with a reason, none hidden", () => {
-  const start = new Date("2026-06-30T06:07:00.000Z").getTime();
-  const rows = [];
-  let id = 1;
-  for (let i = 0; i <= 88; i += 1) {
-    const t = start + i * DAY_MS;
-    for (const [metric_id, provider_id, value] of [["price_usd", "coingecko", 80000 + i * 40], ["volume_24h_usd", "coingecko", 4e10], ["market_cap_usd", "coingecko", 2e12]]) {
-      rows.push({ id: id++, metric_id, provider_id, value, status: "available", observed_at: new Date(t).toISOString() });
-    }
-  }
-  const asOf = new Date("2026-09-28T06:07:00.000Z");
-  // Confirms the root cause: not one sample lands within 30 minutes of a UTC-midnight boundary.
-  assert.equal(dailySamples(rows, SERIES_RULES.price, asOf.getTime()).length, 0);
-  const { view } = evaluateTechnicalIndicators(rows, { asOf, protocolMapped: false });
-  assert.ok(view.groups.length > 0, "the section still has content — categories are never emptied out");
-  const all = view.groups.flatMap((g) => g.indicators);
-  assert.ok(all.length > 0, "every registered definition still produces a card");
-  assert.ok(all.every((indicator) => indicator.status === "unavailable"), "none can calculate from off-midnight-only data, but none crash and none are omitted from the payload");
-  assert.ok(all.every((indicator) => indicator.reason === "missing_input" || indicator.reason === "protocol_not_mapped"), "each card carries a specific, honest reason");
-  assert.ok(all.every((indicator) => typeof indicator.detail === "string" && indicator.detail.length > 0), "each card explains itself");
-  // The persistent-section guarantee holds all the way up through the profile model.
-  const model = buildProfileModel({
-    token: { id: "bitcoin-btc", name: "Bitcoin", symbol: "BTC", chain: "Bitcoin", category: "Payments", priceUsd: 1, change24hPct: null, change7dPct: null, marketCapUsd: null, volume24hUsd: null, tvlUsd: null, tvlChange30dPct: null, fees24hUsd: null, revenue24hUsd: null, observedAt: "", metricSources: {} },
-    technicalIndicators: view, description: null, contractAddress: null, isNative: true, circulatingSupply: null, totalSupply: null, maximumSupply: null,
-    metricSources: {}, calculatedMetrics: [], history: buildTokenHistory("bitcoin-btc", [], asOf),
-    dataNotes: [], dexMapped: false, defiLlamaMapped: false, datasetFreshness: [],
-    coverage: [], tokenLevelPrice: null, logoUrl: null, protocol: null, dexActivity: { transactions24h: null, buys24h: null, sells24h: null },
-  });
-  assert.ok(model.sections.some((s) => s.id === "technical"), "Technical Analysis is in the nav for BTC despite zero calculable indicators");
-  assert.ok(model.technical.length > 0, "category groups still render");
+  const eight = ids(evaluate(full({ endDaysAgo: 8 }), true).view);
+  assert.ok(!eight.includes("rsi_14") && !eight.includes("roc_14") && !eight.includes("ulcer_index_14"), "14-day indicators allow 7 days");
+  assert.ok(eight.includes("sma_20") && eight.includes("price_vs_tvl_30d"));
+  const sixteen = ids(evaluate(full({ endDaysAgo: 16 }), true).view);
+  assert.ok(!sixteen.some((id) => id.endsWith("_30d") || id === "historical_volatility_30") && sixteen.includes("sma_50"));
+  assert.deepEqual(ids(evaluate(full({ endDaysAgo: 26 }), true).view), [], "older than every window allows");
+  assert.ok(!ids(evaluate(price(wave(19))).view).includes("sma_20"), "19 closes are not enough for SMA(20)");
 });
 
 // ---- Horizons: Snapshot vs 7D vs 30D ----
@@ -398,9 +329,7 @@ test("F. no interpolation or zero-filling: gaps and invalid values shorten the r
   assert.equal(zeroTail.length, 4, "a zero price is invalid and breaks the run");
   assert.ok(zeroTail.every((point) => point.value > 0));
   const rowIds = new Set(gap.map((row) => row.id));
-  for (const indicator of evaluate(gap).view.groups.flatMap((g) => g.indicators).filter((i) => i.status !== "unavailable")) {
-    assert.ok(indicator.provenance.sourceObservationIds.every((id) => rowIds.has(id)));
-  }
+  for (const indicator of evaluate(gap).view.groups.flatMap((g) => g.indicators)) assert.ok(indicator.provenance.sourceObservationIds.every((id) => rowIds.has(id)));
 });
 
 test("research order: overview → market → fundamentals → tokenomics → history → trading & liquidity → technical → divergence → AI → sources", () => {
@@ -459,7 +388,7 @@ test("research order: overview → market → fundamentals → tokenomics → hi
   assert.ok(order.every((index, i) => index > 0 && (i === 0 || index > order[i - 1])), `rendered in research order: ${order}`);
 });
 
-test("profile terminology, persistent Technical section with visible unavailable cards, cross-metric inside Technical, concise cards", () => {
+test("profile terminology, no unavailable-data cards, cross-metric inside Technical, concise cards", () => {
   const profileSource = readFileSync(new URL("../src/components/TokenProfile.tsx", import.meta.url), "utf8");
   for (const phrase of ['eyebrow="Token performance" title="Market history"', 'eyebrow="Token analysis" title="Technical indicators"', "Token dynamics", "Cross-metric analysis", "Associated Protocol TVL"]) {
     assert.ok(profileSource.includes(phrase), phrase);
@@ -469,16 +398,12 @@ test("profile terminology, persistent Technical section with visible unavailable
   }
   const technicalStart = profileSource.indexOf('id="technical"'), crossMetric = profileSource.indexOf('id="cross-metric"'), analysis = profileSource.indexOf('id="analysis"');
   assert.ok(technicalStart < crossMetric && crossMetric < analysis, "cross-metric subsection renders inside the Technical section");
-  assert.doesNotMatch(profileSource, /technical\.length > 0 \|\| hasCrossMetric/, "Technical is persistent: no longer gated on calculated content existing");
-  // Cards lead with a one-line summary; the long description, window and formula live in a disclosure
-  // (unavailable cards get their own shorter disclosure — no readings, but still explain the method).
+  assert.match(profileSource, /technical\.length > 0 \|\| hasCrossMetric/, "Technical shows for indicators or cross-metric content alone");
+  // Cards lead with a one-line summary; the long description, window and formula live in the disclosure.
   const card = readFileSync(new URL("../src/components/TechnicalIndicators.tsx", import.meta.url), "utf8");
-  const body = card.slice(card.indexOf("export function IndicatorCard"), card.indexOf("export function TechnicalIndicators"));
-  const disclosures = [...body.matchAll(/<details[\s\S]*?<\/details>/g)].map((m) => m[0]).join("\n");
-  const front = body.split(/<details[\s\S]*?<\/details>/g).join("");
-  assert.ok(front.includes("indicator.summary") && !front.includes("indicator.description") && !front.includes("indicator.formula") && !front.includes("periodLabel"), "the summary sits outside any disclosure, the long description and formula never do");
-  assert.ok(disclosures.includes("indicator.description") && disclosures.includes("indicator.formula"), "the long description and formula are always inside a disclosure");
-  assert.match(disclosures, /calculatedAt/, "provenance detail (when available) is inside a disclosure");
+  const [front, disclosure] = card.slice(card.indexOf("export function IndicatorCard"), card.indexOf("export function TechnicalIndicators")).split("<details");
+  assert.ok(front.includes("indicator.summary") && !front.includes("indicator.description") && !front.includes("indicator.formula") && !front.includes("periodLabel"));
+  assert.ok(disclosure.includes("indicator.description") && disclosure.includes("indicator.formula") && disclosure.includes("calculatedAt"));
   for (const d of INDICATOR_DEFINITIONS) assert.ok(d.summary && d.summary.length <= 80 && d.summary.length < d.description.length, `${d.id} has a short summary`);
 });
 

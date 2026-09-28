@@ -3,7 +3,7 @@ import "server-only";
 import { createSupabaseAdminClient } from "../supabase/admin.ts";
 import { OBSERVATION_COLUMNS, latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
 import { selectMovers, type Movers } from "../ui/movers.ts";
-import { buildTechnicalIndicators, unavailableTechnicalIndicators } from "../indicators/build.ts";
+import { buildTechnicalIndicators } from "../indicators/build.ts";
 import type { TechnicalIndicatorsView } from "../../types/technical-indicators.ts";
 import { PROVIDER_STEPS, type ProviderStep, type RefreshStep } from "../refresh/config.ts";
 import { buildDatasetFreshness, buildRefreshStatus, type RefreshStatusView } from "../refresh/freshness.ts";
@@ -560,15 +560,12 @@ export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdmin
   // Market-scope counts only for a curated exact-address mapping; never from a wrapped proxy.
   const dexCount = (metricId: string) => dexMapped ? observationValue(observationFor(observations, tokenId, "dexscreener", metricId)) : null;
   const protocolMapped = coverage.some((item) => item.provider === "defillama" && item.status === "mapped");
-  // Technical Analysis is a persistent profile section: a calculation failure never hides it, it
-  // shows every indicator as unavailable instead (still never failing the whole profile).
-  const calculatedAtNow = new Date();
-  let technicalIndicators: TechnicalIndicatorsView;
+  let technicalIndicators: TechnicalIndicatorsView | null = null;
   try {
-    technicalIndicators = buildTechnicalIndicators(mergeById(observations, supplyHistory), { asOf: calculatedAtNow, protocolMapped });
+    technicalIndicators = buildTechnicalIndicators(mergeById(observations, supplyHistory), { asOf: new Date(), protocolMapped });
   } catch (error) {
+    // Indicators are optional context: a calculation failure hides the section, never the profile.
     console.error(`Technical indicator calculation failed for ${tokenId}:`, error);
-    technicalIndicators = unavailableTechnicalIndicators(calculatedAtNow.toISOString(), "Technical indicator calculation failed for this token.");
   }
   return {
     token,

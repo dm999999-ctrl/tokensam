@@ -6,38 +6,17 @@ import { datasetLabel } from "@/lib/ui/data-language";
 /**
  * One indicator: name, values, neutral state and a one-line summary up front;
  * the full description, window, formula, parameters and provenance sit in a
- * collapsed "Method & data" disclosure. Every registered indicator renders a
- * card — unavailable ones explain why instead of showing readings, and stale
- * ones show their true (older) date rather than being hidden or backdated.
+ * collapsed "Method & data" disclosure.
  */
 export function IndicatorCard({ indicator }: { indicator: TechnicalIndicator }) {
   const { provenance } = indicator;
-  if (indicator.status === "unavailable" || !provenance) {
-    return (
-      <article className="indicator-card indicator-unavailable" aria-labelledby={`indicator-${indicator.id}`}>
-        <header className="indicator-head">
-          <strong id={`indicator-${indicator.id}`}>{indicator.name}</strong>
-        </header>
-        <p className="indicator-state">Data unavailable</p>
-        <p className="indicator-desc">{indicator.detail}</p>
-        <details className="indicator-method">
-          <summary>Method &amp; data</summary>
-          <p>{indicator.description}</p>
-          <p>Window: {indicator.periodLabel}</p>
-          <p>{indicator.formula}</p>
-          {Object.keys(indicator.parameters).length > 0 ? <p>Parameters: {formatParameters(indicator.parameters)}</p> : null}
-        </details>
-      </article>
-    );
-  }
   const datasets = [...new Set(provenance.providers.map((provider) => datasetLabel(provider, "Market data")))].join(" + ");
   const start = formatUtc(provenance.observationStart, false), end = formatUtc(provenance.observationEnd, false);
   const readings = indicator.readings
     .map((reading) => ({ reading, text: formatReading(reading), tone: readingTone(reading) }))
     .filter((item): item is { reading: typeof item.reading; text: string; tone: typeof item.tone } => item.text !== null);
-  const stale = indicator.status === "stale";
   return (
-    <article className={`indicator-card${stale ? " indicator-stale" : ""}`} aria-labelledby={`indicator-${indicator.id}`}>
+    <article className="indicator-card" aria-labelledby={`indicator-${indicator.id}`}>
       <header className="indicator-head">
         <strong id={`indicator-${indicator.id}`}>{indicator.name}</strong>
       </header>
@@ -50,7 +29,7 @@ export function IndicatorCard({ indicator }: { indicator: TechnicalIndicator }) 
         ))}
       </dl>
       {indicator.state ? <p className="indicator-state">{indicator.state}</p> : null}
-      <p className="indicator-desc">{indicator.summary} <span className="indicator-asof">{stale ? "Stale — most recent usable data as of" : "As of"} {end}.</span></p>
+      <p className="indicator-desc">{indicator.summary} <span className="indicator-asof">As of {end}.</span></p>
       <details className="indicator-method">
         <summary>Method &amp; data</summary>
         <p>{indicator.description}</p>
@@ -65,14 +44,14 @@ export function IndicatorCard({ indicator }: { indicator: TechnicalIndicator }) 
 }
 
 /**
- * Technical indicators for one token: a persistent section. Every registered
- * indicator is shown, calculated or not — data availability changes a card's
- * own state, never whether it (or the section) appears.
+ * Technical indicators for one token. The server sends only indicators that
+ * calculated from stored history; empty categories never arrive, so nothing
+ * here decides availability or shows placeholders.
  */
-export function TechnicalIndicators({ view, groups }: { view: TechnicalIndicatorsView | null | undefined; groups: TechnicalIndicatorGroup[] }) {
+export function TechnicalIndicators({ view, groups }: { view: TechnicalIndicatorsView; groups: TechnicalIndicatorGroup[] }) {
   return (
     <>
-      <p className="scope-line">Calculated from daily closes, using the most recent usable run of history; each card explains its state when data is stale or unavailable. Analytical measurements, not trading signals.</p>
+      <p className="scope-line">Calculated from daily closes; each indicator appears only when enough history exists. Analytical measurements, not trading signals.</p>
       {groups.map((group) => (
         <div key={group.category} className="indicator-group">
           <h3>{group.label}<small>{group.indicators.length}</small></h3>
@@ -81,12 +60,10 @@ export function TechnicalIndicators({ view, groups }: { view: TechnicalIndicator
           </div>
         </div>
       ))}
-      {view ? (
-        <details className="indicator-method indicator-footnote">
-          <summary>How indicators are calculated</summary>
-          <p>{view.method} Calculated {formatUtc(view.calculatedAt)}.</p>
-        </details>
-      ) : null}
+      <details className="indicator-method indicator-footnote">
+        <summary>How indicators are calculated</summary>
+        <p>{view.method} Calculated {formatUtc(view.calculatedAt)}.</p>
+      </details>
     </>
   );
 }
