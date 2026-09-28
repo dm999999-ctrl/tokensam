@@ -192,12 +192,36 @@ test("5. metrics run once after providers and are skipped when nothing is due", 
 test("cadence: providers are due by their own interval, with tolerance for cron jitter", () => {
   const now = new Date("2026-09-25T12:00:00.000Z");
   const at = (minutes) => new Date(now.getTime() - minutes * 60_000).toISOString();
-  assert.equal(isProviderDue("coingecko", undefined, now), true);
-  assert.equal(isProviderDue("coingecko", at(30), now), false);
-  assert.equal(isProviderDue("coingecko", at(52), now), true, "a slightly early hourly tick still collects");
-  assert.equal(isProviderDue("dexscreener", at(61), now), true);
-  assert.equal(isProviderDue("defillama", at(120), now), false, "DeFiLlama refreshes every 6 hours");
-  assert.equal(isProviderDue("defillama", at(355), now), true);
+  assert.equal(isProviderDue("coingecko", undefined, now), true, "first-ever refresh with no lastSuccessAt remains due");
+  assert.equal(isProviderDue("coingecko", at(12), now), false, "15-minute provider is not due before 13 minutes");
+  assert.equal(isProviderDue("coingecko", at(13), now), true, "15-minute provider is due at 13 minutes");
+  assert.equal(isProviderDue("coingecko", at(15), now), true);
+  assert.equal(isProviderDue("dexscreener", at(12), now), false);
+  assert.equal(isProviderDue("dexscreener", at(13), now), true);
+  assert.equal(isProviderDue("defillama_coins", at(27), now), false, "30-minute provider is not due before 28 minutes");
+  assert.equal(isProviderDue("defillama_coins", at(28), now), true, "30-minute provider is due at 28 minutes");
+  assert.equal(isProviderDue("defillama", at(357), now), false, "6-hour provider is not due before 5h58m");
+  assert.equal(isProviderDue("defillama", at(358), now), true, "DeFiLlama refreshes every 6 hours, due at 5h58m");
+});
+
+test("cadence: force refresh behavior remains unchanged", async () => {
+  const order = [];
+  const collectors = {
+    coingecko: { collect: async () => { order.push("coingecko"); return { observations: 1 }; } },
+    dexscreener: { collect: async () => { order.push("dexscreener"); return { observations: 1 }; } },
+    defillama: { collect: async () => { order.push("defillama"); return { observations: 1 }; } },
+  };
+  const db = createFakeSupabase({ seed: baseSeed() });
+  const store = new SupabaseRefreshStore(db.client);
+  const calculateMetrics = async () => { order.push("metrics"); return { calculatedMetrics: 3 }; };
+  const first = await runDataRefresh(db.client, store, { trigger: "scheduled", collectors, calculateMetrics });
+  assert.equal(first.status, "succeeded");
+
+  // Immediately afterwards nothing is due naturally, but force still runs every provider.
+  order.length = 0;
+  const forced = await runDataRefresh(db.client, store, { trigger: "manual", collectors, calculateMetrics, force: true });
+  assert.equal(forced.status, "succeeded");
+  assert.deepEqual(new Set(order), new Set(["coingecko", "dexscreener", "defillama", "metrics"]));
 });
 
 test("overall status distinguishes succeeded, partial, failed, and skipped", () => {
