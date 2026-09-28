@@ -332,7 +332,7 @@ test("F. no interpolation or zero-filling: gaps and invalid values shorten the r
   for (const indicator of evaluate(gap).view.groups.flatMap((g) => g.indicators)) assert.ok(indicator.provenance.sourceObservationIds.every((id) => rowIds.has(id)));
 });
 
-test("research order: overview → market → fundamentals → tokenomics → market structure → history → technical → divergence → AI → sources", () => {
+test("research order: overview → market → fundamentals → tokenomics → history → trading & liquidity → technical → divergence → AI → sources", () => {
   const rows = full();
   const view = evaluate(rows, true).view;
   const metric = (id, category, value, sourceScopes) => ({ id, name: id, category, unit: "percentage_points", value, status: "available", formula: "f", calculatedAt: AS_OF.toISOString(), periodStartAt: new Date(TODAY - DAY_MS).toISOString(), periodEndAt: AS_OF.toISOString(), unavailableReason: null, sourceScopes });
@@ -352,9 +352,9 @@ test("research order: overview → market → fundamentals → tokenomics → ma
   };
   const model = buildProfileModel(data);
   assert.deepEqual(model.sections.map((s) => s.id),
-    ["overview", "market", "fundamentals", "tokenomics", "market-structure", "history", "technical", "analysis", "sources"]);
+    ["overview", "market", "fundamentals", "tokenomics", "history", "market-structure", "technical", "analysis", "sources"]);
   assert.deepEqual(model.sections.map((s) => s.label),
-    ["Overview", "Market", "Fundamentals", "Tokenomics", "Market Structure", "History", "Technical", "AI Analysis", "Sources"]);
+    ["Overview", "Market", "Fundamentals", "Tokenomics", "History", "Trading & Liquidity", "Technical", "AI Analysis", "Sources"]);
   assert.ok(model.fundamentals.available && !model.fundamentals.changes.some((c) => c.id.includes("_vs_")), "comparisons moved out of Fundamentals");
   assert.ok(model.fundamentals.changes.some((c) => c.id === "tvl_growth_pct"), "protocol growth stays in Fundamentals");
   assert.deepEqual(model.divergence.comparisons.map((c) => c.id), ["price_change_vs_tvl_growth_pct_points"]);
@@ -384,7 +384,7 @@ test("research order: overview → market → fundamentals → tokenomics → ma
   const unmapped = buildProfileModel({ ...data, coverage: [], protocol: null });
   assert.ok(!unmapped.history.tvl && unmapped.divergence.comparisons.length === 0, "protocol-scope items need a curated mapping");
   const source = readFileSync(new URL("../src/components/TokenProfile.tsx", import.meta.url), "utf8");
-  const order = ['id="overview"', 'id="market"', 'id="fundamentals"', 'id="tokenomics"', 'id="market-structure"', 'id="history"', 'id="technical"', 'id="cross-metric"', 'id="analysis"', "<SourcesMethodology"].map((marker) => source.indexOf(marker));
+  const order = ['id="overview"', 'id="market"', 'id="fundamentals"', 'id="tokenomics"', 'id="history"', 'id="market-structure"', 'id="technical"', 'id="cross-metric"', 'id="analysis"', "<SourcesMethodology"].map((marker) => source.indexOf(marker));
   assert.ok(order.every((index, i) => index > 0 && (i === 0 || index > order[i - 1])), `rendered in research order: ${order}`);
 });
 

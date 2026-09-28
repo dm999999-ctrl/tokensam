@@ -170,6 +170,32 @@ test("6. protocol data appears only under Fundamentals; DEX data only under Mark
   assert.ok(dexIds.includes("dex_aggregate_liquidity_usd") && dexIds.includes("transactions_24h"));
   assert.ok(!dexIds.includes("dex_primary_pair_liquidity_usd"), "a primary pair equal to the aggregate adds nothing and is hidden");
   assert.ok(!model.snapshot.cards.some((item) => item.id.startsWith("dex_") || item.id === "market_cap_to_tvl"));
+
+  // Market Snapshot echoes the verified headline DEX figures (Trading & Liquidity keeps the deeper detail).
+  const onChainIds = model.snapshot.onChain.map((item) => item.id);
+  assert.ok(onChainIds.includes("dex_aggregate_liquidity_usd"), "DEX liquidity appears in the Market Snapshot on-chain group");
+  assert.ok(onChainIds.includes("transactions_24h"), "transactions appear in the Market Snapshot on-chain group");
+});
+
+test("6b. Market Snapshot's on-chain trading group omits individual unavailable DEX metrics, and omits itself entirely with no DEX mapping", () => {
+  // No dex_buy_sell_ratio or dex_aggregate_volume_24h_usd stored: only the metrics that exist appear.
+  const partial = buildProfileModel(profileData("aave-aave", {
+    token: dashboardToken("aave-aave"),
+    protocol: { name: "Aave", aggregatesVersions: true },
+    contractAddress: byId("aave-aave").contractAddress,
+    dexActivity: { transactions24h: 1169, buys24h: 613, sells24h: 556 },
+    calculatedMetrics: [
+      metric({ id: "dex_aggregate_liquidity_usd", category: "market_structure", unit: "USD", value: 5.24e6, sourceScopes: "market" }),
+    ],
+  }));
+  const partialIds = partial.snapshot.onChain.map((item) => item.id);
+  assert.ok(partialIds.includes("dex_aggregate_liquidity_usd"));
+  assert.ok(partialIds.includes("transactions_24h"), "transactions24h comes from dexActivity, independent of calculatedMetrics");
+  assert.ok(!partialIds.some((id) => id === "dex_aggregate_volume_24h_usd" || id === "dex_buy_sell_ratio"), "an unavailable DEX metric is omitted, never fabricated");
+
+  // BTC: no DEX Screener mapping at all — the on-chain group must not render as an empty shell.
+  const btc = buildProfileModel(profileData("bitcoin-btc"));
+  assert.deepEqual(btc.snapshot.onChain, [], "no on-chain trading group without a curated DEX mapping");
 });
 
 test("7. technical identifiers only in methodology, and no internal database IDs anywhere", () => {
