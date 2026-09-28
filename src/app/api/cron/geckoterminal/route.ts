@@ -24,10 +24,16 @@ const PROCESSING_BUDGET_MS = 270_000;
 // Longer than maxDuration so a genuinely running invocation is never stolen,
 // short enough that a crashed invocation self-heals well within a few cron ticks.
 const LOCK_LEASE_MS = 15 * 60 * 1000;
-// Consistent with the */15 * * * * Vercel Cron schedule (see vercel.json): a
-// due-check shorter than the cron cadence means a scheduled tick is always
-// due, while still guarding against a duplicate manual trigger moments later.
-const DEFAULT_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+// Vercel Hobby cannot run a cron more often than once a day, so this route is
+// no longer invoked by a */15 * * * * Vercel Cron (see vercel.json). Instead
+// the existing Cloudflare Worker (cloudflare/refresh-scheduler/) invokes this
+// route on every one of its 5-minute ticks, the same way it already invokes
+// /api/cron/refresh, and this due-check is what turns that into an effective
+// ~15-minute GeckoTerminal cadence: two out of every three 5-minute ticks are
+// a cheap no-op ({"status":"skipped"}), and the third actually collects.
+// 13 minutes is 15 minutes minus a 2-minute tolerance for tick jitter, the
+// same interval-minus-tolerance pattern REFRESH_POLICY/DUE_TOLERANCE_MS uses.
+const DEFAULT_SYNC_INTERVAL_MS = 13 * 60 * 1000;
 
 function positiveNumber(value: string | undefined): number | null {
   const parsed = Number(value);
@@ -35,18 +41,23 @@ function positiveNumber(value: string | undefined): number | null {
 }
 
 /**
- * Scheduled GeckoTerminal collection (Vercel Cron, every 15 minutes; see
- * vercel.json). Requires `Authorization: Bearer <CRON_SECRET>`, the same
- * secret and header convention as /api/cron/refresh.
+ * Scheduled GeckoTerminal collection. Invoked by the Cloudflare Worker
+ * (cloudflare/refresh-scheduler/) on every 5-minute tick — not by Vercel
+ * Cron, which on the Hobby plan cannot fire more often than once a day; see
+ * "Recurring scheduled collection" in docs/geckoterminal-integration.md.
+ * Requires `Authorization: Bearer <CRON_SECRET>`, the same secret and header
+ * convention as /api/cron/refresh.
  *
  * Gated behind `GECKOTERMINAL_SYNC_ENABLED=true` (unset/false: no-op, so
  * deploying this route never silently starts spending GeckoTerminal's rate
  * limit). `GECKOTERMINAL_SYNC_INTERVAL` (ms) controls the due-check —
- * default 10 min — independent of how often the cron itself fires, mirroring
- * the existing refresh's due-check pattern. Each invocation processes only as
- * many tokens as fit the time budget (rotation, not a full-universe sync), so
- * the 15-minute cadence is the collection tick, not the freshness of every
- * mapped token; see docs/geckoterminal-integration.md for rotation timing.
+ * default 13 min — independent of how often the caller fires, mirroring
+ * the existing refresh's due-check pattern; this is what turns frequent
+ * 5-minute ticks into an effective ~15-minute GeckoTerminal cadence. Each
+ * invocation processes only as many tokens as fit the time budget (rotation,
+ * not a full-universe sync), so the ~15-minute cadence is the collection
+ * tick, not the freshness of every mapped token; see
+ * docs/geckoterminal-integration.md for rotation timing.
  * `GECKOTERMINAL_BATCH_DELAY_MS` may only raise pacing above the collector's
  * own conservative floor, never lower it. `force=1` bypasses the due-check
  * for manual testing.
@@ -66,7 +77,12 @@ export async function GET(request: Request): Promise<Response> {
 
   const client = createSupabaseAdminClient();
   const now = new Date();
-  const trigger: GeckoTerminalSyncTrigger = request.headers.get("x-vercel-cron-schedule") ? "scheduled" : "manual";
+  // "x-vercel-cron-schedule" covers the rare direct Vercel Cron invocation (see vercel.json's
+  // daily entry for /api/cron/refresh); "x-scheduled-by" covers the Cloudflare Worker, which
+  // is not Vercel Cron and so cannot set the former header itself.
+  const trigger: GeckoTerminalSyncTrigger = request.headers.get("x-vercel-cron-schedule") || request.headers.get("x-scheduled-by")
+    ? "scheduled"
+    : "manual";
   const url = new URL(request.url);
   const force = url.searchParams.get("force") === "1";
 

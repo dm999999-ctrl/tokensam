@@ -1,0 +1,20 @@
+name = "tokensam-refresh-scheduler"
+main = "src/index.ts"
+compatibility_date = "2026-09-28"
+
+# Fires every 5 minutes. This is the only external clock for both scheduled
+# routes now: Vercel Hobby cannot run its own cron more often than once a
+# day, so /api/cron/refresh and /api/cron/geckoterminal are both invoked from
+# here, and each route's own due-check (REFRESH_POLICY/isProviderDue for the
+# former, GECKOTERMINAL_SYNC_INTERVAL for the latter) decides whether that
+# tick actually does anything. See src/index.ts and
+# docs/geckoterminal-integration.md.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Set with `wrangler secret put CRON_SECRET` — must equal the Vercel
+# deployment's own CRON_SECRET so isAuthorizedRefreshRequest() accepts it.
+# TARGET_BASE_URL is a plain (non-secret) var; set it below or with
+# `wrangler deploy --var TARGET_BASE_URL:https://<your-deployment>.vercel.app`.
+[vars]
+TARGET_BASE_URL = "https://tokensam.vercel.app"

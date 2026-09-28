@@ -9,8 +9,17 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * Scheduled data refresh (Vercel Cron, hourly). Requires `Authorization: Bearer <CRON_SECRET>`.
+ * Scheduled data refresh. Requires `Authorization: Bearer <CRON_SECRET>`.
  * Optional query parameters for development: `force=1` and `providers=coingecko,dexscreener`.
+ *
+ * Primarily invoked every 5 minutes by the Cloudflare Worker
+ * (cloudflare/refresh-scheduler/), which is what makes REFRESH_POLICY's
+ * per-provider intervals (CoinGecko/DEX Screener 15 min, DeFiLlama Coins
+ * 30 min, DeFiLlama 6 h — see src/lib/refresh/config.ts) effective; each tick
+ * is cheap when nothing is due, since isProviderDue() gates the actual work.
+ * vercel.json also declares a once-daily Vercel Cron entry as a fallback
+ * (Vercel Hobby cannot run cron more often than daily), so the route still
+ * runs even if the Cloudflare Worker is ever down.
  */
 export async function GET(request: Request): Promise<Response> {
   if (!isAuthorizedRefreshRequest(request.headers.get("authorization"))) {
@@ -25,8 +34,11 @@ export async function GET(request: Request): Promise<Response> {
 
   try {
     const client = createSupabaseAdminClient();
+    // "x-vercel-cron-schedule" covers the daily Vercel Cron fallback; "x-scheduled-by" covers
+    // the Cloudflare Worker, which is not Vercel Cron and so cannot set the former header.
+    const trigger = request.headers.get("x-vercel-cron-schedule") || request.headers.get("x-scheduled-by") ? "scheduled" : "manual";
     const result = await runDataRefresh(client, new SupabaseRefreshStore(client), {
-      trigger: request.headers.get("x-vercel-cron-schedule") ? "scheduled" : "manual",
+      trigger,
       force: url.searchParams.get("force") === "1",
       only: requested as ProviderStep[] | undefined,
     });
