@@ -21,7 +21,23 @@ not decide anything beyond "call both routes now."
 entry alone is not enough to keep either route's intended cadence, which is
 why this Worker exists.
 
-## Deploy
+## Deployment
+
+This Worker is deployed via **Cloudflare Workers Builds**, connected to:
+
+- Repository: [`dm999999-ctrl/tokensam`](https://github.com/dm999999-ctrl/tokensam)
+- Production branch: `main`
+- Deploy command: `cd cloudflare/refresh-scheduler && npx wrangler deploy`
+
+A push to `main` that touches this directory triggers a new build and
+deployment automatically; there is no separate manual deploy step for normal
+changes. `CRON_SECRET` is configured as a Cloudflare Worker secret directly
+in the Cloudflare dashboard (see "Manual/local deploy" below) — it is not
+part of the Git-triggered build and is never committed to this repository.
+
+### Manual/local deploy
+
+For local development, or to (re)configure the secret:
 
 ```bash
 cd cloudflare/refresh-scheduler
