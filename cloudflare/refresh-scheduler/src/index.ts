@@ -44,9 +44,16 @@ async function handleCoinGeckoProxy(request: Request, env: Env): Promise<Respons
   const upstreamUrl = `${upstreamBase}${upstreamPath}${incoming.search}`;
 
   try {
+    // /coins/markets (unlike /ping) sits behind an AWS CloudFront WAF that returned a
+    // CloudFront-branded 403 page for this exact request when tested with no User-Agent —
+    // a common bot-protection heuristic. A browser-like User-Agent costs nothing to try.
     const upstreamResponse = await fetch(upstreamUrl, {
       method: "GET",
-      headers: { [keyHeader]: env.COINGECKO_API_KEY, accept: "application/json" },
+      headers: {
+        [keyHeader]: env.COINGECKO_API_KEY,
+        accept: "application/json",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+      },
     });
     const body = await upstreamResponse.text();
     const headers = new Headers({ "content-type": upstreamResponse.headers.get("content-type") ?? "application/json" });
