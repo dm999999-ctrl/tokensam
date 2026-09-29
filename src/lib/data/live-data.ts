@@ -407,12 +407,31 @@ async function readSevenDayVolumes(client: SupabaseAdminClient, latest: DbObserv
 
 /** Token-level FDV from the latest stored /coins/markets payloads; optional, so a failed read leaves FDV unavailable. */
 async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]): Promise<Record<string, { value: number; collectedAt: string }>> {
+  // Read directly from the indexed CoinGecko markets history instead of the latest_raw
+  // view (same fix as readTokenLogos below, for the same reason): that view's DISTINCT ON
+  // over the full raw_provider_records table has no matching index and was intermittently
+  // hitting the 2-minute statement_timeout under concurrent load (dashboard reads racing
+  // the refresh/GeckoTerminal/retention cron ticks), which surfaced as FDV silently going
+  // blank. This query can use the same provider/endpoint/token/collected_at index the logo
+  // read already relies on.
   try {
-    const { data, error } = await client.from("latest_raw_provider_records")
+    // Bounded to the newest 5000 rows (descending), same as readTokenLogos below — with
+    // hundreds of tokens and a retention window on raw_provider_records, the full match
+    // set can exceed that. reportedFdvFromRecords() then overwrites on every matching
+    // record without sorting itself (unlike logosFromRecords, which re-sorts and takes
+    // the first hit), so within that bounded set the array is reversed to oldest-first:
+    // the newest record for each token is then the last write and wins.
+    const result = await client.from("raw_provider_records")
       .select("token_id,collected_at,endpoint_label,payload_id:payload->>id,fdv:payload->fully_diluted_valuation")
-      .eq("provider_id", "coingecko").in("token_id", tokenIds);
-    if (error) throw error;
-    return reportedFdvFromRecords((data ?? []) as unknown as MarketFieldRecord[]);
+      .eq("provider_id", "coingecko")
+      .eq("endpoint_label", COINGECKO_MARKETS_ENDPOINT)
+      .in("token_id", tokenIds)
+      .is("excluded_reason", null)
+      .order("collected_at", { ascending: false })
+      .limit(5000);
+    if (result.error) throw result.error;
+    const records = ((result.data ?? []) as unknown as MarketFieldRecord[]).slice().reverse();
+    return reportedFdvFromRecords(records);
   } catch (error) {
     console.error("Reported FDV read failed (FDV shown as unavailable):", error);
     return {};
