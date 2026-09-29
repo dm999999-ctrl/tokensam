@@ -9,6 +9,7 @@ import { REFRESH_POLICY } from "../src/lib/refresh/config.ts";
 import { buildRefreshStatus, relativeAge } from "../src/lib/refresh/freshness.ts";
 import { deadlineSleep, isProviderDue, overallStatus, runDataRefresh } from "../src/lib/refresh/orchestrator.ts";
 import { SupabaseRefreshStore } from "../src/lib/refresh/store.ts";
+import { CollectorDiagnostics } from "../src/lib/refresh/collector-diagnostics.ts";
 import { createFakeSupabase } from "./support/fake-supabase.mjs";
 
 const cases = [];
@@ -161,10 +162,65 @@ test("timeouts: a hanging provider is aborted before writing while others comple
     timeouts: { coingecko: 50 },
   });
   assert.ok(Date.now() - started < 5_000, "the run is bounded by the provider budget");
-  assert.equal(result.steps.find((step) => step.step === "coingecko").status, "timed_out");
+  const coingecko = result.steps.find((step) => step.step === "coingecko");
+  assert.equal(coingecko.status, "timed_out");
   assert.equal(result.steps.find((step) => step.step === "dexscreener").status, "succeeded");
   assert.equal(result.status, "partial");
   assert.equal(db.rows("token_metric_observations").filter((row) => row.provider_id === "coingecko").length, 0);
+
+  // Diagnostic-only stage timing survives the abort even though runCoinGeckoCollection's own
+  // promise never resolved: the orchestrator read it back from the same CollectorDiagnostics
+  // instance it handed the collector, not from the collector's (never-returned) result.
+  const diagnostics = coingecko.detail.diagnostics;
+  assert.ok(diagnostics, "a timed-out CoinGecko step records partial diagnostics instead of an empty detail");
+  assert.equal(diagnostics.lastStage, "coingecko.fetchSnapshots", "the hang never leaves the HTTP fetch stage");
+  assert.equal(diagnostics.lastStageStatus, "running", "the entered stage was aborted mid-flight, not completed");
+  assert.equal(diagnostics.stages["coingecko.fetchSnapshots"].status, "running");
+  assert.equal(diagnostics.stages["coingecko.prepareDatabase"].status, "not_started", "a later stage never reached is distinguishable from one that ran");
+  assert.equal(diagnostics.stages["coingecko.persistProviderSnapshots"].status, "not_started");
+  assert.ok(diagnostics.httpAttempts.length >= 1, "at least one HTTP attempt was recorded before the abort");
+  assert.equal(diagnostics.httpAttempts[0].httpStatus, null, "the hang never produced a response");
+
+  // Other providers' timeout/error detail is unchanged: they never write to diagnostics.
+  const dexscreenerResult = await runDataRefresh(
+    createFakeSupabase({ seed: baseSeed() }).client,
+    new SupabaseRefreshStore(createFakeSupabase({ seed: baseSeed() }).client),
+    { trigger: "scheduled", fetchImpl: providerFetch({ coingecko: "ok", dexscreener: "hang" }), sleep: noSleep, timeouts: { dexscreener: 50 } },
+  );
+  const dexscreenerStep = dexscreenerResult.steps.find((step) => step.step === "dexscreener");
+  assert.equal(dexscreenerStep.status, "timed_out");
+  assert.deepEqual(dexscreenerStep.detail, {}, "a provider that never writes to diagnostics keeps the original empty timeout detail");
+});
+
+test("CollectorDiagnostics: partial state distinguishes not_started, running, and completed stages", () => {
+  const diagnostics = new CollectorDiagnostics();
+  diagnostics.declareStages(["fetch", "prepare", "persist"]);
+
+  // Nothing has started yet.
+  let snapshot = diagnostics.snapshot();
+  assert.equal(snapshot.lastStage, null);
+  assert.equal(snapshot.lastStageStatus, "not_started");
+  assert.deepEqual(snapshot.stages, {
+    fetch: { status: "not_started" }, prepare: { status: "not_started" }, persist: { status: "not_started" },
+  });
+
+  diagnostics.start("fetch");
+  snapshot = diagnostics.snapshot();
+  assert.equal(snapshot.lastStage, "fetch");
+  assert.equal(snapshot.lastStageStatus, "running");
+  assert.equal(snapshot.stages.prepare.status, "not_started", "a later stage is not implicitly started");
+
+  diagnostics.end("fetch");
+  diagnostics.start("prepare");
+  snapshot = diagnostics.snapshot();
+  assert.equal(snapshot.stages.fetch.status, "completed");
+  assert.ok(typeof snapshot.stages.fetch.durationMs === "number" && snapshot.stages.fetch.durationMs >= 0);
+  assert.equal(snapshot.lastStage, "prepare");
+  assert.equal(snapshot.lastStageStatus, "running");
+  assert.equal(snapshot.stages.persist.status, "not_started", "the final declared stage was never reached");
+
+  diagnostics.recordHttpAttempt({ batch: 0, attempt: 1, outcome: "retry", durationMs: 12, httpStatus: 429 });
+  assert.deepEqual(diagnostics.snapshot().httpAttempts, [{ batch: 0, attempt: 1, outcome: "retry", durationMs: 12, httpStatus: 429 }]);
 });
 
 test("5. metrics run once after providers and are skipped when nothing is due", async () => {

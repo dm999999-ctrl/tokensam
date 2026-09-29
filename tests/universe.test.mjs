@@ -101,7 +101,9 @@ test("provider observation persistence is idempotent while raw snapshots remain 
           in() { return this; },
           gte() { return this; },
           lte() { return this; },
-          range: async () => ({ data: observations, error: null }),
+          gt() { return this; },
+          order() { return this; },
+          limit: async () => ({ data: observations, error: null }),
           insert: async (rows) => { observations.push(...rows); return { error: null }; },
         };
         return query;
@@ -156,7 +158,9 @@ test("large raw provider responses are persisted in bounded payload batches", as
           in() { return this; },
           gte() { return this; },
           lte() { return this; },
-          range: async () => ({ data: [], error: null }),
+          gt() { return this; },
+          order() { return this; },
+          limit: async () => ({ data: [], error: null }),
           insert: async () => ({ error: null }),
         };
       }

@@ -1,4 +1,5 @@
 import type { ProviderSnapshot } from "./types";
+import type { CollectorDiagnostics } from "../refresh/collector-diagnostics.ts";
 
 type SupabaseAdminClient = ReturnType<
   typeof import("../supabase/admin").createSupabaseAdminClient
@@ -30,15 +31,19 @@ function assertNoError(error: { message: string } | null, operation: string): vo
   if (error) throw new Error(`Supabase ${operation} failed: ${error.message}`);
 }
 
+/** Chunks are independent inserts (no shared state or ordering requirement), so they run concurrently
+ *  instead of one at a time — the wall-clock cost here is per-round-trip network latency, not server work. */
 async function writeInChunks(
   client: SupabaseAdminClient,
   table: "token_metric_observations",
   rows: Record<string, unknown>[],
 ): Promise<void> {
-  for (let index = 0; index < rows.length; index += CHUNK_SIZE) {
-    const { error } = await client.from(table).insert(rows.slice(index, index + CHUNK_SIZE));
+  const chunks: Record<string, unknown>[][] = [];
+  for (let index = 0; index < rows.length; index += CHUNK_SIZE) chunks.push(rows.slice(index, index + CHUNK_SIZE));
+  await Promise.all(chunks.map(async (chunk) => {
+    const { error } = await client.from(table).insert(chunk);
     assertNoError(error, `insert into ${table}`);
-  }
+  }));
 }
 
 function observationKey(row: {
@@ -57,12 +62,16 @@ function observationKey(row: {
   ].join("|");
 }
 
-/** Persist generic normalized provider snapshots and their source JSON. */
+/** Persist generic normalized provider snapshots and their source JSON.
+ *  `diagnostics` is optional, diagnostic-only stage timing (see
+ *  collector-diagnostics.ts); only the CoinGecko caller currently passes it,
+ *  so every other provider's behavior here is unchanged. */
 export async function persistProviderSnapshots(
   client: SupabaseAdminClient,
   snapshots: ProviderSnapshot[],
-): Promise<{ rawRecords: number; observations: number; pairMappings: number }> {
-  if (snapshots.length === 0) return { rawRecords: 0, observations: 0, pairMappings: 0 };
+  diagnostics?: CollectorDiagnostics,
+): Promise<{ rawRecords: number; observations: number; pairMappings: number; timingMs: Record<string, number> }> {
+  if (snapshots.length === 0) return { rawRecords: 0, observations: 0, pairMappings: 0, timingMs: {} };
 
   const rawRows = snapshots.map((snapshot) => ({
     provider_id: snapshot.providerId,
@@ -74,21 +83,44 @@ export async function persistProviderSnapshots(
     response_status: "success",
     payload: snapshot.rawPayload,
   }));
-  const insertedRawRows: { id: number; token_id: string; chain_id: string }[] = [];
-  for (const rawBatch of chunkRawRows(rawRows)) {
-    const { data, error } = await client
-      .from("raw_provider_records")
-      .insert(rawBatch)
-      .select("id, token_id, chain_id");
-    assertNoError(error, "insert into raw_provider_records");
-    insertedRawRows.push(...(data ?? []));
-  }
+
+  const providers = [...new Set(snapshots.map((snapshot) => snapshot.providerId))];
+  const tokenIdsForMapping = [...new Set(snapshots.map((snapshot) => snapshot.asset.tokenId))];
+
+  // Raw-record chunk inserts and the mapping-ID lookup are independent of each other
+  // (mapping lookup needs no raw-record IDs), so run them concurrently rather than
+  // paying for each Supabase round trip's network latency one at a time.
+  const rawInsertStart = Date.now();
+  const mappingLookupStart = rawInsertStart;
+  diagnostics?.start("coingecko.persist.rawRecordsInsert");
+  diagnostics?.start("coingecko.persist.mappingLookup");
+  const [insertedRawRows, mappingRows] = await Promise.all([
+    (async () => {
+      const chunks = chunkRawRows(rawRows);
+      const results = await Promise.all(chunks.map(async (rawBatch) => {
+        const { data, error } = await client
+          .from("raw_provider_records")
+          .insert(rawBatch)
+          .select("id, token_id, chain_id");
+        assertNoError(error, "insert into raw_provider_records");
+        return (data ?? []) as { id: number; token_id: string; chain_id: string }[];
+      }));
+      diagnostics?.end("coingecko.persist.rawRecordsInsert");
+      return results.flat();
+    })(),
+    (async () => {
+      const { data, error } = await client.from("provider_token_mappings")
+        .select("id,provider_id,token_id").in("provider_id", providers).in("token_id", tokenIdsForMapping);
+      assertNoError(error, "read provider mapping IDs");
+      diagnostics?.end("coingecko.persist.mappingLookup");
+      return (data ?? []) as { id: number; provider_id: string; token_id: string }[];
+    })(),
+  ]);
+  const rawInsertMs = Date.now() - rawInsertStart;
+  const mappingLookupMs = Date.now() - mappingLookupStart;
 
   const rawIdByTokenAndChain = new Map(
-    (insertedRawRows ?? []).map((row: { id: number; token_id: string; chain_id: string }) => [
-      `${row.token_id}:${row.chain_id}`,
-      row.id,
-    ]),
+    insertedRawRows.map((row) => [`${row.token_id}:${row.chain_id}`, row.id]),
   );
   const pairRows = snapshots.flatMap((snapshot) =>
     (snapshot.providerPairs ?? []).map((pair) => ({
@@ -115,14 +147,7 @@ export async function persistProviderSnapshots(
   }
   // Mapping IDs identify the provider mapping each observation was collected under.
   const mappingIds = new Map<string, number>();
-  {
-    const providers = [...new Set(snapshots.map((snapshot) => snapshot.providerId))];
-    const tokens = [...new Set(snapshots.map((snapshot) => snapshot.asset.tokenId))];
-    const { data, error } = await client.from("provider_token_mappings")
-      .select("id,provider_id,token_id").in("provider_id", providers).in("token_id", tokens);
-    assertNoError(error, "read provider mapping IDs");
-    for (const row of (data ?? []) as { id: number; provider_id: string; token_id: string }[]) mappingIds.set(`${row.provider_id}:${row.token_id}`, row.id);
-  }
+  for (const row of mappingRows) mappingIds.set(`${row.provider_id}:${row.token_id}`, row.id);
   const observationRows = snapshots.flatMap((snapshot) =>
     snapshot.observations.map((observation) => ({
       token_id: observation.tokenId,
@@ -149,20 +174,54 @@ export async function persistProviderSnapshots(
   const startAt = new Date(Math.min(...observedTimes)).toISOString();
   const endAt = new Date(Math.max(...observedTimes)).toISOString();
   const existingKeys = new Set<string>();
+  const existingKeysStart = Date.now();
+  diagnostics?.start("coingecko.persist.existingKeysLookup");
 
-  for (let offset = 0; ; offset += 1000) {
+  // Keyset pagination on `id` (this table's primary key, monotonically increasing on every
+  // insert) instead of OFFSET-based `.range()`: OFFSET makes Postgres re-scan and discard every
+  // row up to the current page's offset on *each* request, so cost grows with page depth across
+  // the loop. `id > cursor` lets each page pick up exactly where the previous one left off, so
+  // total cost stays close to one pass over the matching rows regardless of how many pages this
+  // takes (fixed in 2935c37).
+  //
+  // Two further costs remained even after that fix, both confirmed against production:
+  //  1. `id > 0` on the first page still forces Postgres to scan (and discard) every row from the
+  //     start of this table's whole history before reaching the recent rows this query actually
+  //     wants, because nothing bounds the scan by `observed_at` before `id` takes over as the sort
+  //     key. That cost grows every day as the table grows, independent of how much data this one
+  //     run touches — this is what was still consuming the entire 90s budget in production run 674
+  //     (data_refresh_steps id 515), after the keyset fix was already live.
+  //  2. Evaluating `token_id = ANY(<230-ish item array>)` as a per-row Postgres filter is
+  //     comparatively expensive CPU work (an EXPLAIN ANALYZE on production measured ~4.2s of added
+  //     execution time from this alone, against ~15k candidate rows) for a condition that, for a
+  //     full-universe CoinGecko refresh, passes for the vast majority of rows anyway.
+  // token_metric_observations_provider_observed_id_idx (see the matching migration) directly
+  // covers (provider_id, observed_at, id), so the DB-side WHERE now only needs provider_id and the
+  // observed_at window — both genuinely selective and index-bound regardless of table size — and
+  // `token_id` membership (unchanged semantics: still every one of `tokenIds`) is instead checked
+  // in JS against a Set, which is O(1) per row instead of Postgres's O(m) linear array scan.
+  const tokenIdSet = new Set(tokenIds);
+  let cursorId = 0;
+  for (;;) {
     const { data, error } = await client
       .from("token_metric_observations")
-      .select("token_id, chain_id, metric_id, observed_at, window_days")
+      .select("id, token_id, chain_id, metric_id, observed_at, window_days")
       .in("provider_id", providerIds)
-      .in("token_id", tokenIds)
       .gte("observed_at", startAt)
       .lte("observed_at", endAt)
-      .range(offset, offset + 999);
+      .gt("id", cursorId)
+      .order("id", { ascending: true })
+      .limit(1000);
     assertNoError(error, "check existing observations");
-    for (const row of data ?? []) existingKeys.add(observationKey(row));
-    if (!data || data.length < 1000) break;
+    const page = (data ?? []) as {
+      id: number; token_id: string; chain_id: string; metric_id: string; observed_at: string; window_days: number | null;
+    }[];
+    for (const row of page) if (tokenIdSet.has(row.token_id)) existingKeys.add(observationKey(row));
+    if (page.length < 1000) break;
+    cursorId = page[page.length - 1].id;
   }
+  diagnostics?.end("coingecko.persist.existingKeysLookup");
+  const existingKeysMs = Date.now() - existingKeysStart;
 
   const newObservationRows = observationRows.filter(
     (row) => !existingKeys.has(observationKey(row as {
@@ -173,6 +232,15 @@ export async function persistProviderSnapshots(
       window_days: number | null;
     })),
   );
+  const observationInsertStart = Date.now();
+  diagnostics?.start("coingecko.persist.observationInsert");
   await writeInChunks(client, "token_metric_observations", newObservationRows);
-  return { rawRecords: rawRows.length, observations: newObservationRows.length, pairMappings: pairRows.length };
+  diagnostics?.end("coingecko.persist.observationInsert");
+  const observationInsertMs = Date.now() - observationInsertStart;
+  return {
+    rawRecords: rawRows.length,
+    observations: newObservationRows.length,
+    pairMappings: pairRows.length,
+    timingMs: { rawInsertMs, mappingLookupMs, existingKeysMs, observationInsertMs },
+  };
 }

@@ -4,6 +4,7 @@ import type {
   ProviderAsset,
   ProviderSnapshot,
 } from "./types.ts";
+import type { CollectorDiagnostics } from "../refresh/collector-diagnostics.ts";
 
 const PROVIDER_ID = "coingecko";
 const ENDPOINT_LABEL = "GET /coins/markets";
@@ -90,6 +91,8 @@ async function fetchMarketBatch(
     fetchImpl: typeof fetch;
     sleep: (durationMs: number) => Promise<void>;
   },
+  // Diagnostic-only: records attempt count/timing/status, never the request/response itself.
+  diagnostics?: { batchIndex: number; recorder: CollectorDiagnostics },
 ): Promise<CoinGeckoMarketItem[]> {
   const url = new URL(`${options.baseUrl}/coins/markets`);
   url.searchParams.set("vs_currency", "usd");
@@ -101,6 +104,7 @@ async function fetchMarketBatch(
   url.searchParams.set("per_page", String(MAX_IDS_PER_REQUEST));
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const attemptStart = Date.now();
     let response: Response;
     try {
       response = await options.fetchImpl(url, {
@@ -109,7 +113,12 @@ async function fetchMarketBatch(
         signal: AbortSignal.timeout(20_000),
       });
     } catch {
-      if (attempt === MAX_ATTEMPTS) {
+      const willRetry = attempt !== MAX_ATTEMPTS;
+      diagnostics?.recorder.recordHttpAttempt({
+        batch: diagnostics.batchIndex, attempt, outcome: willRetry ? "retry" : "error",
+        durationMs: Date.now() - attemptStart, httpStatus: null,
+      });
+      if (!willRetry) {
         throw new CoinGeckoApiError("CoinGecko request failed due to a network error.", null);
       }
       await options.sleep(500 * 2 ** (attempt - 1));
@@ -118,6 +127,10 @@ async function fetchMarketBatch(
 
     if (response.ok) {
       const payload: unknown = await response.json();
+      diagnostics?.recorder.recordHttpAttempt({
+        batch: diagnostics.batchIndex, attempt, outcome: "ok",
+        durationMs: Date.now() - attemptStart, httpStatus: response.status,
+      });
       if (!Array.isArray(payload)) {
         throw new CoinGeckoApiError("CoinGecko returned an unexpected market response.", response.status);
       }
@@ -125,7 +138,12 @@ async function fetchMarketBatch(
     }
 
     const retryable = response.status === 429 || response.status >= 500;
-    if (!retryable || attempt === MAX_ATTEMPTS) {
+    const willRetry = retryable && attempt !== MAX_ATTEMPTS;
+    diagnostics?.recorder.recordHttpAttempt({
+      batch: diagnostics.batchIndex, attempt, outcome: willRetry ? "retry" : "error",
+      durationMs: Date.now() - attemptStart, httpStatus: response.status,
+    });
+    if (!willRetry) {
       // Avoid including request URLs or response bodies in errors and logs.
       throw new CoinGeckoApiError(
         `CoinGecko returned HTTP ${response.status}. Check the API plan, key configuration, and usage limits.`,
@@ -238,7 +256,10 @@ export class CoinGeckoMarketDataProvider implements MarketDataProvider {
     this.options = options;
   }
 
-  async fetchSnapshots(assets: ProviderAsset[]): Promise<ProviderSnapshot[]> {
+  /** `diagnostics`, if supplied, only records stage timing/HTTP-attempt metadata (see
+   *  collector-diagnostics.ts) — it never changes the returned snapshots or this method's
+   *  Promise<ProviderSnapshot[]> contract, so implementing MarketDataProvider still holds. */
+  async fetchSnapshots(assets: ProviderAsset[], diagnostics?: CollectorDiagnostics): Promise<ProviderSnapshot[]> {
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const sleep = this.options.sleep ?? ((durationMs: number) => new Promise((resolve) => setTimeout(resolve, durationMs)));
     const now = this.options.now ?? (() => new Date());
@@ -252,13 +273,16 @@ export class CoinGeckoMarketDataProvider implements MarketDataProvider {
       const records = await fetchMarketBatch(
         batch.map((asset) => asset.externalAssetId),
         { ...this.options, fetchImpl, sleep },
+        diagnostics ? { batchIndex, recorder: diagnostics } : undefined,
       );
       const assetsByExternalId = new Map(batch.map((asset) => [asset.externalAssetId, asset]));
       const collectedAt = now().toISOString();
+      diagnostics?.start("coingecko.parseTransform");
       for (const record of records) {
         const asset = assetsByExternalId.get(record.id);
         if (asset) snapshots.push(normalizeCoinGeckoMarketItem(asset, record, collectedAt));
       }
+      diagnostics?.end("coingecko.parseTransform");
     }
 
     return snapshots;

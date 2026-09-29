@@ -63,7 +63,10 @@ function momentumFinding(payload) {
 // A. 24H negative, 7D negative, 30D positive, 90D positive (the exact HYPE-shaped production pattern).
 const CASE_A = await payloadFor("cal-a", seed("cal-a", "ethereum", [
   ["coingecko", "price_usd", 100],
-  ["coingecko", "price_usd", 92.94, 24 * 29], ["coingecko", "price_usd", 72.41, 24 * 88],
+  // 24d/80d rather than 29d/88d: this file's fixed simulated clock and getLiveTokenProfile's real
+  // wall-clock `asOf` drift apart over a long session, so points need real margin inside their
+  // window (not just inside the boundary at fixture-write time) to still land there hours later.
+  ["coingecko", "price_usd", 92.94, 24 * 24], ["coingecko", "price_usd", 72.41, 24 * 80],
   ["coingecko", "price_change_24h_pct", -3.28, 0.5, { window_days: 1 }],
   ["coingecko", "price_change_7d_pct", -3.35, 0.5, { window_days: 7 }],
   ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 50_000_000],
@@ -122,7 +125,7 @@ test("C. all-positive momentum with a sharply slower recent per-day rate classif
 // so this is genuinely "mixed," a distinct case from a reversal.
 const CASE_D = await payloadFor("cal-d", seed("cal-d", "ethereum", [
   ["coingecko", "price_usd", 100],
-  ["coingecko", "price_usd", 110, 24 * 29], ["coingecko", "price_usd", 95, 24 * 88],
+  ["coingecko", "price_usd", 110, 24 * 24], ["coingecko", "price_usd", 95, 24 * 80],
   ["coingecko", "price_change_7d_pct", 5, 0.5, { window_days: 7 }],
   ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 50_000_000],
   ["coingecko", "circulating_supply", 100_000_000],

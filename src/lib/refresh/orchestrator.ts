@@ -14,11 +14,18 @@ import {
   type RefreshStep,
 } from "./config.ts";
 import type { RefreshStore, RefreshTrigger, RunStatus, StepRecord } from "./store.ts";
+import { CollectorDiagnostics } from "./collector-diagnostics.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 type Sleep = (durationMs: number) => Promise<void>;
 
-export type CollectorOptions = { fetchImpl: typeof fetch; sleep: Sleep };
+/**
+ * `diagnostics`, when a collector chooses to write to it, is diagnostic-only
+ * stage timing (see collector-diagnostics.ts) that survives a timeout even
+ * though the collector's own return value does not. Collectors that never
+ * touch it (every provider except CoinGecko, for now) are unaffected.
+ */
+export type CollectorOptions = { fetchImpl: typeof fetch; sleep: Sleep; diagnostics: CollectorDiagnostics };
 export type CollectorDefinition = {
   /** Returns a reason to skip (for example, an unmet permission gate), or null to run. */
   skipReason?: () => string | null;
@@ -188,11 +195,15 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
       const timeoutMs = timeoutFor(step);
       const deadline = new AbortController();
       const timer = setTimeout(() => deadline.abort(new RefreshTimeoutError(REFRESH_POLICY[step].label, timeoutMs)), timeoutMs);
+      // Same instance is handed to the collector and read back below, so any
+      // stage it records before an abort is still visible after the timeout.
+      const diagnostics = new CollectorDiagnostics();
       try {
         const result = await withTimeout(
           definition.collect(client, {
             fetchImpl: deadlineFetch(deadline.signal, options.fetchImpl),
             sleep: deadlineSleep(deadline.signal, options.sleep),
+            diagnostics,
           }),
           // Small grace period so an in-flight abort surfaces as the collector's own error first.
           timeoutMs + 5_000,
@@ -201,12 +212,16 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
         await record({ step, status: "succeeded", startedAt, finishedAt: now().toISOString(), detail: summarize(result), error: null });
       } catch (error) {
         const timedOut = deadline.signal.aborted || error instanceof RefreshTimeoutError;
+        // Only populated when the collector actually wrote to `diagnostics` (currently CoinGecko);
+        // other providers' timeout/error detail is unchanged (still `{}`).
+        const diagnosticsSnapshot = diagnostics.snapshot();
+        const detail = Object.keys(diagnosticsSnapshot.stages).length > 0 ? { diagnostics: diagnosticsSnapshot } : {};
         await record({
           step,
           status: timedOut ? "timed_out" : "failed",
           startedAt,
           finishedAt: now().toISOString(),
-          detail: {},
+          detail,
           error: timedOut ? new RefreshTimeoutError(REFRESH_POLICY[step].label, timeoutMs).message : errorMessage(error),
         });
       } finally {
