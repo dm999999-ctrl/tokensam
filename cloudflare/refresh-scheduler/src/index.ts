@@ -46,19 +46,32 @@ async function handleCoinGeckoProxy(request: Request, env: Env): Promise<Respons
   try {
     // /coins/markets (unlike /ping) sits behind an AWS CloudFront WAF that returned a
     // CloudFront-branded 403 page for this exact request when tested with no User-Agent —
-    // a common bot-protection heuristic. A browser-like User-Agent costs nothing to try.
+    // a common bot-protection heuristic. An honest, identifying User-Agent (not a spoofed
+    // browser string) costs nothing to try and is the more defensible choice long-term.
     const upstreamResponse = await fetch(upstreamUrl, {
       method: "GET",
       headers: {
         [keyHeader]: env.COINGECKO_API_KEY,
         accept: "application/json",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "user-agent": "TokenSamurai/1.0",
       },
     });
     const body = await upstreamResponse.text();
     const headers = new Headers({ "content-type": upstreamResponse.headers.get("content-type") ?? "application/json" });
     const retryAfter = upstreamResponse.headers.get("retry-after");
     if (retryAfter) headers.set("retry-after", retryAfter);
+    if (!upstreamResponse.ok) {
+      // Diagnostic only: status, a few response headers, and the CF-Ray id that
+      // identifies which Cloudflare PoP/route handled this — never the API key or body.
+      console.error("[diagnostic] coingecko-proxy: upstream returned non-2xx", {
+        status: upstreamResponse.status,
+        upstreamPath,
+        cfRay: upstreamResponse.headers.get("cf-ray"),
+        server: upstreamResponse.headers.get("server"),
+        via: upstreamResponse.headers.get("via"),
+        contentType: upstreamResponse.headers.get("content-type"),
+      });
+    }
     return new Response(body, { status: upstreamResponse.status, headers });
   } catch (error) {
     return Response.json(
