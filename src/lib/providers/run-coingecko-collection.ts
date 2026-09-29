@@ -56,16 +56,51 @@ function canonicalRows() {
   });
 }
 
+/**
+ * Runs one upsert wrapped in start/end diagnostics, returning its Supabase error (if any) instead
+ * of throwing, so independent phase-1 upserts below can run concurrently via Promise.all without
+ * one rejection skipping the others' diagnostics.
+ */
+async function timedUpsert(
+  diagnostics: CollectorDiagnostics,
+  stage: string,
+  run: () => PromiseLike<{ error: { message: string } | null }>,
+): Promise<{ error: { message: string } | null }> {
+  diagnostics.start(stage);
+  const { error } = await run();
+  diagnostics.end(stage);
+  return { error };
+}
+
+/**
+ * Upserts canonical reference data before persisting observations. FK dependencies (from
+ * supabase/migrations/20260923000000_database_foundation.sql): tokens.chain_id -> chains(id);
+ * provider_token_mappings -> data_providers(id) and (token_id, chain_id) -> tokens. chains,
+ * data_providers, and metric_definitions have no dependency on each other or on tokens/mappings,
+ * so they run concurrently (phase 1); tokens only needs chains, so it runs next (phase 2); and
+ * provider_token_mappings, needing both tokens and data_providers, runs last (phase 3).
+ */
 async function prepareDatabase(
   client: ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>,
   diagnostics: CollectorDiagnostics,
 ) {
   const rows = canonicalRows();
   const chains = [...new Map(rows.map(({ token, chainId }) => [chainId, { id: chainId, name: token.chainName }])).values()];
-  diagnostics.start("coingecko.prepareDatabase.upsertChains");
-  const { error: chainsError } = await client.from("chains").upsert(chains, { onConflict: "id" });
-  diagnostics.end("coingecko.prepareDatabase.upsertChains");
+
+  const [{ error: chainsError }, { error: providerError }, { error: metricsError }] = await Promise.all([
+    timedUpsert(diagnostics, "coingecko.prepareDatabase.upsertChains", () => client.from("chains").upsert(chains, { onConflict: "id" })),
+    timedUpsert(diagnostics, "coingecko.prepareDatabase.upsertProviderRegistry", () => client.from("data_providers").upsert(
+      { id: "coingecko", name: "CoinGecko", enabled: true },
+      { onConflict: "id" },
+    )),
+    timedUpsert(diagnostics, "coingecko.prepareDatabase.upsertMetricDefinitions", () => client.from("metric_definitions").upsert(
+      PRICE_CHANGE_METRICS.map((metric) => ({ ...metric, domain: "market", unit: "percent" })),
+      { onConflict: "id" },
+    )),
+  ]);
   throwOnSupabaseError(chainsError, "upsert chains");
+  throwOnSupabaseError(providerError, "upsert provider registry");
+  throwOnSupabaseError(metricsError, "upsert metric definitions");
 
   const tokens = rows.map(({ token, chainId, isNative }) => ({
     id: token.id,
@@ -77,30 +112,11 @@ async function prepareDatabase(
     category: token.category,
     description: token.identityNote,
   }));
-  diagnostics.start("coingecko.prepareDatabase.upsertTokens");
-  const { error: tokensError } = await client.from("tokens").upsert(tokens, { onConflict: "id" });
-  diagnostics.end("coingecko.prepareDatabase.upsertTokens");
+  const { error: tokensError } = await timedUpsert(
+    diagnostics, "coingecko.prepareDatabase.upsertTokens",
+    () => client.from("tokens").upsert(tokens, { onConflict: "id" }),
+  );
   throwOnSupabaseError(tokensError, "upsert canonical tokens");
-
-  diagnostics.start("coingecko.prepareDatabase.upsertProviderRegistry");
-  const { error: providerError } = await client.from("data_providers").upsert(
-    { id: "coingecko", name: "CoinGecko", enabled: true },
-    { onConflict: "id" },
-  );
-  diagnostics.end("coingecko.prepareDatabase.upsertProviderRegistry");
-  throwOnSupabaseError(providerError, "upsert provider registry");
-
-  diagnostics.start("coingecko.prepareDatabase.upsertMetricDefinitions");
-  const { error: metricsError } = await client.from("metric_definitions").upsert(
-    PRICE_CHANGE_METRICS.map((metric) => ({
-      ...metric,
-      domain: "market",
-      unit: "percent",
-    })),
-    { onConflict: "id" },
-  );
-  diagnostics.end("coingecko.prepareDatabase.upsertMetricDefinitions");
-  throwOnSupabaseError(metricsError, "upsert metric definitions");
 
   const mappings = rows.map(({ token, chainId, externalAssetId }) => ({
     provider_id: "coingecko",
@@ -110,11 +126,10 @@ async function prepareDatabase(
     scope: "token",
     verification_method: "curated_coingecko_id",
   }));
-  diagnostics.start("coingecko.prepareDatabase.upsertProviderMappings");
-  const { error: mappingsError } = await client
-    .from("provider_token_mappings")
-    .upsert(mappings, { onConflict: "provider_id,chain_id,external_asset_id" });
-  diagnostics.end("coingecko.prepareDatabase.upsertProviderMappings");
+  const { error: mappingsError } = await timedUpsert(
+    diagnostics, "coingecko.prepareDatabase.upsertProviderMappings",
+    () => client.from("provider_token_mappings").upsert(mappings, { onConflict: "provider_id,chain_id,external_asset_id" }),
+  );
   throwOnSupabaseError(mappingsError, "upsert provider token mappings");
 
   return rows;

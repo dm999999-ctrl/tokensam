@@ -71,6 +71,30 @@ test("existingKeysLookup keyset pagination: every pre-existing row is visited ex
   assert.equal(db.rows("token_metric_observations").length, existingRows.length, "nothing new was inserted");
 });
 
+test("existingKeysLookup: token filtering now happens in JS (not SQL), but dedup keys still partition correctly by token_id", async () => {
+  // 1200 pre-existing rows belong to OTHER tokens this run never mentions (same provider/window,
+  // so the DB-side query still returns them now that `.in('token_id', ...)` was dropped from SQL
+  // in favor of a Set check in JS) plus one genuine duplicate for a token this run DOES touch.
+  // Total matching rows (1201) still forces 2 keyset pages, exercising pagination across a mix of
+  // in-scope and out-of-scope tokens.
+  const foreignRows = Array.from({ length: 1200 }, (_, index) => existingRow(index + 1, `unrelated-token-${index}`, "price_usd", observedAt(20)));
+  const ourExistingRow = existingRow(1201, "our-token-a", "price_usd", observedAt(20));
+  const db = createFakeSupabase({ seed: { token_metric_observations: [...foreignRows, ourExistingRow] } });
+
+  const result = await persistProviderSnapshots(db.client, [
+    snapshot("our-token-a", ourExistingRow.observed_at), // duplicates ourExistingRow: must be excluded
+    snapshot("our-token-b", observedAt(20)), // genuinely new: must be inserted
+  ]);
+
+  assert.equal(result.observations, 1, "only the genuinely new token's observation is inserted");
+  assert.equal(db.rows("token_metric_observations").filter((row) => row.token_id === "our-token-a").length, 1,
+    "the existing row for our-token-a is not duplicated, even though unrelated tokens' rows share its provider/observed_at window");
+  assert.equal(db.rows("token_metric_observations").filter((row) => row.token_id === "our-token-b").length, 1,
+    "our-token-b is inserted: unrelated tokens' rows never suppress a different token's genuinely new observation");
+  assert.equal(db.rows("token_metric_observations").filter((row) => row.token_id.startsWith("unrelated-token-")).length, 1200,
+    "unrelated tokens' pre-existing rows are read but never written to or duplicated");
+});
+
 let failures = 0;
 for (const { name, run } of cases) {
   try {

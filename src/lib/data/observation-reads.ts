@@ -61,25 +61,37 @@ export function mergeById<T extends { id: number }>(...sets: T[][]): T[] {
 }
 
 /**
- * Latest observation per token/provider/metric.
- *
- * Uses the `latest_token_metric_observations` view (Phase 11B migration) so the
- * read stays small as history grows. Before that migration is applied it falls
- * back to the original full scan, so existing deployments keep working.
+ * Read the latest observation view in bounded token batches. The view is backed
+ * by a DISTINCT ON query over a growing history table; keeping each request to
+ * a small token set prevents one large PostgREST query from hitting Supabase's
+ * statement timeout as the universe grows.
  */
 export async function readLatestObservations<T extends Row>(client: SupabaseAdminClient, tokenIds: string[]): Promise<T[]> {
   if (tokenIds.length === 0) return [];
-  const fromView = await readPages<T>((from, to) => client.from("latest_token_metric_observations")
-    .select(COLUMNS).in("token_id", tokenIds).in("provider_id", PROVIDERS)
-    .order("token_id").order("provider_id").order("metric_id").range(from, to), "read latest observations");
-  if (!fromView.missing) return fromView.rows;
+  const TOKEN_BATCH_SIZE = 50;
+  const batches = Array.from({ length: Math.ceil(tokenIds.length / TOKEN_BATCH_SIZE) }, (_, index) =>
+    tokenIds.slice(index * TOKEN_BATCH_SIZE, (index + 1) * TOKEN_BATCH_SIZE));
 
-  const all = await readPages<T>((from, to) => client.from("token_metric_observations")
-    .select(COLUMNS).in("token_id", tokenIds).in("provider_id", PROVIDERS).is("excluded_reason", null)
-    .order("id").range(from, to), "read observations");
-  return latestPerMetric(all.rows);
+  const readBatch = async (batch: string[]): Promise<T[]> => {
+    const fromView = await readPages<T>((from, to) => client.from("latest_token_metric_observations")
+      .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS)
+      .order("token_id").order("provider_id").order("metric_id").range(from, to), "read latest observations");
+    if (!fromView.missing) return fromView.rows;
+
+    const all = await readPages<T>((from, to) => client.from("token_metric_observations")
+      .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS).is("excluded_reason", null)
+      .order("id").range(from, to), "read observations");
+    return latestPerMetric(all.rows);
+  };
+
+  const results = await Promise.allSettled(batches.map(readBatch));
+  const successful: T[][] = [];
+  for (const [index, result] of results.entries()) {
+    if (result.status === "fulfilled") successful.push(result.value);
+    else console.error("Latest observation batch " + (index + 1) + "/" + batches.length + " failed:", result.reason);
+  }
+  return mergeById(...successful);
 }
-
 /** Observations for specific provider metrics since a cutoff (bounded history for series). */
 export async function readObservationWindow<T extends Row>(
   client: SupabaseAdminClient,
