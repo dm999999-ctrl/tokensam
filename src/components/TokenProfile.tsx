@@ -3,7 +3,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import type { LiveTokenProfileData } from "@/types/token";
-import type { AnalysisState } from "@/lib/analysis/service";
+import type { EngineAnalysisState } from "@/lib/analysis/deterministic-service";
 import { buildProfileModel, type Card, type PoolRow } from "@/lib/ui/profile-model";
 import { buildProfilePayload, formatProfilePayloadText } from "@/lib/analysis/profile-payload";
 import { formatChange, formatUsd, formatUtc, shortAddress } from "@/lib/ui/format";
@@ -98,7 +98,7 @@ function Signals({ items, title = "Divergence signals" }: { items: Card[]; title
   );
 }
 
-export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileData; analysisState: AnalysisState }) {
+export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileData; analysisState: EngineAnalysisState }) {
   const { token } = data;
   const model = useMemo(() => buildProfileModel(data), [data]);
   const payload = useMemo(() => buildProfilePayload(data), [data]);

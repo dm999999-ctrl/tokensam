@@ -10,19 +10,32 @@ import "server-only";
  *
  * The AI-provider cascade this replaces (./service.ts and everything under ./ai/) is left fully
  * intact and fully tested on disk for a possible future optional AI narrative-enhancement feature;
- * this module has no runtime import of it (only a type-only import of two shared result shapes),
- * so nothing here can reach a provider.
+ * this module has no import of it at all (its own `EngineAnalysisState`/`EngineGenerateResult`
+ * types and report-schema.ts's own contract are fully independent of it), so nothing here can reach
+ * a provider.
  */
 
 import { canonicalTokens } from "../../data/canonical-tokens.ts";
 import { getLiveTokenProfile } from "../data/live-data.ts";
 import type { LiveTokenProfileData } from "../../types/token.ts";
 import { ANALYSIS_VERSION, ENGINE_VERSION, buildEngineReport } from "./engine/report.ts";
+import { parseStoredEngineAnalysis, type EngineTokenAnalysis } from "./engine/report-schema.ts";
 import { buildProfilePayload } from "./profile-payload.ts";
 import { profilePayloadHash } from "./profile-evidence.ts";
 import { isCanonicalTokenId } from "./research-context.ts";
-import { ANALYSIS_SCHEMA_VERSION, AnalysisValidationError, parseStoredAnalysis, type TokenAnalysis } from "./schema.ts";
-import type { AnalysisState, GenerateResult } from "./service.ts";
+import { AnalysisValidationError } from "./schema.ts";
+
+/** v3: institutional-research report contract (report-schema.ts), distinct from the legacy ../schema.ts's ANALYSIS_SCHEMA_VERSION. */
+export const ENGINE_SCHEMA_VERSION = "3";
+
+export type EngineAnalysisState =
+  | { status: "storage_unavailable"; message: string }
+  | { status: "error"; message: string }
+  | { status: "ready"; model: string; latest: EngineTokenAnalysis | null; nextAllowedAt: string | null };
+
+export type EngineGenerateResult =
+  | { ok: true; analysis: EngineTokenAnalysis; nextAllowedAt: string }
+  | { ok: false; reason: "invalid_token" | "storage_unavailable" | "cooldown" | "rate_limited" | "error"; message: string; nextAllowedAt?: string | null };
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
@@ -69,11 +82,11 @@ function activeCooldown(generatedAt: string | null | undefined, now: Date): stri
  * cascade's state function, this is never "unconfigured" — the engine needs no provider, no API
  * key, and no environment variable, so it is "ready" whenever the storage table itself is reachable.
  */
-export async function getDeterministicAnalysisState(client: SupabaseAdminClient, tokenId: string, now = new Date()): Promise<AnalysisState> {
+export async function getDeterministicAnalysisState(client: SupabaseAdminClient, tokenId: string, now = new Date()): Promise<EngineAnalysisState> {
   if (!isCanonicalTokenId(tokenId)) return { status: "ready", model: DETERMINISTIC_ENGINE_NAME, latest: null, nextAllowedAt: null };
   try {
     const row = await readLatestRow(client, tokenId);
-    return { status: "ready", model: DETERMINISTIC_ENGINE_NAME, latest: row ? parseStoredAnalysis(row.analysis) : null, nextAllowedAt: activeCooldown(row?.generated_at, now) };
+    return { status: "ready", model: DETERMINISTIC_ENGINE_NAME, latest: row ? parseStoredEngineAnalysis(row.analysis) : null, nextAllowedAt: activeCooldown(row?.generated_at, now) };
   } catch (error) {
     if (error instanceof StorageUnavailableError) return { status: "storage_unavailable", message: STORAGE_MESSAGE };
     throw error;
@@ -88,7 +101,7 @@ export async function generateDeterministicAnalysis(
     /** Loads the Token Profile data (defaults to the page's own loader through `client`). */
     loadProfile?: (tokenId: string) => Promise<LiveTokenProfileData | null>;
   } = {},
-): Promise<GenerateResult> {
+): Promise<EngineGenerateResult> {
   const now = options.now ?? (() => new Date());
   if (!isCanonicalTokenId(tokenId)) return { ok: false, reason: "invalid_token", message: "Unknown token." };
 
@@ -134,14 +147,14 @@ export async function generateDeterministicAnalysis(
 
   const generatedAt = now().toISOString();
   const promptVersion = `engine-${ANALYSIS_VERSION}`;
-  const analysis: TokenAnalysis = {
+  const analysis: EngineTokenAnalysis = {
     ...built.analysis,
     metadata: {
       tokenId,
       provider: DETERMINISTIC_ENGINE_NAME,
       model: DETERMINISTIC_ENGINE_NAME,
       promptVersion,
-      schemaVersion: ANALYSIS_SCHEMA_VERSION,
+      schemaVersion: ENGINE_SCHEMA_VERSION,
       contextVersion: payload.version,
       generatedAt,
       contextAsOf: payload.dataAsOf,
@@ -160,7 +173,7 @@ export async function generateDeterministicAnalysis(
     chain_id: canonicalTokens.find((token) => token.id === tokenId)!.chainId,
     model: analysis.metadata.model,
     prompt_version: promptVersion,
-    schema_version: ANALYSIS_SCHEMA_VERSION,
+    schema_version: ENGINE_SCHEMA_VERSION,
     generated_at: generatedAt,
     context_as_of: payload.dataAsOf,
     context_hash: analysis.metadata.contextHash,

@@ -32,7 +32,7 @@ import {
 export type FindingCategory =
   | "marketPerformance" | "fundamentalPerformance" | "valuation"
   | "marketFundamentalRelationships" | "liquidityMarketStructure" | "tokenomics"
-  | "risk" | "dataQuality";
+  | "technical" | "risk" | "dataQuality";
 
 export type FindingSeverity = "low" | "moderate" | "high";
 
@@ -563,6 +563,158 @@ export function dataQualityFindings(payload: ProfilePayload): Finding[] {
   return findings;
 }
 
+// ---- 14. Technical indicators ----
+//
+// Every technical indicator the Token Profile actually computes (src/lib/indicators/catalog.ts) is
+// deterministic and already carries either a neutral, rule-defined `state` string or named numeric
+// `readings` — see profile-payload.ts's `technicalState`/`technicalReadings`, carried verbatim from
+// the same indicator object the page renders, never re-parsed from formatted display text. Only
+// indicators with an existing, self-evident threshold (the indicator's own embedded band — RSI's
+// 70/30 levels, MACD's own signal-line comparison, Bollinger's own band boundaries, a range's own
+// thirds) become a Finding here; an indicator with no such threshold (e.g. the linear-regression
+// slope, the Ulcer Index) remains available as cited evidence in prose without inventing one. This
+// module does not compute anything new — it only classifies what the indicator itself already
+// established.
+
+const MOVING_AVERAGE_INDICATOR_IDS = ["sma_20", "sma_50", "ema_20", "vwma_20"] as const;
+
+/** One combined moving-average-structure finding, not one near-duplicate per average (see synthesis.ts's redundancy rationale). */
+function movingAverageStructureFinding(fields: Map<string, PayloadField>): Finding | null {
+  const gaps: number[] = [];
+  const evidenceIds: string[] = [];
+  for (const id of MOVING_AVERAGE_INDICATOR_IDS) {
+    const indicatorField = shown(fields, `calc:ind_${id}`);
+    const gap = indicatorField?.technicalReadings?.["Latest close vs average"];
+    if (indicatorField && typeof gap === "number") { gaps.push(gap); evidenceIds.push(indicatorField.id); }
+  }
+  if (gaps.length === 0) return null;
+  const above = gaps.filter((gap) => gap > 0).length;
+  const below = gaps.filter((gap) => gap < 0).length;
+  const findingType = above === gaps.length ? "price_above_moving_averages" : below === gaps.length ? "price_below_moving_averages" : "price_mixed_vs_moving_averages";
+  const averageGap = gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+  return {
+    category: "technical", findingType, severity: severityForMomentum[momentumBand(averageGap)],
+    evidenceIds, observationPeriods: evidenceIds.map(() => null),
+    data: { raw: averageGap, count: gaps.length },
+  };
+}
+
+function macdFinding(fields: Map<string, PayloadField>): Finding | null {
+  const indicatorField = shown(fields, "calc:ind_macd");
+  if (!indicatorField || !indicatorField.technicalState) return null;
+  const findingType = indicatorField.technicalState.includes("above") ? "macd_above_signal" : indicatorField.technicalState.includes("below") ? "macd_below_signal" : "macd_at_signal";
+  return {
+    category: "technical", findingType, severity: findingType === "macd_at_signal" ? "low" : "moderate",
+    evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period],
+    data: { raw: indicatorField.technicalReadings?.Histogram ?? null },
+  };
+}
+
+/** Only the two extreme RSI states are analytically notable — the mid-range is not a Finding, matching how a "flat" momentum band produces none. */
+function rsiFinding(fields: Map<string, PayloadField>): Finding | null {
+  const indicatorField = shown(fields, "calc:ind_rsi_14");
+  if (!indicatorField || !indicatorField.technicalState) return null;
+  const findingType = indicatorField.technicalState.startsWith("At or above") ? "rsi_at_or_above_70" : indicatorField.technicalState.startsWith("At or below") ? "rsi_at_or_below_30" : null;
+  if (!findingType) return null;
+  return {
+    category: "technical", findingType, severity: "moderate",
+    evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period],
+    data: { raw: indicatorField.technicalReadings?.RSI ?? null },
+  };
+}
+
+/** Only a close outside the bands is notable — within the bands is the ordinary case, not a Finding. */
+function bollingerFinding(fields: Map<string, PayloadField>): Finding | null {
+  const indicatorField = shown(fields, "calc:ind_bollinger_20_2");
+  const percentB = indicatorField?.technicalReadings?.["%B"];
+  if (!indicatorField || typeof percentB !== "number") return null;
+  const findingType = percentB >= 1 ? "price_above_upper_band" : percentB <= 0 ? "price_below_lower_band" : null;
+  if (!findingType) return null;
+  return {
+    category: "technical", findingType, severity: "moderate",
+    evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period], data: { raw: percentB },
+  };
+}
+
+function swingStructureFinding(fields: Map<string, PayloadField>): Finding | null {
+  const indicatorField = shown(fields, "calc:ind_swing_structure");
+  if (!indicatorField || !indicatorField.technicalState) return null;
+  const slug = indicatorField.technicalState.toLowerCase().replace(/,\s*/g, "_").replace(/\s+/g, "_");
+  return {
+    category: "technical", findingType: `swing_structure_${slug}`,
+    severity: indicatorField.technicalState === "Higher high, higher low" || indicatorField.technicalState === "Lower high, lower low" ? "moderate" : "low",
+    evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period], data: {},
+  };
+}
+
+/** Position split into thirds of the range itself — not an invented magnitude threshold, just the range's own structure. */
+function closingRangeFinding(fields: Map<string, PayloadField>): Finding | null {
+  const indicatorField = shown(fields, "calc:ind_closing_range_30");
+  const position = indicatorField?.technicalReadings?.["Position in range"];
+  if (!indicatorField || typeof position !== "number") return null;
+  const findingType = position >= 200 / 3 ? "closing_range_upper_third" : position <= 100 / 3 ? "closing_range_lower_third" : null;
+  if (!findingType) return null;
+  return {
+    category: "technical", findingType, severity: "low",
+    evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period], data: { raw: position },
+  };
+}
+
+/** One divergence/same-direction finding per cross-metric indicator; "little changed"/flat cases are not analytically notable. */
+function relationIndicatorFinding(fields: Map<string, PayloadField>, indicatorId: string, divergentType: string, sameDirectionType: string): Finding | null {
+  const indicatorField = shown(fields, `calc:ind_${indicatorId}`);
+  if (!indicatorField || !indicatorField.technicalState) return null;
+  const findingType = indicatorField.technicalState.startsWith("Divergence detected") ? divergentType : indicatorField.technicalState.startsWith("Same direction") ? sameDirectionType : null;
+  if (!findingType) return null;
+  return {
+    category: "technical", findingType, severity: findingType === divergentType ? "moderate" : "low",
+    evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period], data: {},
+  };
+}
+
+/** One expansion/contraction finding for a ratio-trend indicator; "little changed" is not analytically notable. */
+function ratioTrendIndicatorFinding(fields: Map<string, PayloadField>, indicatorId: string, expansionType: string, contractionType: string): Finding | null {
+  const indicatorField = shown(fields, `calc:ind_${indicatorId}`);
+  if (!indicatorField || !indicatorField.technicalState) return null;
+  const findingType = indicatorField.technicalState.startsWith("Expansion") ? expansionType : indicatorField.technicalState.startsWith("Contraction") ? contractionType : null;
+  if (!findingType) return null;
+  return {
+    category: "technical", findingType, severity: "low",
+    evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period],
+    data: { raw: indicatorField.technicalReadings?.Change ?? null },
+  };
+}
+
+/** Circulating-supply change is a tokenomics fact (dilution-relevant), even though it is computed as a technical indicator. */
+function circulatingSupplyChangeFinding(fields: Map<string, PayloadField>): Finding | null {
+  const indicatorField = shown(fields, "calc:ind_circulating_supply_change_7d");
+  if (!indicatorField || indicatorField.raw === null) return null;
+  const band = momentumBand(indicatorField.raw);
+  if (band === "flat") return null;
+  return {
+    category: "tokenomics", findingType: indicatorField.raw >= 0 ? "circulating_supply_increase_7d" : "circulating_supply_decrease_7d",
+    severity: severityForMomentum[band], evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period],
+    data: { raw: indicatorField.raw, value: indicatorField.value },
+  };
+}
+
+export function technicalFindings(payload: ProfilePayload): Finding[] {
+  const fields = byId(payload);
+  return [
+    movingAverageStructureFinding(fields),
+    macdFinding(fields),
+    rsiFinding(fields),
+    bollingerFinding(fields),
+    swingStructureFinding(fields),
+    closingRangeFinding(fields),
+    relationIndicatorFinding(fields, "price_vs_tvl_30d", "technical_price_tvl_divergence", "technical_price_tvl_same_direction"),
+    relationIndicatorFinding(fields, "price_vs_volume_30d", "technical_price_volume_divergence", "technical_price_volume_same_direction"),
+    ratioTrendIndicatorFinding(fields, "market_cap_vs_tvl_30d", "technical_valuation_expansion_vs_tvl", "technical_valuation_contraction_vs_tvl"),
+    ratioTrendIndicatorFinding(fields, "volume_to_market_cap_30d", "technical_turnover_expansion", "technical_turnover_contraction"),
+    circulatingSupplyChangeFinding(fields),
+  ].filter((finding): finding is Finding => finding !== null);
+}
+
 /** Runs every category extractor over one payload. */
 export function extractFindings(payload: ProfilePayload): Finding[] {
   return [
@@ -572,6 +724,7 @@ export function extractFindings(payload: ProfilePayload): Finding[] {
     ...liquidityFindings(payload),
     ...tokenomicsFindings(payload),
     ...divergenceFindings(payload),
+    ...technicalFindings(payload),
     ...riskFindings(payload),
     ...dataQualityFindings(payload),
   ];

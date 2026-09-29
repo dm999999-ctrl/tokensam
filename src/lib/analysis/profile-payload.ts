@@ -53,6 +53,21 @@ export type PayloadField = {
    * `null` when the interval could not be established (never treated as "known to be short").
    */
   intervalHours: number | null;
+  /**
+   * A technical indicator's own neutral, rule-defined state string (e.g. "At or above the 70
+   * level", "MACD line above signal line" — see types/technical-indicators.ts's `TechnicalIndicator.state`),
+   * carried verbatim rather than re-parsed from the field's formatted `note` text. `null` for every
+   * field that isn't a `calc:ind_*` technical-indicator reading, and for one whose indicator has no
+   * categorical state (e.g. Bollinger Bands, whose position is read from `technicalReadings` instead).
+   */
+  technicalState: string | null;
+  /**
+   * A technical indicator's own numeric readings, keyed by their own label (e.g. `{"RSI": 61.4}`,
+   * `{"%B": 0.82, "Band width": 6.1}`) — the same numbers the card displays, never recomputed. Lets
+   * findings.ts read a specific named reading (not just "the first numeric one") without parsing the
+   * field's joined display string. `null` for every non-technical-indicator field.
+   */
+  technicalReadings: Record<string, number> | null;
 };
 
 export type ScopeNote = {
@@ -76,13 +91,13 @@ const PERIOD_24H = "24H (rolling 24 hours, as reported by the provider)";
 const PERIOD_7D = "7D (rolling 7 days, as reported by the provider)";
 const PERIOD_30D_TVL = "30D (TVL observations about 30 days apart)";
 
-function field(input: Omit<PayloadField, "status" | "period" | "periodRequired" | "note" | "asOf" | "raw" | "intervalHours"> & Partial<Pick<PayloadField, "period" | "note" | "asOf" | "raw" | "intervalHours">>): PayloadField {
+function field(input: Omit<PayloadField, "status" | "period" | "periodRequired" | "note" | "asOf" | "raw" | "intervalHours" | "technicalState" | "technicalReadings"> & Partial<Pick<PayloadField, "period" | "note" | "asOf" | "raw" | "intervalHours" | "technicalState" | "technicalReadings">>): PayloadField {
   const period = input.period ?? null;
-  return { raw: null, note: null, asOf: null, intervalHours: null, ...input, period, periodRequired: period !== null, status: "shown" };
+  return { raw: null, note: null, asOf: null, intervalHours: null, technicalState: null, technicalReadings: null, ...input, period, periodRequired: period !== null, status: "shown" };
 }
 
 function notReported(id: string, section: string, label: string, scope: PayloadScope, asOf: string | null = null): PayloadField {
-  return { id, section, label, value: "Not reported", raw: null, status: "not_reported", scope, period: null, periodRequired: false, note: "No valid stored value, so the profile does not show one.", asOf, intervalHours: null };
+  return { id, section, label, value: "Not reported", raw: null, status: "not_reported", scope, period: null, periodRequired: false, note: "No valid stored value, so the profile does not show one.", asOf, intervalHours: null, technicalState: null, technicalReadings: null };
 }
 
 /** Risk-profile percentages exactly as the history chart header formats them. */
@@ -246,10 +261,14 @@ export function buildProfilePayload(data: LiveTokenProfileData): ProfilePayload 
   const indicatorField = (indicator: TechnicalIndicator, section: string) => {
     const readings = indicator.readings.map((reading) => { const text = formatReading(reading); return text === null ? null : `${reading.label}: ${text}`; }).filter(Boolean).join(" · ");
     const firstNumeric = indicator.readings.find((reading) => typeof reading.value === "number");
+    const numericReadings = Object.fromEntries(
+      indicator.readings.filter((reading): reading is typeof reading & { value: number } => typeof reading.value === "number").map((reading) => [reading.label, reading.value]),
+    );
     return field({
       id: `calc:ind_${indicator.id}`, section, label: indicator.name, value: readings || "—",
       raw: typeof firstNumeric?.value === "number" ? firstNumeric.value : null, scope: "calculated",
       period: indicator.periodLabel, note: [indicator.state, indicator.summary].filter(Boolean).join(" · ") || null, asOf: indicator.provenance.observationEnd,
+      technicalState: indicator.state, technicalReadings: Object.keys(numericReadings).length > 0 ? numericReadings : null,
     });
   };
   for (const group of model.technical) for (const indicator of group.indicators) fields.push(indicatorField(indicator, `Technical indicators · ${group.label}`));

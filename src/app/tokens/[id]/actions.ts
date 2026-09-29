@@ -1,7 +1,6 @@
 "use server";
 
-import { generateDeterministicAnalysis } from "../../../lib/analysis/deterministic-service.ts";
-import type { GenerateResult } from "../../../lib/analysis/service.ts";
+import { generateDeterministicAnalysis, type EngineGenerateResult } from "../../../lib/analysis/deterministic-service.ts";
 import { isCanonicalTokenId } from "../../../lib/analysis/research-context.ts";
 import { createSupabaseAdminClient } from "../../../lib/supabase/admin.ts";
 
@@ -15,7 +14,7 @@ import { createSupabaseAdminClient } from "../../../lib/supabase/admin.ts";
  * canonical token universe; the cooldown and hourly cap in the service bound repeated DB writes
  * from a public page. The browser never sees anything beyond the validated report.
  */
-export async function requestTokenAnalysis(tokenId: unknown): Promise<GenerateResult> {
+export async function requestTokenAnalysis(tokenId: unknown): Promise<EngineGenerateResult> {
   if (!isCanonicalTokenId(tokenId)) return { ok: false, reason: "invalid_token", message: "Unknown token." };
   try {
     return await generateDeterministicAnalysis(createSupabaseAdminClient(), tokenId);

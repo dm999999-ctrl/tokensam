@@ -2,25 +2,10 @@
 
 import { useState, useTransition } from "react";
 import { requestTokenAnalysis } from "@/app/tokens/[id]/actions";
-import type { AnalysisState } from "@/lib/analysis/service";
-import type { AnalysisSection, AnalysisStatement, SectionKey, TokenAnalysis } from "@/lib/analysis/schema";
+import type { EngineAnalysisState } from "@/lib/analysis/deterministic-service";
+import { ENGINE_SECTION_KEYS, ENGINE_SECTION_TITLES, type EngineSectionKey, type EngineTokenAnalysis } from "@/lib/analysis/engine/report-schema";
 
-const SECTIONS: { key: SectionKey; letter: string; title: string }[] = [
-  { key: "executiveSummary", letter: "A", title: "Executive summary" },
-  { key: "marketPerformance", letter: "B", title: "Market performance" },
-  { key: "fundamentalPerformance", letter: "C", title: "Fundamental performance" },
-  { key: "valuation", letter: "D", title: "Valuation relationships" },
-  { key: "marketFundamentalRelationships", letter: "E", title: "Price vs fundamentals" },
-  { key: "liquidityMarketStructure", letter: "F", title: "Liquidity / market structure" },
-  { key: "tokenomics", letter: "G", title: "Tokenomics" },
-];
-
-const KIND_LABEL: Record<AnalysisStatement["kind"], string> = {
-  observed: "Observed data",
-  calculated: "Calculated metric",
-  interpretation: "AI interpretation",
-  uncertainty: "Uncertainty",
-};
+const LETTERS = "ABCDEFGHIJK";
 
 function utc(value: string | null) {
   if (!value) return "unknown";
@@ -30,9 +15,9 @@ function utc(value: string | null) {
 /**
  * Renders each cited evidence ID (e.g. "obs:price") as its human-readable provenance label (e.g.
  * "Overview · Price: $9.33"), never as the raw internal ID: that ID is an evidence-contract
- * implementation detail (see analysis/schema.ts), not something to expose in a user-facing report.
- * The raw ID stays reachable in the title tooltip, which is the intended provenance mechanism for
- * anyone who wants to see exactly which context entry a citation points to.
+ * implementation detail (see analysis/engine/report-schema.ts), not something to expose in a
+ * user-facing report. The raw ID stays reachable in the title tooltip, which is the intended
+ * provenance mechanism for anyone who wants to see exactly which context entry a citation points to.
  */
 function Sources({ ids, sources }: { ids: string[]; sources: Record<string, string> }) {
   if (ids.length === 0) return null;
@@ -43,69 +28,33 @@ function Sources({ ids, sources }: { ids: string[]; sources: Record<string, stri
   );
 }
 
-function Section({ letter, title, section, sources }: { letter: string; title: string; section: AnalysisSection; sources: Record<string, string> }) {
+function Section({ letter, sectionKey, section, sources }: { letter: string; sectionKey: EngineSectionKey; section: { paragraphs: { text: string; sourceIds: string[] }[] }; sources: Record<string, string> }) {
   return (
     <section className="ai-section">
-      <h3><span>{letter}</span>{title}</h3>
-      <p className="ai-overview"><span className="ai-kind interpretation">AI interpretation</span>{section.overview}</p>
-      {section.statements.length > 0 && (
-        <ul className="ai-statements">
-          {section.statements.map((statement, index) => (
-            <li key={index} className={`ai-statement ${statement.kind}`}>
-              <span className={`ai-kind ${statement.kind}`}>{KIND_LABEL[statement.kind]}</span>
-              <span className="ai-statement-text">
-                {statement.text}
-                {statement.period && <small className="ai-period">Period: {statement.period}</small>}
-                {!statement.traceable && (statement.kind === "observed" || statement.kind === "calculated") && <small className="ai-untraceable">No traceable source ID was cited for this statement.</small>}
-              </span>
-              <Sources ids={statement.sourceIds} sources={sources} />
-            </li>
+      <h3><span>{letter}</span>{ENGINE_SECTION_TITLES[sectionKey]}</h3>
+      {section.paragraphs.length === 0 ? <p className="ai-empty">No content was generated for this section from the current data snapshot.</p> : (
+        <div className="ai-paragraphs">
+          {section.paragraphs.map((paragraph, index) => (
+            <p key={index} className="ai-paragraph">
+              {paragraph.text}
+              <Sources ids={paragraph.sourceIds} sources={sources} />
+            </p>
           ))}
-        </ul>
+        </div>
       )}
     </section>
   );
 }
 
-function AnalysisBody({ analysis }: { analysis: TokenAnalysis }) {
+function AnalysisBody({ analysis }: { analysis: EngineTokenAnalysis }) {
   const { sources } = analysis.metadata;
   return (
     <div className="ai-body">
-      {SECTIONS.map(({ key, letter, title }) => <Section key={key} letter={letter} title={title} section={analysis[key]} sources={sources} />)}
+      {ENGINE_SECTION_KEYS.map((key, index) => <Section key={key} letter={LETTERS[index]} sectionKey={key} section={analysis[key]} sources={sources} />)}
 
       <section className="ai-section">
-        <h3><span>H</span>Risks / areas requiring attention</h3>
-        {analysis.risks.length === 0 ? <p className="ai-empty">No evidence-supported risks were identified in the supplied data.</p> : (
-          <ul className="ai-statements">
-            {analysis.risks.map((risk, index) => (
-              <li key={index} className="ai-statement">
-                <span className={`ai-kind ${risk.basis === "evidence" ? "interpretation" : "uncertainty"}`}>{risk.basis === "evidence" ? "Evidence of risk" : "Data limitation"}</span>
-                <span className="ai-statement-text"><strong>{risk.title}</strong> {risk.detail}</span>
-                <Sources ids={risk.sourceIds} sources={sources} />
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="ai-section">
-        <h3><span>I</span>Data gaps and uncertainties</h3>
-        {analysis.dataGaps.length === 0 ? <p className="ai-empty">No data gaps were listed.</p> : (
-          <ul className="ai-statements">
-            {analysis.dataGaps.map((gap, index) => (
-              <li key={index} className="ai-statement">
-                <span className="ai-kind uncertainty">{gap.category.replaceAll("_", " ")}</span>
-                <span className="ai-statement-text">{gap.detail}</span>
-                <Sources ids={gap.sourceIds} sources={sources} />
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="ai-section">
-        <h3><span>J</span>Further research questions</h3>
-        {analysis.furtherResearchQuestions.length === 0 ? <p className="ai-empty">No research questions were listed.</p> : (
+        <h3><span>{LETTERS[ENGINE_SECTION_KEYS.length]}</span>Further Research Questions</h3>
+        {analysis.furtherResearchQuestions.length === 0 ? <p className="ai-empty">No research questions arise from a materially significant, currently unresolved relationship in this snapshot.</p> : (
           <ol className="ai-questions">
             {analysis.furtherResearchQuestions.map((item, index) => (
               <li key={index}><strong>{item.question}</strong><span>{item.rationale}</span><Sources ids={item.sourceIds} sources={sources} /></li>
@@ -117,13 +66,12 @@ function AnalysisBody({ analysis }: { analysis: TokenAnalysis }) {
   );
 }
 
-export function deepAnalysisButtonHint(state: AnalysisState): string {
-  if (state.status === "unconfigured") return "Unavailable · no AI provider configured";
+export function deepAnalysisButtonHint(state: EngineAnalysisState): string {
   if (state.status !== "ready") return "Unavailable";
   return state.latest ? `Generated ${utc(state.latest.metadata.generatedAt)}` : `${state.model} · generate on request`;
 }
 
-export function DeepAnalysisPanel({ tokenId, initialState, hidden }: { tokenId: string; initialState: AnalysisState; hidden: boolean }) {
+export function DeepAnalysisPanel({ tokenId, initialState, hidden }: { tokenId: string; initialState: EngineAnalysisState; hidden: boolean }) {
   const [state, setState] = useState(initialState);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -148,11 +96,11 @@ export function DeepAnalysisPanel({ tokenId, initialState, hidden }: { tokenId: 
   return (
     <section className="ai-panel" id="deep-ai-analysis" aria-labelledby="deep-ai-title" hidden={hidden}>
       <header className="section-head ai-head">
-        <div><p className="eyebrow">Research report · AI interpretation</p><h2 id="deep-ai-title">Deep AI Analysis</h2></div>
+        <div><p className="eyebrow">Research report · institutional-style analysis</p><h2 id="deep-ai-title">Deep AI Analysis</h2></div>
       </header>
       <p className="ai-disclaimer">
-        An AI reading of this profile&apos;s stored evidence only. It is not investment advice and makes no price predictions.
-        Labels separate <b className="ai-kind observed">Observed data</b> <b className="ai-kind calculated">Calculated metric</b> <b className="ai-kind interpretation">AI interpretation</b> <b className="ai-kind uncertainty">Uncertainty</b>.
+        A deterministic reading of this profile&apos;s stored evidence only — no AI provider is called, and every figure and named period in the text is copied from the same evidence cited beside it.
+        It is not investment advice and makes no price predictions or forecasts.
       </p>
 
       {state.status !== "ready" ? (
@@ -164,8 +112,7 @@ export function DeepAnalysisPanel({ tokenId, initialState, hidden }: { tokenId: 
               <dl className="ai-meta">
                 <div><dt>Generated</dt><dd>{utc(latest.metadata.generatedAt)}</dd></div>
                 <div><dt>Data as of</dt><dd>{utc(latest.metadata.contextAsOf)}</dd></div>
-                <div><dt>Model</dt><dd>{latest.metadata.provider}{latest.metadata.model !== latest.metadata.provider ? ` · ${latest.metadata.model}` : ""}{latest.metadata.requestedModel && latest.metadata.requestedModel !== latest.metadata.model ? ` (via ${latest.metadata.requestedModel})` : ""}</dd></div>
-                {latest.metadata.fallback?.used && <div><dt>Fallback</dt><dd>Gemini unavailable ({latest.metadata.fallback.reason}); generated by OpenRouter</dd></div>}
+                <div><dt>Model</dt><dd>{latest.metadata.provider}</dd></div>
                 {latest.metadata.engineVersion && <div><dt>Engine</dt><dd>v{latest.metadata.engineVersion} · analysis v{latest.metadata.analysisVersion}</dd></div>}
                 <div><dt>Prompt / schema</dt><dd>v{latest.metadata.promptVersion} / v{latest.metadata.schemaVersion}</dd></div>
               </dl>
@@ -175,7 +122,7 @@ export function DeepAnalysisPanel({ tokenId, initialState, hidden }: { tokenId: 
             </button>
           </div>
           {coolingDown && !pending && <p className="ai-note">Regeneration is available after {utc(state.nextAllowedAt)}.</p>}
-          {pending && <div className="ai-state" role="status"><strong>Generating analysis…</strong><p>Building the research context and waiting for Gemini. This can take up to a minute.</p></div>}
+          {pending && <div className="ai-state" role="status"><strong>Generating analysis…</strong><p>Building the report from the current data snapshot. This is a local computation and typically finishes in under a second.</p></div>}
           {error && !pending && <div className="ai-state error" role="alert"><strong>Analysis not updated</strong><p>{error}</p></div>}
           {latest && <AnalysisBody analysis={latest} />}
         </>
