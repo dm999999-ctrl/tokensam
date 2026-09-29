@@ -2,6 +2,10 @@ type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createS
 
 const PAGE_SIZE = 1000;
 const PROVIDERS = ["coingecko", "defillama", "dexscreener", "defillama_coins"];
+// Dashboard latest reads only need a recent freshness window. Querying the
+// append-only history without a cutoff forces PostgreSQL to consider the full
+// table behind latest_token_metric_observations.
+const LATEST_READ_WINDOW_MS = 6 * 60 * 60 * 1000;
 export const OBSERVATION_COLUMNS = "id,token_id,chain_id,metric_id,provider_id,raw_record_id,value,status,observed_at,collected_at,source_field,note";
 /** Provenance columns added by the token-centric scope migration (read when present). */
 export const SCOPE_COLUMNS = "scope,provider_asset_id,mapping_id";
@@ -73,14 +77,18 @@ export async function readLatestObservations<T extends Row>(client: SupabaseAdmi
     tokenIds.slice(index * TOKEN_BATCH_SIZE, (index + 1) * TOKEN_BATCH_SIZE));
 
   const readBatch = async (batch: string[]): Promise<T[]> => {
-    const fromView = await readPages<T>((from, to) => client.from("latest_token_metric_observations")
-      .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS)
-      .order("token_id").order("provider_id").order("metric_id").range(from, to), "read latest observations");
-    if (!fromView.missing) return fromView.rows;
-
+    // Read the base table directly instead of the DISTINCT ON view. The view
+    // can force PostgreSQL to plan against the entire append-only history even
+    // when only 50 dashboard tokens are requested. The dashboard only needs
+    // current data, so bound the read to the recent window and collapse to the
+    // newest row per token/provider/metric in application memory.
+    const since = new Date(Date.now() - LATEST_READ_WINDOW_MS).toISOString();
     const all = await readPages<T>((from, to) => client.from("token_metric_observations")
       .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS).is("excluded_reason", null)
-      .order("id").range(from, to), "read observations");
+      .gte("observed_at", since)
+      .order("token_id").order("provider_id").order("metric_id")
+      .order("observed_at", { ascending: false }).order("collected_at", { ascending: false }).order("id", { ascending: false })
+      .range(from, to), "read recent observations");
     return latestPerMetric(all.rows);
   };
 
