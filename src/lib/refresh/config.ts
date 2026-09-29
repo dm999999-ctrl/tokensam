@@ -46,8 +46,14 @@ export const DUE_TOLERANCE_MS = 2 * MINUTE;
 export const METRICS_TIMEOUT_MS = 90_000;
 
 /**
- * A run holds the lock for at most this long. Longer than the route's
- * maxDuration (300 s) so a live run is never stolen, but short enough that a
- * crashed run does not block refreshes for more than one cron interval.
+ * A run holds the lock for at most this long before its lease is considered
+ * expired and reclaimable. Set just above the route's maxDuration (300 s) —
+ * not to the old 10-minute value — because ownership is now renewed by a
+ * heartbeat (see renewLease in store.ts), not just asserted once at acquire
+ * time: a genuinely live run keeps extending this deadline as it progresses,
+ * while a run killed by the platform stops heartbeating and so becomes
+ * reclaimable about 30 s after the kill, not 10 minutes later. That is what
+ * keeps a dead invocation from causing more than about one extra Cloudflare
+ * 5-minute tick's worth of 409s.
  */
-export const RUN_LEASE_MS = 10 * MINUTE;
+export const RUN_LEASE_MS = 330_000;

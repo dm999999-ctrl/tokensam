@@ -322,6 +322,72 @@ test("9. overlapping runs are prevented and abandoned locks expire", async () =>
   assert.equal((await runDataRefresh(live.client, new SupabaseRefreshStore(live.client), options)).status, "busy");
 });
 
+test("ownership: acquireRun issues a lock token, and a stale token cannot renew or finalize a reclaimed run", async () => {
+  const db = createFakeSupabase({ seed: baseSeed() });
+  const store = new SupabaseRefreshStore(db.client);
+  const start = new Date("2026-09-30T00:00:00Z");
+  const ownerA = await store.acquireRun("scheduled", start, 1_000); // 1s lease
+  assert.equal(typeof ownerA.runId, "number");
+  assert.equal(typeof ownerA.lockToken, "string");
+
+  const muchLater = new Date(start.getTime() + 60_000);
+  const ownerB = await store.acquireRun("scheduled", muchLater, 60_000);
+  assert.notEqual(ownerB.runId, ownerA.runId, "the reclaimed lease must produce a new run row, not reuse the abandoned one");
+  assert.notEqual(ownerB.lockToken, ownerA.lockToken);
+
+  assert.equal(await store.renewLease(ownerA.runId, ownerA.lockToken, muchLater, 60_000), false, "run A's stale token cannot renew its own already-reclaimed lease");
+  assert.equal(await store.finishRun(ownerA.runId, ownerA.lockToken, "succeeded", muchLater, {}, null), false, "run A cannot finalize a run whose lease was already reclaimed");
+  assert.equal(db.rows("data_refresh_runs").find((row) => row.id === ownerA.runId).status, "failed", "run A's row stays failed/abandoned, never flipped to succeeded by the stale owner");
+
+  assert.equal(await store.renewLease(ownerB.runId, ownerB.lockToken, muchLater, 60_000), true, "run B, the genuine owner, can renew");
+  assert.equal(await store.finishRun(ownerB.runId, ownerB.lockToken, "succeeded", muchLater, {}, null), true, "run B can finalize normally");
+  assert.equal(db.rows("data_refresh_runs").find((row) => row.id === ownerB.runId).status, "succeeded");
+});
+
+test("ownership: concurrent acquireRun yields exactly one owner", async () => {
+  const db = createFakeSupabase({ seed: baseSeed() });
+  const store = new SupabaseRefreshStore(db.client);
+  const now = new Date();
+  const [a, b, c] = await Promise.all([
+    store.acquireRun("scheduled", now, 60_000),
+    store.acquireRun("scheduled", now, 60_000),
+    store.acquireRun("scheduled", now, 60_000),
+  ]);
+  const owners = [a, b, c].filter((result) => result !== null);
+  assert.equal(owners.length, 1, "exactly one of the concurrent acquisitions must succeed");
+});
+
+test("ownership: a run that loses its lease mid-refresh stops before metrics and does not finalize", async () => {
+  const db = createFakeSupabase({ seed: baseSeed() });
+  const store = new SupabaseRefreshStore(db.client);
+  let metricsRan = false;
+  const collectors = {
+    // Simulates a concurrent invocation's acquireRun reclaiming this run's lease
+    // (its expire-abandoned-runs UPDATE flips status to 'failed') while this
+    // provider phase is still in flight — exactly what happens in production
+    // when a killed invocation's lease finally expires mid-run elsewhere.
+    coingecko: {
+      collect: async () => {
+        const run = db.rows("data_refresh_runs")[0];
+        run.status = "failed";
+        run.error = "Run abandoned: its lease expired before it finished.";
+        return { observations: 1 };
+      },
+    },
+    dexscreener: { collect: async () => ({ observations: 1 }) },
+    defillama: { collect: async () => ({ observations: 1 }) },
+  };
+  const result = await runDataRefresh(db.client, store, {
+    trigger: "scheduled",
+    collectors,
+    calculateMetrics: async () => { metricsRan = true; return {}; },
+  });
+  assert.equal(result.status, "lost_ownership");
+  assert.equal(metricsRan, false, "metrics must never start once ownership is lost");
+  const run = db.rows("data_refresh_runs")[0];
+  assert.equal(run.status, "failed", "the reclaiming invocation's abandonment marker is never overwritten back to succeeded by the stale invocation");
+});
+
 test("7. refresh status reports per-provider last success and provider-specific staleness", async () => {
   const db = createFakeSupabase({ seed: {
     data_refresh_steps: [

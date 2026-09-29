@@ -450,12 +450,27 @@ export async function fetchGeckoTerminalSnapshotsTolerant(
     minRequestIntervalMs?: number;
     /** Token id to start this run's rotation from; unknown/omitted means start at index 0. */
     startTokenId?: string | null;
+    /**
+     * Called roughly every `heartbeatIntervalMs` while tokens are still being
+     * processed, so a long-running scheduled collection can renew its DB lock
+     * lease (see geckoterminal-sync-lock.ts) instead of relying solely on the
+     * lease set once at acquire time. If it resolves `false`, ownership of the
+     * run has been reclaimed by another invocation (this one's lease expired):
+     * every remaining token is then treated the same as a deadline cutoff —
+     * skipped, not attempted, and left for the next run's rotation — so this
+     * invocation stops starting new work the moment it learns it is no longer
+     * the owner, rather than continuing to fetch/collect on a run it no longer
+     * controls.
+     */
+    onHeartbeat?: () => Promise<boolean>;
+    heartbeatIntervalMs?: number;
   } = {},
 ): Promise<GeckoTerminalTolerantResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? (() => new Date());
   const requestInterval = Math.max(MIN_REQUEST_INTERVAL_MS, options.minRequestIntervalMs ?? 0);
+  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 20_000;
   const requested = resolveConfiguredAssets(assets);
   const startIndex = options.startTokenId
     ? Math.max(0, requested.findIndex((asset) => asset.tokenId === options.startTokenId))
@@ -464,11 +479,27 @@ export async function fetchGeckoTerminalSnapshotsTolerant(
 
   const snapshots: ProviderSnapshot[] = [];
   const outcomes: GeckoTerminalCollectionOutcome[] = [];
+  // Only calls now() up front when a heartbeat is actually configured, so
+  // callers with no onHeartbeat (every existing caller) see no behavior change
+  // at all — including tests whose `now` is a stateful call counter.
+  let lastHeartbeatAt = options.onHeartbeat ? now().getTime() : 0;
+  let ownershipLost = false;
   for (let index = 0; index < rotated.length; index += 1) {
     const asset = rotated[index];
-    if (options.deadlineAt !== undefined && now().getTime() >= options.deadlineAt) {
+    if (ownershipLost || (options.deadlineAt !== undefined && now().getTime() >= options.deadlineAt)) {
       outcomes.push({ tokenId: asset.tokenId, status: "skipped_time_budget", attempts: 0, rateLimited: false });
       continue;
+    }
+    if (options.onHeartbeat && now().getTime() - lastHeartbeatAt >= heartbeatIntervalMs) {
+      lastHeartbeatAt = now().getTime();
+      if (!(await options.onHeartbeat())) {
+        // Lost the lock lease mid-run: stop starting new token work immediately
+        // (this iteration's token is skipped, same as every one after it), but
+        // still return whatever was already collected and persisted.
+        ownershipLost = true;
+        outcomes.push({ tokenId: asset.tokenId, status: "skipped_time_budget", attempts: 0, rateLimited: false });
+        continue;
+      }
     }
     if (index > 0) await sleep(requestInterval);
     const stats = { requests: 0, rateLimited: false };

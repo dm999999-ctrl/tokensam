@@ -42,11 +42,19 @@ export async function GET(request: Request): Promise<Response> {
       force: url.searchParams.get("force") === "1",
       only: requested as ProviderStep[] | undefined,
     });
-    const status = result.status === "busy" ? 409 : result.status === "failed" ? 500 : 200;
+    // "lost_ownership" means this invocation's lease was reclaimed mid-run (see
+    // runDataRefresh): its recorded steps are still committed, but it could not
+    // finalize the run's own status row, so it is reported distinctly rather
+    // than as an ordinary failure or success.
+    const status = result.status === "busy" ? 409 : result.status === "failed" || result.status === "lost_ownership" ? 500 : 200;
     return Response.json({
       status: result.status,
       runId: result.runId,
       due: result.due,
+      succeeded: result.steps.filter((step) => step.status === "succeeded").map((step) => step.step),
+      failed: result.steps.filter((step) => step.status === "failed").map((step) => step.step),
+      timedOut: result.steps.filter((step) => step.status === "timed_out").map((step) => step.step),
+      metrics: result.steps.find((step) => step.step === "metrics")?.status ?? null,
       steps: result.steps.map(({ step, status: stepStatus, finishedAt, error }) => ({ step, status: stepStatus, finishedAt, error })),
     }, { status });
   } catch (error) {

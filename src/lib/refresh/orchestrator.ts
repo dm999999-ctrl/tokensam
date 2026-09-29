@@ -83,7 +83,13 @@ export type RefreshOptions = {
 };
 
 export type RefreshResult = {
-  status: RunStatus | "busy";
+  /**
+   * "lost_ownership" is a TS-level-only outcome (never written to
+   * data_refresh_runs.status, whose check constraint is unchanged): it means
+   * this invocation's lease was reclaimed by another run partway through, so
+   * it stopped starting new work and never finalized the row it no longer owns.
+   */
+  status: RunStatus | "busy" | "lost_ownership";
   runId: number | null;
   due: ProviderStep[];
   steps: StepRecord[];
@@ -168,8 +174,9 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
   const timeoutFor = (step: RefreshStep) => options.timeouts?.[step]
     ?? (step === "metrics" ? METRICS_TIMEOUT_MS : REFRESH_POLICY[step].timeoutMs);
 
-  const runId = await store.acquireRun(options.trigger, now(), RUN_LEASE_MS);
-  if (runId === null) return { status: "busy", runId: null, due: [], steps: [] };
+  const ownership = await store.acquireRun(options.trigger, now(), RUN_LEASE_MS);
+  if (ownership === null) return { status: "busy", runId: null, due: [], steps: [] };
+  const { runId, lockToken } = ownership;
 
   const steps: StepRecord[] = [];
   const record = async (step: StepRecord) => {
@@ -229,6 +236,18 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
       }
     }));
 
+    // Renewal boundary between the providers phase and metrics: a run that is
+    // still genuinely in progress extends its own lease here so it is never
+    // stolen mid-flight; a run whose lease already expired (the invocation was
+    // killed and this call is somehow still executing, e.g. a slow network path
+    // racing the platform's own termination) learns it no longer owns this run
+    // and must not start metrics or finalize the row a newer run now owns.
+    const stillOwnsAfterProviders = await store.renewLease(runId, lockToken, now(), RUN_LEASE_MS);
+    if (!stillOwnsAfterProviders) {
+      console.error(`[refresh] run ${runId} lost lease ownership after the providers phase; skipping metrics and finalization.`);
+      return { status: "lost_ownership", runId, due, steps };
+    }
+
     const refreshed = steps.filter((step) => step.status === "succeeded").map((step) => step.step);
     if (due.length > 0) {
       const startedAt = now().toISOString();
@@ -261,11 +280,23 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
       due,
       steps: Object.fromEntries(steps.map((step) => [step.step, step.status])),
     };
-    await store.finishRun(runId, status, now(), summary, null);
+    const finalized = await store.finishRun(runId, lockToken, status, now(), summary, null);
+    if (!finalized) {
+      // Ownership was reclaimed between the providers phase and here (a slow
+      // finalization racing an expiring lease). The steps recorded above are
+      // already committed and untouched; only this run's own status row is not
+      // ours to set anymore, so report that explicitly rather than claiming a
+      // status this invocation was not actually allowed to record.
+      console.error(`[refresh] run ${runId} lost lease ownership before finalization; its steps are recorded but its status was not.`);
+      return { status: "lost_ownership", runId, due, steps };
+    }
     return { status, runId, due, steps };
   } catch (error) {
     // Status bookkeeping failed; release the lock and surface the error.
-    await store.finishRun(runId, "failed", now(), { steps: Object.fromEntries(steps.map((step) => [step.step, step.status])) }, errorMessage(error))
+    // Ownership may already be lost here too; that failure is intentionally
+    // swallowed (the invocation cannot do anything more useful with it) rather
+    // than masking the original error being re-thrown below.
+    await store.finishRun(runId, lockToken, "failed", now(), { steps: Object.fromEntries(steps.map((step) => [step.step, step.status])) }, errorMessage(error))
       .catch(() => undefined);
     throw error;
   }

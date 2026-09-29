@@ -115,7 +115,9 @@ export function createFakeSupabase({ seed = {}, views = true, missingTables = []
         return { data: null, error: null };
       }
       if (this.op === "update") {
-        for (const row of rows.filter((candidate) => this.filters.every((filter) => filter(candidate)))) Object.assign(row, this.values);
+        const matched = rows.filter((candidate) => this.filters.every((filter) => filter(candidate)));
+        for (const row of matched) Object.assign(row, this.values);
+        if (this.returning) return this.finish(matched.map((row) => ({ ...row })));
         return { data: null, error: null };
       }
       return this.finish(rows.filter((row) => this.filters.every((filter) => filter(row))).map((row) => ({ ...row })));

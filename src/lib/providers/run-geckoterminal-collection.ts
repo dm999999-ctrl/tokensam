@@ -168,12 +168,25 @@ export async function runGeckoTerminalScheduledCollection(
     deadlineAt?: number;
     minRequestIntervalMs?: number;
     startTokenId?: string | null;
+    /** Forwarded to fetchGeckoTerminalSnapshotsTolerant; see its own doc comment. */
+    onHeartbeat?: () => Promise<boolean>;
+    heartbeatIntervalMs?: number;
+    /** Forwarded to persistProviderSnapshots; see its own doc comment on cancellation. */
+    persistSignal?: AbortSignal;
   } = {},
-): Promise<GeckoTerminalScheduledResult> {
+): Promise<GeckoTerminalScheduledResult & { ownershipLostDuringCollection: boolean }> {
   const startedAt = Date.now();
   await verifySchema(client);
   const assets = configuredGeckoTerminalAssets().filter((asset) => !options.tokenIds || options.tokenIds.includes(asset.tokenId));
   const startTokenId = options.startTokenId !== undefined ? options.startTokenId : await resolveGeckoTerminalStartTokenId(client);
+  let ownershipLostDuringCollection = false;
+  const onHeartbeat = options.onHeartbeat
+    ? async () => {
+      const stillOwner = await options.onHeartbeat!();
+      if (!stillOwner) ownershipLostDuringCollection = true;
+      return stillOwner;
+    }
+    : undefined;
   const { snapshots, outcomes, nextTokenId } = await fetchGeckoTerminalSnapshotsTolerant(assets, {
     fetchImpl: options.fetchImpl,
     sleep: options.sleep,
@@ -181,7 +194,17 @@ export async function runGeckoTerminalScheduledCollection(
     deadlineAt: options.deadlineAt,
     minRequestIntervalMs: options.minRequestIntervalMs,
     startTokenId,
+    onHeartbeat,
+    heartbeatIntervalMs: options.heartbeatIntervalMs,
   });
+
+  if (ownershipLostDuringCollection) {
+    // Lost the lock lease mid-collection: every snapshot gathered up to that
+    // point is still returned below and gets persisted by the caller as usual
+    // (partial provider work is never discarded), but the caller must not
+    // finalize this run's row — it may already belong to a new owner.
+    console.error("[geckoterminal-cron] lost lease ownership mid-collection; persisting what was gathered but not finalizing this run.");
+  }
 
   // Only tokens that actually returned a snapshot this run get their mapping refreshed;
   // a token that failed or was skipped keeps whatever mapping it already had.
@@ -190,7 +213,7 @@ export async function runGeckoTerminalScheduledCollection(
 
   // Every successful snapshot is persisted, even if others in the same run failed or were skipped.
   const persisted = snapshots.length > 0
-    ? await persistProviderSnapshots(client, snapshots)
+    ? await persistProviderSnapshots(client, snapshots, undefined, options.persistSignal)
     : { rawRecords: 0, observations: 0, pairMappings: 0 };
   const unavailable = snapshots.flatMap((snapshot) =>
     snapshot.observations
@@ -213,5 +236,6 @@ export async function runGeckoTerminalScheduledCollection(
     durationMs: Date.now() - startedAt,
     startTokenId: startTokenId ?? null,
     nextTokenId,
+    ownershipLostDuringCollection,
   };
 }

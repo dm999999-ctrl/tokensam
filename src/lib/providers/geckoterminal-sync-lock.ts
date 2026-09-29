@@ -14,10 +14,13 @@
  * `pnpm geckoterminal:sync` — from ever executing concurrently.
  */
 
+import { randomUUID } from "node:crypto";
+
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
 export type GeckoTerminalSyncTrigger = "scheduled" | "manual";
 export type GeckoTerminalSyncStatus = "running" | "succeeded" | "partial" | "failed";
+export type GeckoTerminalRunOwnership = { runId: number; lockToken: string };
 
 const UNIQUE_VIOLATION = "23505";
 // PostgREST reports a missing relation as PGRST205 (schema cache) or 42P01 (Postgres).
@@ -38,36 +41,71 @@ export async function acquireGeckoTerminalSyncLock(
   trigger: GeckoTerminalSyncTrigger,
   now: Date,
   leaseMs: number,
-): Promise<number | null> {
-  // Release a lock left behind by a run that crashed or was killed mid-flight.
+): Promise<GeckoTerminalRunOwnership | null> {
+  // Release a lock left behind by a run that crashed, was killed mid-flight, or
+  // stopped heartbeating (see renewGeckoTerminalSyncLock); its row is preserved
+  // as an auditable "abandoned" record, never deleted.
   const { error: expireError } = await client.from("geckoterminal_sync_runs")
     .update({ status: "failed", finished_at: now.toISOString(), error: "Run abandoned: its lease expired before it finished." })
     .eq("status", "running")
     .lt("lease_expires_at", now.toISOString());
   fail(expireError, "expire abandoned GeckoTerminal sync runs");
 
+  const lockToken = randomUUID();
   const { data, error } = await client.from("geckoterminal_sync_runs")
-    .insert({ trigger, status: "running", started_at: now.toISOString(), lease_expires_at: new Date(now.getTime() + leaseMs).toISOString() })
+    .insert({
+      trigger, status: "running", started_at: now.toISOString(),
+      lease_expires_at: new Date(now.getTime() + leaseMs).toISOString(),
+      heartbeat_at: now.toISOString(), lock_token: lockToken,
+    })
     .select("id")
     .single();
   // The partial unique index permits a single 'running' row: a conflict means busy.
   if (error && (error as { code?: string }).code === UNIQUE_VIOLATION) return null;
   fail(error, "start GeckoTerminal sync run");
-  return (data as { id: number }).id;
+  return { runId: (data as { id: number }).id, lockToken };
+}
+
+/**
+ * Extends the lease, but only while `lockToken` still matches the row's
+ * current token and it is still 'running'. Returns false the moment another
+ * invocation has already reclaimed this run; the caller must stop starting
+ * new token work and must not finalize the row it no longer owns.
+ */
+export async function renewGeckoTerminalSyncLock(
+  client: SupabaseAdminClient,
+  runId: number,
+  lockToken: string,
+  now: Date,
+  leaseMs: number,
+): Promise<boolean> {
+  const { data, error } = await client.from("geckoterminal_sync_runs")
+    .update({ lease_expires_at: new Date(now.getTime() + leaseMs).toISOString(), heartbeat_at: now.toISOString() })
+    .eq("id", runId)
+    .eq("lock_token", lockToken)
+    .eq("status", "running")
+    .select("id");
+  fail(error, "renew GeckoTerminal sync lease");
+  return (data ?? []).length > 0;
 }
 
 export async function finishGeckoTerminalSyncLock(
   client: SupabaseAdminClient,
   runId: number,
+  lockToken: string,
   status: Exclude<GeckoTerminalSyncStatus, "running">,
   finishedAt: Date,
   summary: Record<string, unknown>,
   error: string | null,
-): Promise<void> {
-  const { error: updateError } = await client.from("geckoterminal_sync_runs")
+): Promise<boolean> {
+  const { data, error: updateError } = await client.from("geckoterminal_sync_runs")
     .update({ status, finished_at: finishedAt.toISOString(), summary, error })
-    .eq("id", runId);
+    .eq("id", runId)
+    .eq("lock_token", lockToken)
+    .eq("status", "running")
+    .select("id");
   fail(updateError, "finish GeckoTerminal sync run");
+  return (data ?? []).length > 0;
 }
 
 /** Finished timestamp of the most recent successful (or partially successful) run, for a due-check. */
@@ -118,17 +156,18 @@ export async function withGeckoTerminalSyncLock<T>(
   leaseMs: number,
   work: () => Promise<T>,
 ): Promise<T> {
-  const runId = await acquireGeckoTerminalSyncLock(client, trigger, new Date(), leaseMs);
-  if (runId === null) {
+  const ownership = await acquireGeckoTerminalSyncLock(client, trigger, new Date(), leaseMs);
+  if (ownership === null) {
     throw new Error("A GeckoTerminal collection is already running (scheduled or manual); try again once it finishes.");
   }
+  const { runId, lockToken } = ownership;
   try {
     const result = await work();
-    await finishGeckoTerminalSyncLock(client, runId, "succeeded", new Date(), {}, null);
+    await finishGeckoTerminalSyncLock(client, runId, lockToken, "succeeded", new Date(), {}, null);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error.";
-    await finishGeckoTerminalSyncLock(client, runId, "failed", new Date(), {}, message).catch(() => undefined);
+    await finishGeckoTerminalSyncLock(client, runId, lockToken, "failed", new Date(), {}, message).catch(() => undefined);
     throw error;
   }
 }

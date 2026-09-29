@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { RefreshStep } from "./config.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
@@ -17,12 +18,29 @@ export type StepRecord = {
 
 export type LatestRun = { id: number; status: RunStatus; startedAt: string; finishedAt: string | null };
 
+/** Ownership credential returned by acquireRun; required by every later call on that run. */
+export type RunOwnership = { runId: number; lockToken: string };
+
 /** Persistence for refresh runs. Supabase in production; in-memory in tests. */
 export interface RefreshStore {
-  /** Returns the new run id, or null when another run holds an unexpired lease. */
-  acquireRun(trigger: RefreshTrigger, now: Date, leaseMs: number): Promise<number | null>;
+  /** Returns the new run's id and ownership token, or null when another run holds an unexpired lease. */
+  acquireRun(trigger: RefreshTrigger, now: Date, leaseMs: number): Promise<RunOwnership | null>;
   recordStep(runId: number, step: StepRecord): Promise<void>;
-  finishRun(runId: number, status: Exclude<RunStatus, "running">, finishedAt: Date, summary: Record<string, unknown>, error: string | null): Promise<void>;
+  /**
+   * Extends the lease, but only while `lockToken` still matches the row's current
+   * token and the row is still 'running'. Returns false — without throwing — the
+   * moment another invocation has already reclaimed this run (its lease expired
+   * and a new run was acquired): the caller must treat that as having lost
+   * ownership and stop starting new work.
+   */
+  renewLease(runId: number, lockToken: string, now: Date, leaseMs: number): Promise<boolean>;
+  /**
+   * Marks the run finished, but only while `lockToken` still matches and the row
+   * is still 'running'. Returns false — without throwing — if ownership was
+   * already reclaimed by a newer run, which that newer run's own row is
+   * untouched by (finishRun/renewLease always filter by this run's own id).
+   */
+  finishRun(runId: number, lockToken: string, status: Exclude<RunStatus, "running">, finishedAt: Date, summary: Record<string, unknown>, error: string | null): Promise<boolean>;
   lastSuccessfulSteps(): Promise<Partial<Record<RefreshStep, string>>>;
   latestRun(): Promise<LatestRun | null>;
 }
@@ -55,8 +73,10 @@ export class SupabaseRefreshStore implements RefreshStore {
     this.client = client;
   }
 
-  async acquireRun(trigger: RefreshTrigger, now: Date, leaseMs: number): Promise<number | null> {
-    // Release a lock left behind by a run that crashed or was killed mid-flight.
+  async acquireRun(trigger: RefreshTrigger, now: Date, leaseMs: number): Promise<RunOwnership | null> {
+    // Release a lock left behind by a run that crashed, was killed mid-flight, or
+    // simply stopped heartbeating (see renewLease): its audit row is preserved,
+    // just marked failed/abandoned, never deleted or overwritten with new data.
     console.log("[diagnostic] acquireRun: about to run expire-abandoned-runs UPDATE");
     const { error: expireError } = await this.client.from("data_refresh_runs")
       .update({ status: "failed", finished_at: now.toISOString(), error: "Run abandoned: its lease expired before it finished." })
@@ -65,16 +85,37 @@ export class SupabaseRefreshStore implements RefreshStore {
     logSupabaseError("expire_abandoned_refresh_runs", expireError as { code?: string; message?: string; details?: string; hint?: string } | null);
     fail(expireError, "expire abandoned refresh runs");
 
+    // Generated here (not left to the column's DB default) so the caller has its
+    // ownership credential immediately, with no extra round trip to read it back.
+    const lockToken = randomUUID();
     console.log("[diagnostic] acquireRun: about to run data_refresh_runs INSERT");
     const { data, error } = await this.client.from("data_refresh_runs")
-      .insert({ trigger, status: "running", started_at: now.toISOString(), lease_expires_at: new Date(now.getTime() + leaseMs).toISOString() })
+      .insert({
+        trigger, status: "running", started_at: now.toISOString(),
+        lease_expires_at: new Date(now.getTime() + leaseMs).toISOString(),
+        heartbeat_at: now.toISOString(), lock_token: lockToken,
+      })
       .select("id")
       .single();
     // The partial unique index permits a single 'running' row: a conflict means busy.
     if (error && (error as { code?: string }).code === UNIQUE_VIOLATION) return null;
     logSupabaseError("start_refresh_run", error as { code?: string; message?: string; details?: string; hint?: string } | null);
     fail(error, "start refresh run");
-    return (data as { id: number }).id;
+    return { runId: (data as { id: number }).id, lockToken };
+  }
+
+  async renewLease(runId: number, lockToken: string, now: Date, leaseMs: number): Promise<boolean> {
+    const { data, error } = await this.client.from("data_refresh_runs")
+      .update({ lease_expires_at: new Date(now.getTime() + leaseMs).toISOString(), heartbeat_at: now.toISOString() })
+      .eq("id", runId)
+      .eq("lock_token", lockToken)
+      .eq("status", "running")
+      .select("id");
+    fail(error, "renew refresh run lease");
+    // Zero rows matched means another invocation already reclaimed this run
+    // (its lease expired and a new run/token took over); this invocation must
+    // stop treating itself as the owner.
+    return (data ?? []).length > 0;
   }
 
   async recordStep(runId: number, step: StepRecord): Promise<void> {
@@ -90,11 +131,18 @@ export class SupabaseRefreshStore implements RefreshStore {
     fail(error, `record ${step.step} refresh step`);
   }
 
-  async finishRun(runId: number, status: Exclude<RunStatus, "running">, finishedAt: Date, summary: Record<string, unknown>, error: string | null): Promise<void> {
-    const { error: updateError } = await this.client.from("data_refresh_runs")
+  async finishRun(runId: number, lockToken: string, status: Exclude<RunStatus, "running">, finishedAt: Date, summary: Record<string, unknown>, error: string | null): Promise<boolean> {
+    const { data, error: updateError } = await this.client.from("data_refresh_runs")
       .update({ status, finished_at: finishedAt.toISOString(), summary, error })
-      .eq("id", runId);
+      .eq("id", runId)
+      .eq("lock_token", lockToken)
+      .eq("status", "running")
+      .select("id");
     fail(updateError, "finish refresh run");
+    // False means this run was already reclaimed (its own row was already flipped
+    // to 'failed' by another invocation's acquireRun); the caller no longer owns
+    // it and must not treat this as having finalized anything.
+    return (data ?? []).length > 0;
   }
 
   async lastSuccessfulSteps(): Promise<Partial<Record<RefreshStep, string>>> {

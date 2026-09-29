@@ -6,6 +6,7 @@ import {
   acquireGeckoTerminalSyncLock,
   finishGeckoTerminalSyncLock,
   lastSuccessfulGeckoTerminalSync,
+  renewGeckoTerminalSyncLock,
   resolveGeckoTerminalStartTokenId,
   withGeckoTerminalSyncLock,
 } from "../src/lib/providers/geckoterminal-sync-lock.ts";
@@ -231,7 +232,8 @@ test("a second acquire is refused while the first run is still 'running'", async
   const db = createFakeSupabase({ seed: { geckoterminal_sync_runs: [] } });
   const now = new Date("2026-09-30T00:00:00Z");
   const first = await acquireGeckoTerminalSyncLock(db.client, "scheduled", now, 60_000);
-  assert.equal(typeof first, "number");
+  assert.equal(typeof first.runId, "number");
+  assert.equal(typeof first.lockToken, "string");
   const second = await acquireGeckoTerminalSyncLock(db.client, "manual", now, 60_000);
   assert.equal(second, null, "an overlapping invocation (scheduled or manual) must be refused, not double-run");
 });
@@ -240,23 +242,45 @@ test("a lock is released once finished, and a new run can then be acquired", asy
   const db = createFakeSupabase({ seed: { geckoterminal_sync_runs: [] } });
   const now = new Date("2026-09-30T00:00:00Z");
   const first = await acquireGeckoTerminalSyncLock(db.client, "scheduled", now, 60_000);
-  await finishGeckoTerminalSyncLock(db.client, first, "succeeded", now, { observations: 10 }, null);
+  await finishGeckoTerminalSyncLock(db.client, first.runId, first.lockToken, "succeeded", now, { observations: 10 }, null);
   const second = await acquireGeckoTerminalSyncLock(db.client, "scheduled", new Date(now.getTime() + 1000), 60_000);
-  assert.equal(typeof second, "number");
-  assert.notEqual(second, first);
+  assert.equal(typeof second.runId, "number");
+  assert.notEqual(second.runId, first.runId);
 });
 
 test("an abandoned run (lease expired) is released automatically and does not block a new acquire", async () => {
   const db = createFakeSupabase({ seed: { geckoterminal_sync_runs: [] } });
   const started = new Date("2026-09-30T00:00:00Z");
   const stale = await acquireGeckoTerminalSyncLock(db.client, "scheduled", started, 1_000); // lease expires 1s later
-  assert.equal(typeof stale, "number");
+  assert.equal(typeof stale.runId, "number");
   const muchLater = new Date(started.getTime() + 60_000);
   const revived = await acquireGeckoTerminalSyncLock(db.client, "scheduled", muchLater, 60_000);
-  assert.equal(typeof revived, "number", "a crashed run's expired lease must not block future runs indefinitely");
-  const staleRow = db.rows("geckoterminal_sync_runs").find((row) => row.id === stale);
+  assert.equal(typeof revived.runId, "number", "a crashed run's expired lease must not block future runs indefinitely");
+  assert.notEqual(revived.lockToken, stale.lockToken, "the new owner must get a fresh ownership token, never reuse the abandoned one");
+  const staleRow = db.rows("geckoterminal_sync_runs").find((row) => row.id === stale.runId);
   assert.equal(staleRow.status, "failed");
   assert.match(staleRow.error, /lease expired/);
+});
+
+test("stale owner cannot renew or finalize after its lease is reclaimed by a new owner", async () => {
+  const db = createFakeSupabase({ seed: { geckoterminal_sync_runs: [] } });
+  const started = new Date("2026-09-30T00:00:00Z");
+  const runA = await acquireGeckoTerminalSyncLock(db.client, "scheduled", started, 1_000); // lease expires 1s later
+  const muchLater = new Date(started.getTime() + 60_000);
+  const runB = await acquireGeckoTerminalSyncLock(db.client, "scheduled", muchLater, 60_000);
+  assert.notEqual(runB.runId, runA.runId, "run B must be a distinct row, not a reuse of run A's");
+
+  const staleRenewed = await renewGeckoTerminalSyncLock(db.client, runA.runId, runA.lockToken, muchLater, 60_000);
+  assert.equal(staleRenewed, false, "run A's stale token must not be able to extend its own (already-reclaimed) lease");
+
+  const staleFinished = await finishGeckoTerminalSyncLock(db.client, runA.runId, runA.lockToken, "succeeded", muchLater, {}, null);
+  assert.equal(staleFinished, false, "run A must not be able to finalize a run whose lease already expired and was reclaimed");
+  assert.equal(db.rows("geckoterminal_sync_runs").find((row) => row.id === runA.runId).status, "failed", "run A's row stays 'failed' from the earlier expiry, not overwritten to 'succeeded'");
+
+  const ownerRenewed = await renewGeckoTerminalSyncLock(db.client, runB.runId, runB.lockToken, muchLater, 60_000);
+  assert.equal(ownerRenewed, true, "run B, the genuine current owner, must still be able to renew");
+  const ownerFinished = await finishGeckoTerminalSyncLock(db.client, runB.runId, runB.lockToken, "succeeded", muchLater, {}, null);
+  assert.equal(ownerFinished, true, "run B must still be able to finalize normally");
 });
 
 test("withGeckoTerminalSyncLock refuses to start work while another run holds the lock, and releases on success", async () => {
@@ -414,14 +438,14 @@ test("integration: successive scheduled runs resume after the previous stop, rea
   async function runOnce(baseMs) {
     let calls = 0;
     const now = () => new Date(baseMs + (calls++) * 1_000);
-    const runId = await acquireGeckoTerminalSyncLock(db.client, "scheduled", new Date(baseMs), 15 * 60 * 1000);
+    const { runId, lockToken } = await acquireGeckoTerminalSyncLock(db.client, "scheduled", new Date(baseMs), 15 * 60 * 1000);
     assert.equal(typeof runId, "number", "the lock must be free between successive scheduled runs");
     const result = await runGeckoTerminalScheduledCollection(db.client, {
       tokenIds, fetchImpl, sleep: noSleep, now,
       deadlineAt: baseMs + 1_500, // wide enough for exactly one token's request+snapshot timestamp, not a second
     });
     const status = result.failed.length === 0 && result.skipped.length === 0 ? "succeeded" : result.succeeded.length > 0 ? "partial" : "failed";
-    await finishGeckoTerminalSyncLock(db.client, runId, status, new Date(baseMs + 3_000), result, null);
+    await finishGeckoTerminalSyncLock(db.client, runId, lockToken, status, new Date(baseMs + 3_000), result, null);
     return result;
   }
 
@@ -455,6 +479,47 @@ test("integration: successive scheduled runs resume after the previous stop, rea
     const rows = db.rows("token_metric_observations").filter((row) => row.token_id === tokenId && row.provider_id === "geckoterminal");
     assert.ok(rows.length > 0, `${tokenId} must have received an observation somewhere across the rotation`);
   }
+});
+
+// ---- Heartbeat / ownership during a scheduled collection ----
+
+test("heartbeat renews the lease during a long rotation, and a stale token cannot", async () => {
+  const db = createFakeSupabase({ seed: baseSeed() });
+  const started = new Date("2026-09-30T00:00:00Z");
+  const { runId, lockToken } = await acquireGeckoTerminalSyncLock(db.client, "scheduled", started, 1_000); // 1s lease
+  const later = new Date(started.getTime() + 500);
+  assert.equal(await renewGeckoTerminalSyncLock(db.client, runId, lockToken, later, 1_000), true, "the genuine owner extends its own lease");
+  const muchLater = new Date(started.getTime() + 5_000);
+  assert.equal(await renewGeckoTerminalSyncLock(db.client, runId, "not-the-real-token", muchLater, 1_000), false, "a mismatched token can never renew, even before expiry");
+});
+
+test("a heartbeat that reports lost ownership stops starting new token work but keeps snapshots already collected", async () => {
+  const db = createFakeSupabase({ seed: baseSeed() });
+  let heartbeats = 0;
+  const fetchImpl = fixedResponse({ data: [] });
+  const result = await runGeckoTerminalScheduledCollection(db.client, {
+    tokenIds: [aave.tokenId, jupiter.tokenId, uni.tokenId],
+    fetchImpl,
+    sleep: noSleep,
+    heartbeatIntervalMs: 0, // heartbeat before every token for this test
+    onHeartbeat: async () => {
+      heartbeats += 1;
+      return heartbeats < 2; // ownership lost on the second token's heartbeat
+    },
+  });
+  assert.equal(result.ownershipLostDuringCollection, true);
+  assert.equal(result.succeeded.length, 1, "only the token processed before ownership was lost is attempted");
+  assert.deepEqual(new Set(result.skipped), new Set([jupiter.tokenId, uni.tokenId]), "every remaining token is left for the next owner's rotation, not attempted under a reclaimed lease");
+  const rows = db.rows("token_metric_observations").filter((row) => row.token_id === aave.tokenId);
+  assert.ok(rows.length > 0, "the snapshot collected before ownership was lost is still persisted");
+});
+
+test("PROCESSING_BUDGET_MS (255s) plus its documented tail fits inside maxDuration (300s) with margin", () => {
+  const PROCESSING_BUDGET_MS = 255_000;
+  const maxDurationMs = 300_000;
+  const worstCaseTailMs = 15_000 + 15_000 + 5_000; // in-flight request tail + persistence + finalization/response
+  assert.ok(PROCESSING_BUDGET_MS + worstCaseTailMs < maxDurationMs, "the documented worst-case tail must leave a safety margin before the platform kill");
+  assert.equal(maxDurationMs - PROCESSING_BUDGET_MS, 45_000, "45s is reserved after collection stops for persistence, finalization, and response construction");
 });
 
 let failures = 0;

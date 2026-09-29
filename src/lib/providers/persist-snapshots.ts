@@ -37,11 +37,13 @@ async function writeInChunks(
   client: SupabaseAdminClient,
   table: "token_metric_observations",
   rows: Record<string, unknown>[],
+  signal?: AbortSignal,
 ): Promise<void> {
   const chunks: Record<string, unknown>[][] = [];
   for (let index = 0; index < rows.length; index += CHUNK_SIZE) chunks.push(rows.slice(index, index + CHUNK_SIZE));
   await Promise.all(chunks.map(async (chunk) => {
-    const { error } = await client.from(table).insert(chunk);
+    const query = client.from(table).insert(chunk);
+    const { error } = await (signal ? query.abortSignal(signal) : query);
     assertNoError(error, `insert into ${table}`);
   }));
 }
@@ -62,16 +64,33 @@ function observationKey(row: {
   ].join("|");
 }
 
-/** Persist generic normalized provider snapshots and their source JSON.
- *  `diagnostics` is optional, diagnostic-only stage timing (see
- *  collector-diagnostics.ts); only the CoinGecko caller currently passes it,
- *  so every other provider's behavior here is unchanged. */
+/**
+ * Persist generic normalized provider snapshots and their source JSON.
+ * `diagnostics` is optional, diagnostic-only stage timing (see
+ * collector-diagnostics.ts); only the CoinGecko caller currently passes it,
+ * so every other provider's behavior here is unchanged.
+ *
+ * `signal`, when passed (currently only by the GeckoTerminal scheduled route,
+ * which ties it to its own end-to-end deadline), is attached to every
+ * Supabase call via `.abortSignal()`. This is real cancellation of the
+ * client-side request: aborting closes the underlying HTTP connection to
+ * PostgREST immediately, so this function stops waiting *and* stops sending
+ * more of that request. It is not a guarantee that Postgres itself stops
+ * executing an already-dispatched statement the instant the socket closes —
+ * that depends on Postgres noticing the closed connection, which is
+ * best-effort and not immediate. No caller relies on the query having
+ * actually stopped server-side; they only rely on not being blocked by it.
+ * Omitted (the CoinGecko/DEX Screener/DeFiLlama path), behavior is identical
+ * to before this parameter existed.
+ */
 export async function persistProviderSnapshots(
   client: SupabaseAdminClient,
   snapshots: ProviderSnapshot[],
   diagnostics?: CollectorDiagnostics,
+  signal?: AbortSignal,
 ): Promise<{ rawRecords: number; observations: number; pairMappings: number; timingMs: Record<string, number> }> {
   if (snapshots.length === 0) return { rawRecords: 0, observations: 0, pairMappings: 0, timingMs: {} };
+  const withSignal = <T extends { abortSignal(signal: AbortSignal): T }>(query: T): T => (signal ? query.abortSignal(signal) : query);
 
   const rawRows = snapshots.map((snapshot) => ({
     provider_id: snapshot.providerId,
@@ -98,10 +117,10 @@ export async function persistProviderSnapshots(
     (async () => {
       const chunks = chunkRawRows(rawRows);
       const results = await Promise.all(chunks.map(async (rawBatch) => {
-        const { data, error } = await client
+        const { data, error } = await withSignal(client
           .from("raw_provider_records")
           .insert(rawBatch)
-          .select("id, token_id, chain_id");
+          .select("id, token_id, chain_id"));
         assertNoError(error, "insert into raw_provider_records");
         return (data ?? []) as { id: number; token_id: string; chain_id: string }[];
       }));
@@ -109,8 +128,8 @@ export async function persistProviderSnapshots(
       return results.flat();
     })(),
     (async () => {
-      const { data, error } = await client.from("provider_token_mappings")
-        .select("id,provider_id,token_id").in("provider_id", providers).in("token_id", tokenIdsForMapping);
+      const { data, error } = await withSignal(client.from("provider_token_mappings")
+        .select("id,provider_id,token_id").in("provider_id", providers).in("token_id", tokenIdsForMapping));
       assertNoError(error, "read provider mapping IDs");
       diagnostics?.end("coingecko.persist.mappingLookup");
       return (data ?? []) as { id: number; provider_id: string; token_id: string }[];
@@ -140,9 +159,9 @@ export async function persistProviderSnapshots(
     })),
   );
   if (pairRows.length > 0) {
-    const { error: pairError } = await client
+    const { error: pairError } = await withSignal(client
       .from("provider_pairs")
-      .upsert(pairRows, { onConflict: "provider_id,chain_id,token_id,pair_address" });
+      .upsert(pairRows, { onConflict: "provider_id,chain_id,token_id,pair_address" }));
     assertNoError(pairError, "upsert into provider_pairs");
   }
   // Mapping IDs identify the provider mapping each observation was collected under.
@@ -203,7 +222,7 @@ export async function persistProviderSnapshots(
   const tokenIdSet = new Set(tokenIds);
   let cursorId = 0;
   for (;;) {
-    const { data, error } = await client
+    const { data, error } = await withSignal(client
       .from("token_metric_observations")
       .select("id, token_id, chain_id, metric_id, observed_at, window_days")
       .in("provider_id", providerIds)
@@ -211,7 +230,7 @@ export async function persistProviderSnapshots(
       .lte("observed_at", endAt)
       .gt("id", cursorId)
       .order("id", { ascending: true })
-      .limit(1000);
+      .limit(1000));
     assertNoError(error, "check existing observations");
     const page = (data ?? []) as {
       id: number; token_id: string; chain_id: string; metric_id: string; observed_at: string; window_days: number | null;
@@ -234,7 +253,7 @@ export async function persistProviderSnapshots(
   );
   const observationInsertStart = Date.now();
   diagnostics?.start("coingecko.persist.observationInsert");
-  await writeInChunks(client, "token_metric_observations", newObservationRows);
+  await writeInChunks(client, "token_metric_observations", newObservationRows, signal);
   diagnostics?.end("coingecko.persist.observationInsert");
   const observationInsertMs = Date.now() - observationInsertStart;
   return {
