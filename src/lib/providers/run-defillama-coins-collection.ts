@@ -32,6 +32,13 @@ export async function runDefiLlamaCoinsCollection(
   const { error: providerError } = await client.from("data_providers")
     .upsert({ id: DEFILLAMA_COINS_PROVIDER_ID, name: "DeFiLlama (token prices)", enabled: true }, { onConflict: "id" });
   fail(providerError, "upsert DeFiLlama coins provider");
+  // onConflict targets the table's (provider_id,token_id) unique constraint, not its
+  // (provider_id,chain_id,external_asset_id) primary key: a token's external_asset_id
+  // can change between runs (e.g. its identifier resolving to a different verified
+  // contract address than a prior run), which changes the PK while provider_id+token_id
+  // stays the same — upserting on the PK then hit the OTHER unique constraint as a
+  // duplicate-key error instead of updating the existing row, failing this step on every
+  // run for any token whose mapping had drifted this way.
   const { error: mappingError } = await client.from("provider_token_mappings").upsert(assets.map((asset) => ({
     provider_id: DEFILLAMA_COINS_PROVIDER_ID,
     chain_id: asset.chainId,
@@ -39,7 +46,7 @@ export async function runDefiLlamaCoinsCollection(
     external_asset_id: asset.externalAssetId,
     scope: "token",
     verification_method: asset.externalAssetId.startsWith("coingecko:") ? "coins_key_from_coingecko_id" : "coins_key_from_verified_contract_address",
-  })), { onConflict: "provider_id,chain_id,external_asset_id" });
+  })), { onConflict: "provider_id,token_id" });
   fail(mappingError, "upsert DeFiLlama coins mappings");
 
   const persisted = await persistProviderSnapshots(client, snapshots);
