@@ -58,6 +58,10 @@ export function getCoinGeckoConfig(
   // as its own secret; this deployment only needs CRON_SECRET, which it already has, to
   // authenticate to the Worker's proxy route.
   const proxyUrl = env.COINGECKO_PROXY_URL?.trim().replace(/\/$/, "");
+  // TEMPORARY diagnostic logging for the "still hitting CoinGecko directly" investigation.
+  // Logs only whether the proxy env var was seen, never its value or any secret. Remove
+  // once confirmed the deployed function actually resolves COINGECKO_PROXY_URL.
+  console.log(`[diagnostic] getCoinGeckoConfig: COINGECKO_PROXY_URL is ${proxyUrl ? "set, using proxy" : "unset, calling CoinGecko directly"}`);
   if (proxyUrl) {
     const cronSecret = env.CRON_SECRET?.trim();
     if (!cronSecret) {
