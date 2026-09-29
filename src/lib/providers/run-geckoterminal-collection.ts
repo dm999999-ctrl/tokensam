@@ -70,7 +70,9 @@ async function upsertGeckoTerminalMappings(client: SupabaseAdminClient, assets: 
     scope: "market",
     verification_method: "exact_chain_address",
   }));
-  const { error } = await client.from("provider_token_mappings").upsert(mappings, { onConflict: "provider_id,chain_id,external_asset_id" });
+  // onConflict targets (provider_id,token_id): see the identical fix and rationale in
+  // run-coingecko-collection.ts and run-defillama-coins-collection.ts.
+  const { error } = await client.from("provider_token_mappings").upsert(mappings, { onConflict: "provider_id,token_id" });
   throwOnSupabaseError(error, "upsert GeckoTerminal token mappings");
 }
 

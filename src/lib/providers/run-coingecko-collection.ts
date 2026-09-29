@@ -126,9 +126,15 @@ async function prepareDatabase(
     scope: "token",
     verification_method: "curated_coingecko_id",
   }));
+  // onConflict targets (provider_id,token_id), not the table's (provider_id,chain_id,
+  // external_asset_id) primary key -- same fix as run-defillama-coins-collection.ts's
+  // identical bug: a token's curated external_asset_id can change between runs, which
+  // changes the PK while provider_id+token_id stays the same, hitting the table's OTHER
+  // unique constraint (provider_token_mappings_provider_id_token_id_key) as a duplicate-key
+  // error instead of updating the existing row.
   const { error: mappingsError } = await timedUpsert(
     diagnostics, "coingecko.prepareDatabase.upsertProviderMappings",
-    () => client.from("provider_token_mappings").upsert(mappings, { onConflict: "provider_id,chain_id,external_asset_id" }),
+    () => client.from("provider_token_mappings").upsert(mappings, { onConflict: "provider_id,token_id" }),
   );
   throwOnSupabaseError(mappingsError, "upsert provider token mappings");
 

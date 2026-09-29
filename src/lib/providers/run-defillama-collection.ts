@@ -66,9 +66,11 @@ export async function runDefiLlamaCollection(
     verification_method: "curated_protocol_association",
     verification_evidence: { record_id: mapping.recordId, record_kind: mapping.recordKind, protocol_name: mapping.protocolName },
   }));
+  // onConflict targets (provider_id,token_id): see the identical fix and rationale in
+  // run-coingecko-collection.ts and run-defillama-coins-collection.ts.
   const { error: mappingsError } = await client
     .from("provider_token_mappings")
-    .upsert(mappings, { onConflict: "provider_id,chain_id,external_asset_id" });
+    .upsert(mappings, { onConflict: "provider_id,token_id" });
   throwOnSupabaseError(mappingsError, "upsert DeFiLlama protocol mappings");
 
   const persisted = await persistProviderSnapshots(client, snapshots);

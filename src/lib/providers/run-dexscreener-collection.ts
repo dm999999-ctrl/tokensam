@@ -62,9 +62,11 @@ export async function runDexScreenerCollection(
     scope: "market",
     verification_method: "exact_chain_address",
   }));
+  // onConflict targets (provider_id,token_id): see the identical fix and rationale in
+  // run-coingecko-collection.ts and run-defillama-coins-collection.ts.
   const { error: mappingsError } = await client
     .from("provider_token_mappings")
-    .upsert(mappings, { onConflict: "provider_id,chain_id,external_asset_id" });
+    .upsert(mappings, { onConflict: "provider_id,token_id" });
   throwOnSupabaseError(mappingsError, "upsert DEX Screener token mappings");
 
   const persisted = await persistProviderSnapshots(client, snapshots);
