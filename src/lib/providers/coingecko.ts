@@ -45,14 +45,30 @@ export class CoinGeckoApiError extends Error {
 export function getCoinGeckoConfig(
   env: Record<string, string | undefined> = process.env,
 ): { apiKey: string; plan: CoinGeckoPlan; baseUrl: string; keyHeader: string } {
-  const apiKey = env.COINGECKO_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error("Set COINGECKO_API_KEY in the ignored root .env.local file.");
-  }
-
   const plan = (env.COINGECKO_API_PLAN?.trim().toLowerCase() || "demo") as CoinGeckoPlan;
   if (plan !== "demo" && plan !== "pro") {
     throw new Error("COINGECKO_API_PLAN must be either demo or pro.");
+  }
+
+  // Optional: route through the Cloudflare Worker's /coingecko-proxy instead of calling
+  // CoinGecko directly. CoinGecko started rejecting requests from Vercel's shared AWS Lambda
+  // IP range with 403 for this project (the key itself works fine from any other network —
+  // confirmed directly against api.coingecko.com), so this gives CoinGecko calls a different
+  // egress path through Cloudflare's network instead. The Worker holds the real CoinGecko key
+  // as its own secret; this deployment only needs CRON_SECRET, which it already has, to
+  // authenticate to the Worker's proxy route.
+  const proxyUrl = env.COINGECKO_PROXY_URL?.trim().replace(/\/$/, "");
+  if (proxyUrl) {
+    const cronSecret = env.CRON_SECRET?.trim();
+    if (!cronSecret) {
+      throw new Error("COINGECKO_PROXY_URL is set but CRON_SECRET is missing; the proxy route requires it for auth.");
+    }
+    return { apiKey: `Bearer ${cronSecret}`, plan, baseUrl: `${proxyUrl}/coingecko-proxy`, keyHeader: "authorization" };
+  }
+
+  const apiKey = env.COINGECKO_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Set COINGECKO_API_KEY in the ignored root .env.local file.");
   }
 
   return {

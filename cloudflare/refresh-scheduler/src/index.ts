@@ -3,6 +3,62 @@ export interface Env {
   REFRESH_URL: string;
   /** Must equal the Vercel deployment's own CRON_SECRET (see src/lib/refresh/auth.ts). Set as a Wrangler secret. */
   CRON_SECRET: string;
+  /**
+   * CoinGecko key used only by the /coingecko-proxy route below. Cloudflare's outbound IP
+   * pool is separate from Vercel's AWS Lambda IPs, which CoinGecko
+   * started rejecting with 403 for this project even though the key and account are fine —
+   * this proxy exists purely to give CoinGecko requests a different, unblocked egress path.
+   * Set as a Wrangler secret; optional (the proxy route no-ops with a clear error if unset).
+   */
+  COINGECKO_API_KEY?: string;
+  /** "demo" (default) or "pro" — must match the actual key's plan. */
+  COINGECKO_API_PLAN?: string;
+}
+
+const COINGECKO_PROXY_PREFIX = "/coingecko-proxy";
+
+/**
+ * Forwards a CoinGecko request through Cloudflare's network instead of Vercel's, working
+ * around CoinGecko blocking Vercel's shared AWS Lambda IP range for this project (the key
+ * itself works fine from any other IP — confirmed directly against api.coingecko.com).
+ * Requires the same `Authorization: Bearer <CRON_SECRET>` convention as the other routes
+ * this Worker exposes, so it can't be used as an open CoinGecko proxy by anyone else.
+ * Forwards the path/query after the prefix verbatim (e.g. /coingecko-proxy/coins/markets?...
+ * -> https://api.coingecko.com/api/v3/coins/markets?...), and passes back CoinGecko's status,
+ * body, and retry-after header unchanged so the caller's existing retry logic keeps working.
+ */
+async function handleCoinGeckoProxy(request: Request, env: Env): Promise<Response> {
+  if (request.headers.get("authorization") !== `Bearer ${env.CRON_SECRET}`) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (!env.COINGECKO_API_KEY) {
+    return Response.json({ error: "COINGECKO_API_KEY is not configured on this Worker." }, { status: 500 });
+  }
+
+  const plan = (env.COINGECKO_API_PLAN?.trim().toLowerCase() || "demo") === "pro" ? "pro" : "demo";
+  const upstreamBase = plan === "pro" ? "https://pro-api.coingecko.com/api/v3" : "https://api.coingecko.com/api/v3";
+  const keyHeader = plan === "pro" ? "x-cg-pro-api-key" : "x-cg-demo-api-key";
+
+  const incoming = new URL(request.url);
+  const upstreamPath = incoming.pathname.slice(COINGECKO_PROXY_PREFIX.length) || "/";
+  const upstreamUrl = `${upstreamBase}${upstreamPath}${incoming.search}`;
+
+  try {
+    const upstreamResponse = await fetch(upstreamUrl, {
+      method: "GET",
+      headers: { [keyHeader]: env.COINGECKO_API_KEY, accept: "application/json" },
+    });
+    const body = await upstreamResponse.text();
+    const headers = new Headers({ "content-type": upstreamResponse.headers.get("content-type") ?? "application/json" });
+    const retryAfter = upstreamResponse.headers.get("retry-after");
+    if (retryAfter) headers.set("retry-after", retryAfter);
+    return new Response(body, { status: upstreamResponse.status, headers });
+  } catch (error) {
+    return Response.json(
+      { error: `CoinGecko proxy request failed: ${error instanceof Error ? error.message : String(error)}` },
+      { status: 502 },
+    );
+  }
 }
 
 type RouteResult = { path: string; status: number; body: string; error: string | null };
@@ -111,8 +167,12 @@ export default {
     ctx.waitUntil(run(env));
   },
   // A plain GET lets the deployment be smoke-tested from a browser/curl without waiting for
-  // the next Cron Trigger tick; it does not run on any schedule itself.
-  async fetch(_request: Request, env: Env): Promise<Response> {
+  // the next Cron Trigger tick; it does not run on any schedule itself. A request under
+  // /coingecko-proxy instead takes the dedicated CoinGecko-egress path above.
+  async fetch(request: Request, env: Env): Promise<Response> {
+    if (new URL(request.url).pathname.startsWith(COINGECKO_PROXY_PREFIX)) {
+      return handleCoinGeckoProxy(request, env);
+    }
     const results = await run(env);
     return Response.json({ ok: results.every((result) => !result.error), results });
   },

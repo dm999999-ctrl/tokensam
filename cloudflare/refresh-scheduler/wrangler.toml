@@ -19,5 +19,11 @@ crons = ["*/5 * * * *"]
 # REFRESH_URL is the Vercel production BASE URL, not a complete route URL —
 # the Worker appends /api/cron/refresh and /api/cron/geckoterminal to it
 # itself (see src/index.ts). It is a plain (non-secret) var.
+#
+# COINGECKO_API_KEY (for the /coingecko-proxy route — see src/index.ts) is a secret, not
+# a var: set it with `wrangler secret put COINGECKO_API_KEY` (or the Cloudflare dashboard),
+# never here. It only needs to be the same key already configured as COINGECKO_API_KEY on
+# the Vercel deployment; this Worker never receives that env's value, it holds its own copy.
 [vars]
 REFRESH_URL = "https://tokensam.vercel.app"
+COINGECKO_API_PLAN = "demo"
