@@ -399,25 +399,29 @@ async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]):
 
 /** Logos from stored CoinGecko /coins/markets payloads; cosmetic, so failures yield no logos. */
 async function readTokenLogos(client: SupabaseAdminClient, tokenIds: string[]): Promise<Record<string, string>> {
+  // Logos are persistent metadata. Read them directly from the indexed
+  // CoinGecko markets history instead of the latest_raw view: that view can
+  // become expensive under database load, while this query can use the
+  // provider/endpoint/token/collected_at index.
+  const columns = "token_id,collected_at,endpoint_label,image:payload->>image,payload_id:payload->>id";
+
   try {
-    const columns = "token_id,collected_at,endpoint_label,image:payload->>image,payload_id:payload->>id";
-    const latest = await client.from("latest_raw_provider_records").select(columns)
-      .eq("provider_id", "coingecko").in("token_id", tokenIds);
-    if (latest.error) throw latest.error;
-    const logos = logosFromRecords((latest.data ?? []) as unknown as LogoRecord[]);
-    // The newest CoinGecko record can be a history backfill (no image); look back for a markets record.
-    const missing = tokenIds.filter((id) => !logos[id]);
-    if (missing.length > 0) {
-      const since = new Date(Date.now() - 14 * DAY_MS).toISOString();
-      const older = await client.from("raw_provider_records").select(columns)
-        .eq("provider_id", "coingecko").eq("endpoint_label", COINGECKO_MARKETS_ENDPOINT).in("token_id", missing)
-        .is("excluded_reason", null).gte("collected_at", since)
-        .order("collected_at", { ascending: false }).limit(missing.length * 48);
-      if (!older.error) Object.assign(logos, logosFromRecords((older.data ?? []) as unknown as LogoRecord[]));
+    const result = await client.from("raw_provider_records").select(columns)
+      .eq("provider_id", "coingecko")
+      .eq("endpoint_label", COINGECKO_MARKETS_ENDPOINT)
+      .in("token_id", tokenIds)
+      .is("excluded_reason", null)
+      .order("collected_at", { ascending: false })
+      .limit(5000);
+
+    if (result.error) {
+      console.error("Token logo read failed; logos fall back to monograms:", result.error);
+      return {};
     }
-    return logos;
+
+    return logosFromRecords((result.data ?? []) as unknown as LogoRecord[]);
   } catch (error) {
-    console.error("Token logo read failed (logos fall back to monograms):", error);
+    console.error("Token logo read threw; logos fall back to monograms:", error);
     return {};
   }
 }
