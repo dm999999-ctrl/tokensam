@@ -27,3 +27,12 @@ crons = ["*/5 * * * *"]
 [vars]
 REFRESH_URL = "https://tokensam.vercel.app"
 COINGECKO_API_PLAN = "demo"
+
+# Enabled via the dashboard while diagnosing the /coingecko-proxy CoinGecko 403 (needed to
+# see this Worker's own console.error output, e.g. the CF-Ray diagnostic in src/index.ts).
+# Declared here so it survives future deploys instead of being silently reset by Wrangler,
+# which overwrites dashboard-only settings not present in this file.
+[observability.logs]
+enabled = true
+invocation_logs = true
+persist = true
