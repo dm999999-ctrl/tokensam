@@ -83,6 +83,15 @@ export function classifyHorizon(finding: Finding): HorizonClass {
   if (finding.findingType === "elevated_volatility" || finding.findingType === "sharp_drawdown") {
     return riskHorizonFromEvidenceId(finding.evidenceIds[0]);
   }
+  // A 7-day supply-change reading is a real short-window fact, same tier as a 7D price/volume change.
+  if (finding.findingType === "circulating_supply_increase_7d" || finding.findingType === "circulating_supply_decrease_7d") return "short_term";
+  // The four cross-metric technical indicators are genuine 30-day comparisons (catalog.ts's own
+  // `windowDays: 30`); everything else technical (moving averages, MACD, RSI, Bollinger, swing
+  // structure, closing range) is a current-state read of where price sits right now, not a trend.
+  if (finding.category === "technical") {
+    const THIRTY_DAY_TECHNICAL_PREFIXES = ["technical_price_tvl_", "technical_price_volume_", "technical_valuation_", "technical_turnover_"];
+    return THIRTY_DAY_TECHNICAL_PREFIXES.some((prefix) => finding.findingType.startsWith(prefix)) ? "medium_term" : "snapshot";
+  }
   // Divergence flags and percentage-point comparisons (marketFundamentalRelationships) are
   // measured over the metrics engine's own "aligned interval," whose length is not guaranteed —
   // see the module comment. Never treated as medium/structural regardless of magnitude. When the
@@ -141,6 +150,7 @@ const RELEVANT_GAP_PREFIXES: Partial<Record<FindingCategory, string[]>> = {
   liquidityMarketStructure: ["unmapped_dexscreener"],
   tokenomics: ["missing_maximum_supply"],
   valuation: ["unmapped_defillama", "missing_market_cap", "missing_tvl", "missing_fees_24h", "missing_revenue_24h"],
+  technical: ["unmapped_defillama"],
   risk: [],
   dataQuality: [],
 };
@@ -315,7 +325,8 @@ export function collapseRedundant(findings: Finding[]): { survivors: Finding[]; 
 
 export type RelationshipType =
   | "price_fundamental_divergence" | "valuation_activity_relationship" | "market_momentum_valuation"
-  | "supply_valuation_exposure" | "trading_liquidity_conditions" | "fundamental_activity_trajectory";
+  | "supply_valuation_exposure" | "trading_liquidity_conditions" | "fundamental_activity_trajectory"
+  | "technical_price_confluence" | "technical_fundamental_relationship" | "technical_liquidity_conditions";
 
 export type Relationship = {
   id: string;
@@ -410,6 +421,42 @@ function fundamentalActivityTrajectory(findings: Finding[], dataGaps: Finding[])
   return [buildRelationship("fundamental_activity_trajectory", members, dataGaps)];
 }
 
+/** Finding types from technicalFindings() whose direction is directly comparable to price momentum's own direction. */
+const DIRECTIONAL_TECHNICAL_TYPES = [
+  "price_above_moving_averages", "price_below_moving_averages", "macd_above_signal", "macd_below_signal",
+  "rsi_at_or_above_70", "rsi_at_or_below_30", "price_above_upper_band", "price_below_lower_band",
+];
+
+/**
+ * G. Price momentum + technical configuration: bundles the multi-horizon momentum read with
+ * whichever directional technical indicators are available (moving-average structure, MACD, RSI,
+ * Bollinger position). Confluence or divergence is for the narrative layer to characterize from the
+ * member finding types themselves — this only establishes that the relationship exists and what it
+ * rests on, never which way it points.
+ */
+function technicalPriceConfluence(findings: Finding[], dataGaps: Finding[]): Relationship[] {
+  const momentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_") && finding.findingType !== "multi_horizon_flat");
+  const technicalDirectional = byCategory(findings, "technical").filter((finding) => DIRECTIONAL_TECHNICAL_TYPES.includes(finding.findingType));
+  if (!momentum || technicalDirectional.length === 0) return [];
+  return [buildRelationship("technical_price_confluence", [momentum, ...technicalDirectional], dataGaps)];
+}
+
+/** H. The technical layer's own 30D price/TVL and valuation-trend indicators, read alongside the fundamentals findings they relate to. */
+function technicalFundamentalRelationship(findings: Finding[], dataGaps: Finding[]): Relationship[] {
+  const technicalCross = byCategory(findings, "technical").filter((finding) => finding.findingType.startsWith("technical_price_tvl_") || finding.findingType.startsWith("technical_valuation_"));
+  const fundamentals = byCategory(findings, "fundamentalPerformance");
+  if (technicalCross.length === 0 || fundamentals.length === 0) return [];
+  return [buildRelationship("technical_fundamental_relationship", [...technicalCross, ...fundamentals], dataGaps)];
+}
+
+/** I. The technical layer's own 30D price/volume and turnover-trend indicators, read alongside on-chain trading-structure findings. */
+function technicalLiquidityConditions(findings: Finding[], dataGaps: Finding[]): Relationship[] {
+  const technicalLiquidity = byCategory(findings, "technical").filter((finding) => finding.findingType.startsWith("technical_price_volume_") || finding.findingType.startsWith("technical_turnover_"));
+  const liquidity = byCategory(findings, "liquidityMarketStructure");
+  if (technicalLiquidity.length === 0 || liquidity.length === 0) return [];
+  return [buildRelationship("technical_liquidity_conditions", [...technicalLiquidity, ...liquidity], dataGaps)];
+}
+
 function buildRelationships(findings: Finding[], dataGaps: Finding[]): Relationship[] {
   const relationships = [
     ...priceFundamentalDivergence(findings, dataGaps),
@@ -418,6 +465,9 @@ function buildRelationships(findings: Finding[], dataGaps: Finding[]): Relations
     ...supplyValuationExposure(findings, dataGaps),
     ...tradingLiquidityConditions(findings, dataGaps),
     ...fundamentalActivityTrajectory(findings, dataGaps),
+    ...technicalPriceConfluence(findings, dataGaps),
+    ...technicalFundamentalRelationship(findings, dataGaps),
+    ...technicalLiquidityConditions(findings, dataGaps),
   ];
   return relationships.sort((a, b) => a.id.localeCompare(b.id));
 }

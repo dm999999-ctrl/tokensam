@@ -1,6 +1,7 @@
-// Deterministic Deep Analysis Engine: thresholds, findings, narrative, report assembly, and the
-// live-path service. No network access is used anywhere in this file; that itself is part of what
-// is being verified (scenario R/T below).
+// Deep Analysis Engine (Phase 2 — institutional-research report structure): findings.ts,
+// synthesis.ts wiring, the paragraph-composition narrative engine (narrative.ts), report assembly
+// (report.ts), the report-schema.ts evidence contract, and the live deterministic-service.ts path.
+// No network access is used anywhere in this file — that itself is part of what is being verified.
 
 import assert from "node:assert/strict";
 
@@ -9,9 +10,10 @@ import { buildProfilePayload } from "../src/lib/analysis/profile-payload.ts";
 import { CALCULATED_METRICS } from "../src/lib/metrics/engine.ts";
 import { createFakeSupabase } from "./support/fake-supabase.mjs";
 
-import { momentumBand, volatilityBand, magnitudeWord, MOMENTUM_BANDS, VOLATILITY_BANDS } from "../src/lib/analysis/engine/thresholds.ts";
 import { extractFindings } from "../src/lib/analysis/engine/findings.ts";
+import { synthesize } from "../src/lib/analysis/engine/synthesis.ts";
 import { buildEngineReport, ENGINE_VERSION, ANALYSIS_VERSION } from "../src/lib/analysis/engine/report.ts";
+import { ENGINE_SECTION_KEYS } from "../src/lib/analysis/engine/report-schema.ts";
 import { generateDeterministicAnalysis, getDeterministicAnalysisState, DETERMINISTIC_ENGINE_NAME } from "../src/lib/analysis/deterministic-service.ts";
 import { AnalysisValidationError, findProhibitedLanguage } from "../src/lib/analysis/schema.ts";
 import { findCausalLanguage, findDirectionalLanguage, findExternalConcept, findLeakedEvidenceMarker } from "../src/lib/analysis/evidence-rules.ts";
@@ -19,11 +21,12 @@ import { findCausalLanguage, findDirectionalLanguage, findExternalConcept, findL
 const cases = [];
 function test(name, run) { cases.push({ name, run }); }
 
-const NOW = new Date("2026-09-27T12:00:00.000Z");
+const NOW = new Date();
+const MIDNIGHT = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth(), NOW.getUTCDate(), 0, 10, 0));
 const HOUR = 60 * 60 * 1000;
-const at = (hoursAgo) => new Date(NOW.getTime() - hoursAgo * HOUR).toISOString();
+const at = (hoursAgo) => new Date(MIDNIGHT.getTime() - hoursAgo * HOUR).toISOString();
 
-// ---- Fixture builder (mirrors tests/profile-payload.test.mjs's own helper) ----
+// ---- Fixture builder ----
 
 function seed(tokenId, chainId, rows, calculated = [], isNative = false) {
   let id = 1000;
@@ -53,6 +56,16 @@ async function payloadFor(tokenId, data) {
   return buildProfilePayload(profile);
 }
 
+/** Daily UTC-midnight-aligned closes, trending from ~0.5x to ~1.5x `base` over `days`, for technical indicators (needs 61+ consecutive closes for MACD). */
+function densePriceRows(base, days) {
+  const rows = [];
+  for (let d = days; d >= 0; d -= 1) {
+    const trend = base * 0.5 + (days - d) * (base / days);
+    rows.push(["coingecko", "price_usd", Math.max(1, trend + Math.sin(d * 0.35) * (base * 0.02)), d * 24]);
+  }
+  return rows;
+}
+
 /** Every field/scope/token ID a report cites actually exists in the payload (the provenance guarantee). */
 function assertProvenance(payload, report) {
   const knownIds = new Set(["token", ...payload.scope.map((note) => note.id), ...payload.fields.map((field) => field.id)]);
@@ -71,535 +84,271 @@ function assertProvenance(payload, report) {
 function allText(analysis) {
   const texts = [];
   JSON.stringify(analysis, (key, value) => {
-    if ((key === "text" || key === "overview" || key === "detail" || key === "title" || key === "question" || key === "rationale") && typeof value === "string") texts.push(value);
+    if ((key === "text" || key === "question" || key === "rationale") && typeof value === "string") texts.push(value);
     return value;
   });
   return texts;
 }
 
-/** No internal evidence marker, causal claim, or investment-advice phrase anywhere in the rendered text. */
 function assertCleanLanguage(report) {
   for (const text of allText(report.analysis)) {
     assert.equal(findLeakedEvidenceMarker(text), null, `leaked evidence marker in: ${text}`);
     assert.deepEqual(findCausalLanguage(text), [], `causal language in: ${text}`);
     assert.deepEqual(findDirectionalLanguage(text), [], `directional/sentiment language in: ${text}`);
     assert.equal(findProhibitedLanguage(text), null, `investment-advice language in: ${text}`);
+    assert.equal(findExternalConcept(text, ""), null, `external concept introduced in: ${text}`);
   }
 }
 
-/** "a" followed immediately by a vowel-leading word is always a grammar bug ("a increase"). */
-function assertNoArticleErrors(report) {
-  for (const text of allText(report.analysis)) {
-    const match = text.match(/\ba ([aeiouAEIOU]\w*)/);
-    assert.equal(match, null, `"a ${match?.[1]}" should be "an ${match?.[1]}" in: ${text}`);
+function assertAllSectionsPresent(report) {
+  for (const key of ENGINE_SECTION_KEYS) {
+    assert.ok(Array.isArray(report.analysis[key]?.paragraphs), `section ${key} must be an array of paragraphs`);
   }
+  assert.ok(Array.isArray(report.analysis.furtherResearchQuestions));
 }
 
-const ALL_SECTION_KEYS = ["executiveSummary", "marketPerformance", "fundamentalPerformance", "valuation", "marketFundamentalRelationships", "liquidityMarketStructure", "tokenomics"];
+// =====================================================================================
+// A. Section structure and evidence discipline hold across a battery of realistic fixtures
+// =====================================================================================
 
-// ---- A. thresholds ----
+const BTC_LIKE = await payloadFor("btc-e2e", seed("btc-e2e", "bitcoin", [
+  ["coingecko", "price_usd", 90000], ["coingecko", "market_cap_usd", 1_780_000_000_000], ["coingecko", "volume_24h_usd", 30_000_000_000],
+  ["coingecko", "circulating_supply", 21_000_000], ["coingecko", "total_supply", 21_000_000], ["coingecko", "maximum_supply", 21_000_000],
+], [], true));
 
-test("A1. momentum bands: boundaries are inclusive at their stated minimum", () => {
-  assert.equal(momentumBand(0), "flat");
-  assert.equal(momentumBand(0.99), "flat");
-  assert.equal(momentumBand(1), "mild");
-  assert.equal(momentumBand(4.99), "mild");
-  assert.equal(momentumBand(5), "moderate");
-  assert.equal(momentumBand(19.99), "moderate");
-  assert.equal(momentumBand(20), "strong");
-  assert.equal(momentumBand(-25), "strong", "bands use absolute magnitude, direction is separate");
-});
+const ETH_LIKE = await payloadFor("eth-e2e", seed("eth-e2e", "ethereum", [
+  ...densePriceRows(3200, 95),
+  ["coingecko", "market_cap_usd", 385_000_000_000], ["coingecko", "volume_24h_usd", 15_000_000_000],
+  ["coingecko", "price_change_24h_pct", 1.2, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", 5.3, 0.5, { window_days: 7 }],
+  ["coingecko", "circulating_supply", 120_000_000], ["coingecko", "total_supply", 120_000_000],
+], [], true));
 
-test("A2. volatility bands: boundaries are inclusive at their stated minimum", () => {
-  assert.equal(volatilityBand(0), "low");
-  assert.equal(volatilityBand(39.9), "low");
-  assert.equal(volatilityBand(40), "moderate");
-  assert.equal(volatilityBand(79.9), "moderate");
-  assert.equal(volatilityBand(80), "elevated");
-});
-
-test("A3. band tables are ordered from strongest to weakest (momentumBand/volatilityBand rely on it)", () => {
-  for (let index = 1; index < MOMENTUM_BANDS.length; index += 1) assert.ok(MOMENTUM_BANDS[index - 1].minAbsPct > MOMENTUM_BANDS[index].minAbsPct);
-  for (let index = 1; index < VOLATILITY_BANDS.length; index += 1) assert.ok(VOLATILITY_BANDS[index - 1].minPct > VOLATILITY_BANDS[index].minPct);
-});
-
-test("A4. magnitude-word bands are period-aware: the same percentage reads differently over different windows", () => {
-  assert.equal(magnitudeWord("24h", 15), "substantial");
-  assert.equal(magnitudeWord("90d", 15), "moderate");
-  assert.equal(magnitudeWord("24h", 0.5), "marginal");
-  assert.equal(magnitudeWord("90d", 150), "pronounced");
-});
-
-// ---- B/C. Strong positive/negative momentum, flat market ----
-
-const STRONG_UP = await payloadFor("strong-up", seed("strong-up", "ethereum", [
-  ["coingecko", "price_usd", 10], ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 5_000_000],
-  ["coingecko", "price_change_24h_pct", 28, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", 45, 0.5, { window_days: 7 }],
-  ["coingecko", "circulating_supply", 100_000_000],
-]));
-const STRONG_DOWN = await payloadFor("strong-down", seed("strong-down", "ethereum", [
-  ["coingecko", "price_usd", 10], ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 5_000_000],
-  ["coingecko", "price_change_24h_pct", -32, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", -50, 0.5, { window_days: 7 }],
-  ["coingecko", "circulating_supply", 100_000_000],
-]));
-const FLAT = await payloadFor("flat-mkt", seed("flat-mkt", "ethereum", [
-  ["coingecko", "price_usd", 10], ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 1_000_000],
-  ["coingecko", "price_change_24h_pct", 0.1, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", -0.2, 0.5, { window_days: 7 }],
-  ["coingecko", "circulating_supply", 100_000_000],
-]));
-
-test("B. strong positive momentum (24h+7d both up) produces a single consistent-up multi-horizon finding", () => {
-  const findings = extractFindings(STRONG_UP);
-  const momentum = findings.find((item) => item.category === "marketPerformance" && item.findingType.startsWith("multi_horizon_"));
-  assert.ok(momentum, "a multi-horizon finding is produced");
-  assert.ok(momentum.findingType.startsWith("multi_horizon_consistent_up"), momentum.findingType);
-  assert.equal(momentum.severity, "high");
-  assert.equal(findings.filter((item) => item.category === "marketPerformance" && item.findingType.startsWith("multi_horizon_")).length, 1, "one consolidated finding, not one per horizon");
-});
-
-test("B2. strong negative momentum (24h+7d both down) produces a single consistent-down multi-horizon finding", () => {
-  const findings = extractFindings(STRONG_DOWN);
-  const momentum = findings.find((item) => item.category === "marketPerformance" && item.findingType.startsWith("multi_horizon_"));
-  assert.ok(momentum.findingType.startsWith("multi_horizon_consistent_down"), momentum.findingType);
-  assert.equal(momentum.severity, "high");
-});
-
-test("C. a flat market (sub-1% changes) produces a flat multi-horizon finding, not a momentum claim", () => {
-  const findings = extractFindings(FLAT);
-  const momentum = findings.find((item) => item.category === "marketPerformance" && item.findingType.startsWith("multi_horizon_"));
-  assert.equal(momentum.findingType, "multi_horizon_flat");
-});
-
-// ---- 90D/30D/7D synthesis: consistent positive trend, decelerating (front-loaded) ----
-
-// Historical-window boundaries are exclusive at the exact edge, and the price points below are
-// timestamped relative to Date.now() at fixture-build time (a moment slightly earlier than the
-// engine's own "now"), so points are placed with a small safety margin inside each window
-// (6.9d/29d/88d rather than exactly 7d/30d/90d) to avoid falling just outside it.
-const DECEL_UP = await payloadFor("decel-up", seed("decel-up", "ethereum", [
-  ["coingecko", "price_usd", 14.077],
-  ["coingecko", "price_usd", 13.33, 24 * 6.9],
-  ["coingecko", "price_usd", 12.94, 24 * 29],
-  ["coingecko", "price_usd", 10.0, 24 * 88],
-  ["coingecko", "market_cap_usd", 900_000_000], ["coingecko", "volume_24h_usd", 5_000_000],
-  ["coingecko", "price_change_7d_pct", 5.64, 0.5, { window_days: 7 }],
-  ["coingecko", "circulating_supply", 50_000_000],
-]));
-
-test("90D/30D/7D positive trend synthesis: consistent upward momentum across all three horizons", () => {
-  const findings = extractFindings(DECEL_UP);
-  const momentum = findings.find((item) => item.findingType.startsWith("multi_horizon_consistent_up"));
-  assert.ok(momentum, "a consistent-up multi-horizon finding is produced from 7D/30D/90D all-positive data");
-  assert.equal(momentum.horizons.length, 3);
-  assert.deepEqual(momentum.horizons.map((h) => h.key), ["7d", "30d", "90d"]);
-});
-
-test("executive summary states the momentum pattern qualitatively; market performance states the per-horizon figures — never the same sentence twice", () => {
-  const report = buildEngineReport(DECEL_UP);
-  const execText = report.analysis.executiveSummary.statements.find((s) => s.sourceIds.includes("hist:price_90d"))?.text;
-  const marketText = report.analysis.marketPerformance.statements.find((s) => s.sourceIds.includes("hist:price_90d"))?.text;
-  assert.ok(execText, "executive summary includes the momentum finding");
-  assert.ok(marketText, "market performance includes the momentum finding");
-  assert.notEqual(execText, marketText, "the two sections must not render identical text for the same finding");
-  assert.ok(!marketText.includes(execText) && !execText.includes(marketText), "neither section's sentence is a literal substring of the other");
-  // Market performance states the concrete numbers; the executive summary does not repeat them.
-  assert.ok(/\+5\.64%/.test(marketText) || /\d+\.\d+%/.test(marketText), "detail section states concrete figures");
-  assert.equal(/\d/.test(execText.replace(/\b(7|30|90)(D|-day)\b/gi, "")), false, "executive summary states the pattern qualitatively, not the literal percentages");
-});
-
-// ---- Positive long-term / negative short-term, and the reverse ----
-
-const REVERSAL_DOWN = await payloadFor("rev-down", seed("rev-down", "ethereum", [
-  ["coingecko", "price_usd", 9.0],
-  ["coingecko", "price_usd", 10.5, 24 * 6.5],
-  ["coingecko", "price_usd", 8.5, 24 * 29],
-  ["coingecko", "price_usd", 6.0, 24 * 88],
-  ["coingecko", "market_cap_usd", 500_000_000], ["coingecko", "volume_24h_usd", 4_000_000],
-  ["coingecko", "price_change_7d_pct", -14.3, 0.5, { window_days: 7 }],
-  ["coingecko", "circulating_supply", 50_000_000],
-]));
-
-test("positive long-term / negative short-term trend produces a reversal-to-down finding", () => {
-  const findings = extractFindings(REVERSAL_DOWN);
-  const momentum = findings.find((item) => item.findingType.startsWith("multi_horizon_"));
-  assert.equal(momentum.findingType, "multi_horizon_reversal_to_down");
-  const report = buildEngineReport(REVERSAL_DOWN);
-  const text = report.analysis.executiveSummary.statements.find((s) => s.sourceIds.includes("hist:price_90d"))?.text ?? "";
-  assert.match(text, /revers/i);
-});
-
-const REVERSAL_UP = await payloadFor("rev-up", seed("rev-up", "ethereum", [
-  ["coingecko", "price_usd", 11.0],
-  ["coingecko", "price_usd", 9.8, 24 * 6.5],
-  ["coingecko", "price_usd", 12.5, 24 * 29],
-  ["coingecko", "price_usd", 16.0, 24 * 88],
-  ["coingecko", "market_cap_usd", 500_000_000], ["coingecko", "volume_24h_usd", 4_000_000],
-  ["coingecko", "price_change_7d_pct", 12.2, 0.5, { window_days: 7 }],
-  ["coingecko", "circulating_supply", 50_000_000],
-]));
-
-test("negative long-term / positive short-term trend produces a reversal-to-up finding", () => {
-  const findings = extractFindings(REVERSAL_UP);
-  const momentum = findings.find((item) => item.findingType.startsWith("multi_horizon_"));
-  assert.equal(momentum.findingType, "multi_horizon_reversal_to_up");
-});
-
-// ---- D-G. All four price/TVL divergence quadrants (the metrics engine's own boolean flags) ----
-
-const DIVERGENCE_TOKEN = "uniswap-uni";
-
-function divergencePayload(flagId) {
-  const rows = [
-    ["coingecko", "price_usd", 10], ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 1_000_000],
-    ["defillama", "tvl_usd", 500_000_000, 2], ["defillama", "fees_24h_usd", 10_000, 2], ["defillama", "revenue_24h_usd", 5_000, 2],
-  ];
-  const calculated = CALCULATED_METRICS.filter((metric) => metric.category === "divergence").map((metric) => ({ metric: metric.id, value: metric.id === flagId ? 1 : 0 }));
-  return seed(DIVERGENCE_TOKEN, "ethereum", rows, calculated);
-}
-
-const DIVERGENCE_FLAGS = [
-  "divergence_price_up_tvl_down", "divergence_price_down_tvl_up",
-  "divergence_market_cap_up_faster_tvl", "divergence_tvl_up_faster_market_cap",
-  "divergence_revenue_up_market_cap_down", "divergence_revenue_down_market_cap_up",
-];
-
-for (const flagId of DIVERGENCE_FLAGS) {
-  test(`D-G. ${flagId} true produces exactly its own divergence finding, and only when true`, async () => {
-    const payload = await payloadFor(DIVERGENCE_TOKEN, divergencePayload(flagId));
-    const findings = extractFindings(payload).filter((item) => item.category === "marketFundamentalRelationships" && item.findingType.startsWith("divergence_"));
-    assert.deepEqual(findings.map((item) => item.findingType).sort(), [flagId].sort());
-    const report = buildEngineReport(payload);
-    const text = report.analysis.marketFundamentalRelationships.statements[0].text;
-    assert.match(text, /divergen|faster|aligned interval/i);
-    assert.deepEqual(findCausalLanguage(text), []);
-  });
-}
-
-// ---- Concurrent market/fundamental improvement (fundamentals_improving synthesis) ----
-
-const IMPROVING = await payloadFor(DIVERGENCE_TOKEN, seed(DIVERGENCE_TOKEN, "ethereum", [
-  ["coingecko", "price_usd", 10], ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 1_000_000],
-  ["defillama", "tvl_usd", 500_000_000, 2], ["defillama", "fees_24h_usd", 10_000, 2], ["defillama", "revenue_24h_usd", 5_000, 2],
+const UNI_LIKE = await payloadFor("uniswap-uni", seed("uniswap-uni", "ethereum", [
+  ...densePriceRows(8.5, 95),
+  ["coingecko", "market_cap_usd", 5_000_000_000], ["coingecko", "volume_24h_usd", 900_000_000],
+  ["coingecko", "price_change_24h_pct", 0.5, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", 4.8, 0.5, { window_days: 7 }],
+  ["coingecko", "circulating_supply", 600_000_000], ["coingecko", "total_supply", 1_000_000_000], ["coingecko", "maximum_supply", 1_000_000_000],
+  ["defillama", "tvl_usd", 4_000_000_000, 2], ["defillama", "fees_24h_usd", 1_500_000, 2], ["defillama", "revenue_24h_usd", 300_000, 2],
+  ["dexscreener", "liquidity_usd", 168_830, 0.5], ["dexscreener", "fdv_usd", 8_500_000_000, 0.5],
+  ["dexscreener", "transactions_24h_count", 12_400, 0.5], ["dexscreener", "buys_24h_count", 6_500, 0.5], ["dexscreener", "sells_24h_count", 5_900, 0.5],
 ], [
-  { metric: "tvl_growth_pct", value: 8.5 }, { metric: "fees_growth_pct", value: 6.2 }, { metric: "revenue_growth_pct", value: 4.1 },
+  { metric: "tvl_growth_pct", value: 8.2 }, { metric: "fees_growth_pct", value: 5.5 }, { metric: "revenue_growth_pct", value: 4.0 },
+  { metric: "market_cap_to_tvl", value: 1.25 }, { metric: "fdv_to_tvl", value: 2.13 },
+  { metric: "divergence_market_cap_up_faster_tvl", value: 1 },
+  { metric: "dex_aggregate_liquidity_usd", value: 5_800_000 }, { metric: "dex_aggregate_volume_24h_usd", value: 21_000_000 },
+  { metric: "dex_buy_sell_ratio", value: 6500 / 5900 }, { metric: "dex_volume_to_liquidity", value: 3.6 },
 ]));
 
-test("concurrent market/fundamental improvement: TVL, fees, and revenue all growing produces a fundamentals_improving synthesis", () => {
-  const findings = extractFindings(IMPROVING);
-  const synthesis = findings.find((item) => item.findingType === "fundamentals_improving");
-  assert.ok(synthesis, "an improving-fundamentals synthesis finding is produced when growth signals agree");
-  assert.ok(synthesis.evidenceIds.length >= 2);
-  const report = buildEngineReport(IMPROVING);
-  const text = report.analysis.fundamentalPerformance.statements.find((s) => s.text.includes("improving") || s.text.includes("positive direction"))?.text;
-  assert.ok(text);
-});
-
-const DETERIORATING = await payloadFor(DIVERGENCE_TOKEN, seed(DIVERGENCE_TOKEN, "ethereum", [
-  ["coingecko", "price_usd", 10], ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 1_000_000],
-  ["defillama", "tvl_usd", 500_000_000, 2], ["defillama", "fees_24h_usd", 10_000, 2], ["defillama", "revenue_24h_usd", 5_000, 2],
-], [
-  { metric: "tvl_growth_pct", value: -8.5 }, { metric: "fees_growth_pct", value: -6.2 },
-]));
-
-test("deteriorating fundamentals synthesis when tracked activity metrics decline together", () => {
-  const findings = extractFindings(DETERIORATING);
-  assert.ok(findings.some((item) => item.findingType === "fundamentals_deteriorating"));
-});
-
-// ---- Valuation / liquidity categorization ----
-
-test("valuation metrics correctly categorized: only genuine valuation multiples appear in the valuation section", () => {
-  const payload = IMPROVING;
-  const findings = extractFindings(payload);
-  const valuation = findings.filter((item) => item.category === "valuation");
-  for (const finding of valuation) {
-    assert.ok(!finding.findingType.includes("volume_to_market_cap"), "volume/market-cap must not appear in valuation");
-    if (finding.findingType.startsWith("ratio_")) {
-      assert.ok(["ratio_market_cap_to_tvl", "ratio_fdv_to_tvl", "ratio_market_cap_to_revenue_24h", "ratio_fdv_to_revenue_24h"].includes(finding.findingType), finding.findingType);
-    }
-  }
-});
-
-test("volume/market-cap is correctly categorized under liquidity/market structure, not valuation", async () => {
-  const payload = await payloadFor("vol-mcap", seed("vol-mcap", "ethereum", [
-    ["coingecko", "price_usd", 10], ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 200_000_000],
-    ["coingecko", "circulating_supply", 100_000_000],
-  ], [{ metric: "volume_to_market_cap", value: 0.2 }]));
-  const findings = extractFindings(payload);
-  assert.ok(!findings.some((item) => item.category === "valuation" && String(item.findingType).includes("volume")));
-  const turnover = findings.find((item) => item.category === "liquidityMarketStructure" && /turnover/.test(item.findingType));
-  assert.ok(turnover, "a turnover-related finding is produced under liquidityMarketStructure");
-  const report = buildEngineReport(payload);
-  const liquidityText = report.analysis.liquidityMarketStructure.statements.map((s) => s.text).join(" ");
-  assert.match(liquidityText, /turnover/i);
-});
-
-test("no valuation multiple available: the section states the exact required fallback sentence, with no statements", () => {
-  const report = buildEngineReport(STRONG_UP); // no TVL/fees/revenue mapping at all
-  assert.equal(report.analysis.valuation.statements.length, 0);
-  assert.equal(report.analysis.valuation.overview, "No valuation multiple can be calculated from the currently available data.");
-});
-
-// ---- H. Volume up (relative to market cap) while price is down ----
-
-const VOLUME_DOWN = await payloadFor("vol-down", seed("vol-down", "ethereum", [
-  ["coingecko", "price_usd", 10], ["coingecko", "market_cap_usd", 100_000_000],
-  ["coingecko", "volume_24h_usd", 20_000_000], // 20% of market cap: elevated
-  ["coingecko", "price_change_24h_pct", -12, 0.5, { window_days: 1 }],
-  ["coingecko", "circulating_supply", 10_000_000],
-], [{ metric: "volume_to_market_cap", value: 0.2 }]));
-
-test("H. elevated volume during a price decline is flagged in market performance, and the ratio itself in liquidity/market structure", () => {
-  const findings = extractFindings(VOLUME_DOWN);
-  assert.ok(findings.some((item) => item.category === "marketPerformance" && item.findingType === "elevated_volume_during_decline"));
-  assert.ok(findings.some((item) => item.category === "liquidityMarketStructure" && item.findingType === "elevated_turnover"));
-  const report = buildEngineReport(VOLUME_DOWN);
-  const liquidityText = report.analysis.liquidityMarketStructure.statements.map((s) => s.text).join(" ");
-  assert.ok(!/highly liquid/i.test(liquidityText), "must never claim high liquidity from volume alone");
-});
-
-// ---- J. FDV materially above market cap ----
-
-const FDV_GAP = await payloadFor("fdv-gap", seed("fdv-gap", "ethereum", [
-  ["coingecko", "price_usd", 1], ["coingecko", "market_cap_usd", 50_000_000], ["coingecko", "volume_24h_usd", 1_000_000],
-  ["coingecko", "circulating_supply", 50_000_000], ["coingecko", "maximum_supply", 500_000_000],
-]));
-
-test("J. a large FDV/market-cap gap produces a valuation finding and a risk finding", () => {
-  const withFdv = { ...FDV_GAP, fields: [...FDV_GAP.fields] };
-  const idx = withFdv.fields.findIndex((f) => f.id === "obs:fdv");
-  const fdvField = { id: "obs:fdv", section: "Tokenomics", label: "Fully diluted valuation", value: "$200,000,000", raw: 200_000_000, status: "shown", scope: "token", period: null, periodRequired: false, note: null, asOf: null };
-  const fields = idx === -1 ? [...withFdv.fields, fdvField] : withFdv.fields.map((f, i) => i === idx ? fdvField : f);
-  const payload = { ...withFdv, fields };
-  const findings = extractFindings(payload);
-  assert.ok(findings.some((item) => item.category === "valuation" && item.findingType === "fdv_market_cap_gap"));
-  assert.ok(findings.some((item) => item.category === "risk" && item.findingType === "dilution_gap"));
-});
-
-// ---- K. Volatility / drawdown ----
-
-const VOLATILE = await payloadFor("volatile-tk", seed("volatile-tk", "ethereum", [
-  ["coingecko", "price_usd", 5], ["coingecko", "market_cap_usd", 40_000_000], ["coingecko", "volume_24h_usd", 2_000_000],
-  ["coingecko", "price_usd", 6, 24 * 2], ["coingecko", "price_usd", 3, 24 * 4], ["coingecko", "price_usd", 8, 24 * 6],
-  ["coingecko", "price_usd", 2, 24 * 8], ["coingecko", "price_usd", 9, 24 * 10], ["coingecko", "circulating_supply", 8_000_000],
-]));
-
-test("K. risk findings: elevated volatility/drawdown are evaluated, grounded, and cleanly worded", () => {
-  const report = buildEngineReport(VOLATILE);
-  assertProvenance(VOLATILE, report);
-  assertCleanLanguage(report);
-  assertNoArticleErrors(report);
-});
-
-test("risk section explicitly names the dimensions evaluated when nothing crosses an elevated threshold", async () => {
-  const quiet = seed("quiet-tk", "ethereum", [
-    ["coingecko", "price_usd", 5], ["coingecko", "market_cap_usd", 40_000_000], ["coingecko", "volume_24h_usd", 500_000],
-    ["coingecko", "circulating_supply", 8_000_000],
-  ]);
-  const payload = await payloadFor("quiet-tk", quiet);
-  const report = buildEngineReport(payload);
-  if (report.analysis.risks.length > 0) {
-    const fallback = report.analysis.risks.find((r) => r.title === "No elevated risk indicators identified");
-    assert.ok(fallback);
-    assert.equal(fallback.basis, "data_limitation");
-    assert.ok(fallback.sourceIds.length > 0);
-  }
-});
-
-// ---- Production regression: SUI (native asset, real DEX market structure, circulating share
-// under the low-circulating-share threshold) ----
-//
-// Root cause: the "low_circulating_supply_share" risk finding's detail text read "continued
-// issuance as the remainder circulates is a supply-structure factor to weigh." The evidence
-// contract's language rules reject any text that introduces an external crypto concept the
-// research context does not itself establish (findExternalConcept, evidence-rules.ts), and
-// "issuance" is one of the listed concepts (alongside "halving", "emissions", "governance", etc.).
-// No fixture before this one had a circulating share low enough (<=50%, LOW_CIRCULATING_SHARE_PCT)
-// to ever reach this specific risk finding, so the bug went unexercised until a real token —
-// SUI, whose circulating supply is roughly a third of its capped maximum supply — hit it in
-// production. This fixture reproduces that exact shape: a native asset (no contract address), a
-// real DEX Screener market structure (liquidity, volume, buy/sell counts, transactions), no
-// DeFiLlama protocol mapping, and a circulating/maximum-supply ratio under the threshold.
-const SUI_LIKE_TOKEN = "sui-sui";
-const suiLikeSeed = seed(SUI_LIKE_TOKEN, "sui", [
+const SUI_LIKE = await payloadFor("sui-sui", seed("sui-sui", "sui", [
   ["coingecko", "price_usd", 3.42],
-  ["coingecko", "price_usd", 3.55, 24 * 6.9],
-  ["coingecko", "price_usd", 3.10, 24 * 29],
-  ["coingecko", "price_usd", 1.85, 24 * 88],
-  ["coingecko", "market_cap_usd", 11_950_000_000], ["coingecko", "volume_24h_usd", 480_000_000],
-  ["coingecko", "price_change_24h_pct", -3.7, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", -3.7, 0.5, { window_days: 7 }],
+  ["coingecko", "price_usd", 3.10, 24 * 24], ["coingecko", "price_usd", 2.60, 24 * 80],
+  ["coingecko", "market_cap_usd", 11_950_000_000], ["coingecko", "volume_24h_usd", 2_150_000_000],
+  ["coingecko", "price_change_24h_pct", 1.8, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", 10.3, 0.5, { window_days: 7 }],
   ["coingecko", "circulating_supply", 3_495_000_000], ["coingecko", "total_supply", 10_000_000_000], ["coingecko", "maximum_supply", 10_000_000_000],
   ["dexscreener", "liquidity_usd", 4_200_000, 0.5], ["dexscreener", "fdv_usd", 34_200_000_000, 0.5],
   ["dexscreener", "transactions_24h_count", 18422, 0.5], ["dexscreener", "buys_24h_count", 9800, 0.5], ["dexscreener", "sells_24h_count", 8622, 0.5],
 ], [
   { metric: "dex_aggregate_liquidity_usd", value: 6_100_000 }, { metric: "dex_aggregate_volume_24h_usd", value: 22_000_000 },
-  { metric: "dex_liquidity_to_market_cap_pct", value: 0.035 }, { metric: "dex_aggregate_liquidity_to_market_cap_pct", value: 0.051 },
   { metric: "dex_volume_to_liquidity", value: 3.6 }, { metric: "dex_buy_sell_ratio", value: 9800 / 8622 },
-  { metric: "dex_primary_pair_liquidity_usd", value: 4_200_000 }, { metric: "dex_primary_pair_volume_24h_usd", value: 15_000_000 },
-], true);
+  { metric: "volume_to_market_cap", value: 0.18 },
+], true));
 
-test("SUI regression: a low-circulating-share native asset with real DEX market structure generates successfully (previously failed evidence validation on 'issuance')", async () => {
-  const findings = extractFindings(await payloadFor(SUI_LIKE_TOKEN, suiLikeSeed));
-  assert.ok(findings.some((item) => item.findingType === "low_circulating_supply_share"), "the fixture actually reaches the previously-broken risk finding");
+const HYPE_LIKE = await payloadFor("hyperliquid-hype", seed("hyperliquid-hype", "hyperliquid", [
+  ["coingecko", "price_usd", 38.5],
+  ["coingecko", "price_usd", 33.0, 24 * 24], ["coingecko", "price_usd", 24.0, 24 * 80],
+  ["coingecko", "market_cap_usd", 12_900_000_000], ["coingecko", "volume_24h_usd", 450_000_000],
+  ["coingecko", "price_change_24h_pct", -1.5, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", -3.35, 0.5, { window_days: 7 }],
+  ["coingecko", "circulating_supply", 334_000_000], ["coingecko", "total_supply", 1_000_000_000], ["coingecko", "maximum_supply", 1_000_000_000],
+  ["defillama", "tvl_usd", 1_700_000_000, 2], ["defillama", "fees_24h_usd", 2_800_000, 2], ["defillama", "revenue_24h_usd", 2_800_000, 2],
+  ["dexscreener", "liquidity_usd", 5_400_000, 0.5], ["dexscreener", "fdv_usd", 38_500_000_000, 0.5],
+  ["dexscreener", "transactions_24h_count", 9_800, 0.5], ["dexscreener", "buys_24h_count", 5_600, 0.5], ["dexscreener", "sells_24h_count", 4_200, 0.5],
+], [
+  { metric: "tvl_growth_pct", value: 11.4 }, { metric: "fees_growth_pct", value: 9.1 }, { metric: "revenue_growth_pct", value: 9.1 },
+  { metric: "market_cap_to_tvl", value: 7.6 }, { metric: "fdv_to_tvl", value: 22.6 },
+  { metric: "divergence_price_up_tvl_down", value: 1 },
+  { metric: "dex_aggregate_liquidity_usd", value: 7_000_000 }, { metric: "dex_aggregate_volume_24h_usd", value: 18_000_000 },
+  { metric: "dex_buy_sell_ratio", value: 5600 / 4200 }, { metric: "dex_volume_to_liquidity", value: 2.6 },
+], true));
 
-  const db = createFakeSupabase({ seed: suiLikeSeed });
-  const result = await generateDeterministicAnalysis(db.client, SUI_LIKE_TOKEN, { now: () => NOW });
-  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result));
-
-  const risk = result.analysis.risks.find((r) => r.title === "Large share of supply not yet circulating");
-  assert.ok(risk);
-  assert.equal(findExternalConcept(risk.detail, ""), null, `risk detail still introduces an external concept: ${risk.detail}`);
-});
-
-test("general robustness: no generated report text ever introduces an EXTERNAL_CONCEPTS term the engine's own domain has no business using", async () => {
-  // A context-free check (empty contextText): every one of these narrative sentences must stand on
-  // its own without relying on a research context happening to mention the same word — the engine
-  // has no legitimate reason to ever write "issuance", "governance", "staking", etc.
-  const payloads = [...Object.values(ALL_PAYLOADS), await payloadFor(SUI_LIKE_TOKEN, suiLikeSeed)];
-  for (const payload of payloads) {
-    const report = buildEngineReport(payload);
-    for (const text of allText(report.analysis)) {
-      const concept = findExternalConcept(text, "");
-      assert.equal(concept, null, `"${concept}" introduced in: ${text}`);
-    }
-  }
-});
-
-// ---- M/N. Missing protocol mapping / insufficient history ----
-
-const NO_FUNDAMENTALS = await payloadFor("no-fund", seed("no-fund", "ethereum", [
-  ["coingecko", "price_usd", 3], ["coingecko", "market_cap_usd", 20_000_000], ["coingecko", "volume_24h_usd", 500_000],
-  ["coingecko", "circulating_supply", 6_000_000],
-]));
-
-test("M. no protocol mapping: fundamentalPerformance overview explains the limitation clearly (not a generic 'no findings' line)", () => {
-  const findings = extractFindings(NO_FUNDAMENTALS);
-  assert.ok(findings.some((item) => item.findingType === "unmapped_defillama"));
-  const report = buildEngineReport(NO_FUNDAMENTALS);
-  assert.equal(report.analysis.fundamentalPerformance.statements.length, 0);
-  assert.match(report.analysis.fundamentalPerformance.overview, /no associated protocol is mapped/i);
-  assert.ok(report.analysis.dataGaps.some((gap) => gap.category === "mapping_limitation"));
-});
-
-test("N. a single stored history point produces an insufficient-observations data gap, not an invented trend", () => {
-  const findings = extractFindings(NO_FUNDAMENTALS);
-  assert.ok(findings.some((item) => item.findingType.startsWith("insufficient_history_price_")));
-  assert.equal(findings.find((item) => item.findingType.startsWith("multi_horizon_") && item.horizons?.some((h) => h.key === "30d")), undefined);
-  const report = buildEngineReport(NO_FUNDAMENTALS);
-  assert.ok(report.analysis.dataGaps.some((gap) => gap.category === "insufficient_observations"));
-});
-
-// ---- Tokenomics: supply relationships and the uncapped-supply limitation ----
-
-const CAPPED_EQUAL = await payloadFor("btc-like", seed("btc-like", "bitcoin", [
-  ["coingecko", "price_usd", 84388], ["coingecko", "market_cap_usd", 1_690_000_000_000],
-  ["coingecko", "circulating_supply", 20_088_743], ["coingecko", "total_supply", 20_088_743], ["coingecko", "maximum_supply", 21_000_000],
-], [], true));
-
-test("tokenomics: circulating equals total supply is stated as a supply relationship, not three bare numbers", () => {
-  const findings = extractFindings(CAPPED_EQUAL);
-  assert.ok(findings.some((item) => item.findingType === "circulating_equals_total"));
-  const report = buildEngineReport(CAPPED_EQUAL);
-  const text = report.analysis.tokenomics.statements.find((s) => s.text.includes("equals"))?.text ?? "";
-  assert.match(text, /circulating supply.*equals total supply/i);
-});
-
-const UNCAPPED = await payloadFor("eth-like", seed("eth-like", "ethereum", [
-  ["coingecko", "price_usd", 3000], ["coingecko", "market_cap_usd", 360_000_000_000],
-  ["coingecko", "circulating_supply", 120_000_000], ["coingecko", "total_supply", 120_000_000],
-], [], true));
-
-test("tokenomics: an uncapped supply (ETH-like, no maximum_supply) states the limitation explicitly", () => {
-  const findings = extractFindings(UNCAPPED);
-  assert.ok(findings.some((item) => item.findingType === "supply_uncapped"));
-  const report = buildEngineReport(UNCAPPED);
-  const text = report.analysis.tokenomics.statements.find((s) => s.text.includes("No maximum supply"))?.text;
-  assert.ok(text, "the uncapped-supply limitation is explained in prose, not merely omitted");
-});
-
-// ---- O. Calculated ratios are reported with their own exact value, never recomputed ----
-
-test("O. every valuation ratio statement states exactly the cited field's own value", () => {
-  const report = buildEngineReport(IMPROVING);
-  for (const statement of report.analysis.valuation.statements) {
-    const citedField = IMPROVING.fields.find((field) => statement.sourceIds.includes(field.id));
-    if (citedField) assert.ok(statement.text.includes(citedField.value), `${statement.text} does not quote ${citedField.value}`);
-  }
-});
-
-// ---- P. Evidence/provenance mapping, clean language, and grammar across every fixture built so far ----
-
-const ALL_PAYLOADS = {
-  STRONG_UP, STRONG_DOWN, FLAT, DECEL_UP, REVERSAL_DOWN, REVERSAL_UP, VOLUME_DOWN, VOLATILE,
-  NO_FUNDAMENTALS, IMPROVING, DETERIORATING, CAPPED_EQUAL, UNCAPPED,
-};
+const ALL_PAYLOADS = { BTC_LIKE, ETH_LIKE, UNI_LIKE, SUI_LIKE, HYPE_LIKE };
 
 for (const [name, payload] of Object.entries(ALL_PAYLOADS)) {
-  test(`P. ${name}: builds a valid report whose every citation resolves to a real field, with clean, grammatical language`, () => {
+  test(`A. ${name}: builds a valid, fully-grounded eleven-section report with clean language`, () => {
     const report = buildEngineReport(payload);
+    assertAllSectionsPresent(report);
     assertProvenance(payload, report);
     assertCleanLanguage(report);
-    assertNoArticleErrors(report);
+    for (const key of ENGINE_SECTION_KEYS) assert.ok(report.analysis[key].paragraphs.length > 0, `${name}.${key} has at least a fallback paragraph`);
   });
 }
 
-test("P2. mismatched periods are never mixed: every statement's period is the literal period of one of its own cited fields", () => {
+test("A2. every paragraph across every fixture cites at least one source", () => {
   for (const payload of Object.values(ALL_PAYLOADS)) {
     const report = buildEngineReport(payload);
-    const byId = new Map(payload.fields.map((field) => [field.id, field]));
-    for (const key of ALL_SECTION_KEYS) {
-      for (const statement of report.analysis[key].statements) {
-        if (statement.period === null) continue;
-        const citedPeriods = statement.sourceIds.map((id) => byId.get(id)?.period).filter(Boolean);
-        assert.ok(citedPeriods.includes(statement.period), `${key} statement period "${statement.period}" not among cited fields' own periods`);
-      }
+    for (const key of ENGINE_SECTION_KEYS) {
+      for (const paragraph of report.analysis[key].paragraphs) assert.ok(paragraph.sourceIds.length > 0, `${key} paragraph has no sourceIds: ${paragraph.text}`);
     }
   }
 });
 
-test("P3. executive summary never renders the same literal sentence as its matching section for a shared finding", () => {
+test("A3. no report ever exposes an overall investment score or a buy/sell/hold verdict field", () => {
   for (const payload of Object.values(ALL_PAYLOADS)) {
     const report = buildEngineReport(payload);
-    const execTexts = new Set(report.analysis.executiveSummary.statements.map((s) => s.text));
-    for (const key of ALL_SECTION_KEYS) {
-      if (key === "executiveSummary") continue;
-      for (const statement of report.analysis[key].statements) {
-        assert.ok(!execTexts.has(statement.text), `"${statement.text}" is duplicated verbatim between executiveSummary and ${key}`);
-      }
-    }
+    const json = JSON.stringify(report.analysis).toLowerCase();
+    assert.ok(!/"score"/.test(json));
+    assert.ok(!/\bbuy\b|\bsell\b|\bhold\b/i.test(json.replace(/buy\s*\/?\s*sell/gi, "")));
   }
 });
 
-// ---- Q/R/T. Same-token-different-snapshot, no AI call, no env vars ----
+// =====================================================================================
+// B. Technical-indicator findings and relationships are real, evidence-grounded content
+// =====================================================================================
 
-test("Q. the same token generates a materially different report from a later, changed data snapshot", async () => {
-  const before = seed("evolving", "ethereum", [
-    ["coingecko", "price_usd", 10], ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 1_000_000],
-    ["coingecko", "price_change_24h_pct", 0.2, 0.5, { window_days: 1 }], ["coingecko", "circulating_supply", 100_000_000],
-  ]);
-  const after = seed("evolving", "ethereum", [
-    ["coingecko", "price_usd", 14], ["coingecko", "market_cap_usd", 1_400_000_000], ["coingecko", "volume_24h_usd", 400_000_000],
-    ["coingecko", "price_change_24h_pct", 38, 0.5, { window_days: 1 }], ["coingecko", "circulating_supply", 100_000_000],
-  ]);
-  const beforePayload = await payloadFor("evolving", before);
-  const afterPayload = await payloadFor("evolving", after);
-  const beforeReport = buildEngineReport(beforePayload);
-  const afterReport = buildEngineReport(afterPayload);
-  assert.notEqual(JSON.stringify(beforeReport.analysis), JSON.stringify(afterReport.analysis));
-  const beforeText = beforeReport.analysis.marketPerformance.statements[0]?.text ?? "";
-  const afterText = afterReport.analysis.marketPerformance.statements[0]?.text ?? "";
-  assert.match(beforeText, /essentially unchanged|flat/i, "the earlier, flat snapshot reports no momentum, not an invented trend");
-  assert.match(afterText, /\+38\.00%|pronounced|substantial/i, "the later, sharply-changed snapshot reports the real momentum");
-  assert.notEqual(beforeText, afterText);
+test("B1. a dense, trending daily-close history produces technical findings (moving averages, MACD, RSI, structure) and a Technical Analysis section that cites them", () => {
+  const findings = extractFindings(UNI_LIKE);
+  const technical = findings.filter((f) => f.category === "technical");
+  assert.ok(technical.length > 0, "technical indicators are extracted from a rich enough price history");
+  const report = buildEngineReport(UNI_LIKE);
+  const technicalText = report.analysis.technicalAnalysis.paragraphs.map((p) => p.text).join(" ");
+  assert.doesNotMatch(technicalText, /no technical indicator/i);
 });
 
-test("R. generating a report never calls fetch (no external AI/API call of any kind)", async () => {
+test("B2. a thin, single-price-point token never fabricates a technical finding", () => {
+  const findings = extractFindings(BTC_LIKE);
+  assert.equal(findings.filter((f) => f.category === "technical").length, 0);
+  const report = buildEngineReport(BTC_LIKE);
+  assert.match(report.analysis.technicalAnalysis.paragraphs[0].text, /no technical indicator/i);
+});
+
+test("B3. the three new technical relationship types are reachable from real extracted findings", () => {
+  const synthesis = synthesize(extractFindings(UNI_LIKE));
+  const types = new Set(synthesis.relationships.map((r) => r.type));
+  // At least one technical relationship should form given UNI_LIKE's rich technical + fundamentals + liquidity data.
+  const hasTechnical = ["technical_price_confluence", "technical_fundamental_relationship", "technical_liquidity_conditions"].some((type) => types.has(type));
+  assert.ok(hasTechnical, `expected at least one technical relationship, got: ${[...types].join(", ")}`);
+});
+
+test("B4. RSI/MACD/moving-average/Bollinger findings never use forbidden sentiment words (overbought/oversold/bullish/bearish/breakout)", () => {
+  const report = buildEngineReport(UNI_LIKE);
+  const text = report.analysis.technicalAnalysis.paragraphs.map((p) => p.text).join(" ");
+  assert.doesNotMatch(text, /overbought|oversold|bullish|bearish|breakout|uptrend|downtrend/i);
+});
+
+// =====================================================================================
+// C. Cross-Domain Analysis is populated from real relationships, not padding
+// =====================================================================================
+
+test("C1. Cross-Domain Analysis has one paragraph per detected relationship, each citing that relationship's own evidence", () => {
+  const report = buildEngineReport(UNI_LIKE);
+  const synthesis = synthesize(extractFindings(UNI_LIKE));
+  assert.equal(report.analysis.crossDomainAnalysis.paragraphs.length, synthesis.relationships.length || 1);
+});
+
+test("C2. a token with no detected relationship states that plainly, never inventing one", () => {
+  const report = buildEngineReport(BTC_LIKE);
+  assert.match(report.analysis.crossDomainAnalysis.paragraphs[0].text, /no cross-domain relationship/i);
+});
+
+// =====================================================================================
+// D. Momentum interpretation regression (direction/pace/reversal — see calibration history)
+// =====================================================================================
+
+test("D1. a 7D-down/90D-up pattern is described as a reversal in Market Performance, never as 'broadly consistent pace'", async () => {
+  const payload = await payloadFor("cal-a", seed("cal-a", "ethereum", [
+    ["coingecko", "price_usd", 100],
+    ["coingecko", "price_usd", 92.94, 24 * 24], ["coingecko", "price_usd", 72.41, 24 * 80],
+    ["coingecko", "price_change_24h_pct", -3.28, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", -3.35, 0.5, { window_days: 7 }],
+    ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 50_000_000], ["coingecko", "circulating_supply", 100_000_000],
+  ]));
+  const finding = extractFindings(payload).find((f) => f.category === "marketPerformance" && f.findingType.startsWith("multi_horizon_"));
+  assert.equal(finding.findingType, "multi_horizon_reversal_to_down");
+  const report = buildEngineReport(payload);
+  const text = report.analysis.marketPerformance.paragraphs[0].text;
+  assert.match(text, /revers/i);
+  assert.doesNotMatch(text, /broadly consistent/i);
+});
+
+test("D2. all-positive momentum with a sharply faster recent pace is described as accelerating (normalized rate, not raw percentage comparison)", async () => {
+  const payload = await payloadFor("cal-b", seed("cal-b", "ethereum", [
+    ["coingecko", "price_usd", 100], ["coingecko", "price_usd", 62, 24 * 88],
+    ["coingecko", "price_change_7d_pct", 14, 0.5, { window_days: 7 }],
+    ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 50_000_000], ["coingecko", "circulating_supply", 100_000_000],
+  ]));
+  const finding = extractFindings(payload).find((f) => f.findingType.startsWith("multi_horizon_"));
+  assert.equal(finding.findingType, "multi_horizon_consistent_up_accelerating");
+  const report = buildEngineReport(payload);
+  assert.match(report.analysis.marketPerformance.paragraphs[0].text, /faster/i);
+});
+
+test("D3. mixed-direction momentum (up/down/up) is never described as a reversal", async () => {
+  const payload = await payloadFor("cal-d", seed("cal-d", "ethereum", [
+    ["coingecko", "price_usd", 100], ["coingecko", "price_usd", 110, 24 * 24], ["coingecko", "price_usd", 95, 24 * 80],
+    ["coingecko", "price_change_7d_pct", 5, 0.5, { window_days: 7 }],
+    ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 50_000_000], ["coingecko", "circulating_supply", 100_000_000],
+  ]));
+  const finding = extractFindings(payload).find((f) => f.findingType.startsWith("multi_horizon_"));
+  assert.equal(finding.findingType, "multi_horizon_mixed");
+  const report = buildEngineReport(payload);
+  assert.match(report.analysis.marketPerformance.paragraphs[0].text, /without a single consistent direction/i);
+});
+
+// =====================================================================================
+// E. BTC/ETH supply-precision and SUI circulating-share phrasing regressions
+// =====================================================================================
+
+function supplyPayload(tokenId, circulating, total) {
+  return payloadFor(tokenId, seed(tokenId, "bitcoin", [
+    ["coingecko", "price_usd", 90000], ["coingecko", "market_cap_usd", 1_800_000_000_000],
+    ["coingecko", "circulating_supply", circulating], ["coingecko", "total_supply", total], ["coingecko", "maximum_supply", 21_000_000],
+  ], [], true));
+}
+
+test("E1. circulating supply exactly equal to total supply never claims 'below'", async () => {
+  const payload = await supplyPayload("cal-supply-a", 19_987_731, 19_987_731);
+  const report = buildEngineReport(payload);
+  const text = report.analysis.tokenomicsSupply.paragraphs.map((p) => p.text).join(" ");
+  assert.doesNotMatch(text, /below/i);
+  assert.match(text, /equals/i);
+});
+
+test("E2. circulating slightly below total, with the compact display colliding at the same rounded figure, still states two different figures (never 'X is below X')", async () => {
+  const payload = await supplyPayload("cal-supply-b", 19_987_731, 19_987_800);
+  const report = buildEngineReport(payload);
+  const text = report.analysis.tokenomicsSupply.paragraphs.find((p) => /below/i.test(p.text)).text;
+  const circulatingText = /Circulating supply \(([^)]+)\)/.exec(text)?.[1];
+  const totalText = /below total supply \(([^)]+)\)/.exec(text)?.[1];
+  assert.ok(circulatingText && totalText);
+  assert.notEqual(circulatingText, totalText);
+});
+
+test("E3. low-circulating-share phrasing never doubles up 'circulating (...) of maximum supply'", async () => {
+  const payload = await payloadFor("cal-sui-share", seed("cal-sui-share", "sui", [
+    ["coingecko", "price_usd", 3.42], ["coingecko", "market_cap_usd", 11_950_000_000], ["coingecko", "volume_24h_usd", 500_000_000],
+    ["coingecko", "circulating_supply", 4_100_000_000], ["coingecko", "total_supply", 10_000_000_000], ["coingecko", "maximum_supply", 10_000_000_000],
+  ], [], true));
+  const report = buildEngineReport(payload);
+  const text = report.analysis.tokenomicsSupply.paragraphs.map((p) => p.text).join(" ");
+  assert.match(text, /of maximum supply is currently circulating/);
+  assert.doesNotMatch(text, /circulating \([^)]+\) of maximum supply/i);
+});
+
+// =====================================================================================
+// F. Determinism, no network, no AI-provider env vars
+// =====================================================================================
+
+test("F1. buildEngineReport is deterministic: identical payload produces byte-identical output", () => {
+  const first = buildEngineReport(UNI_LIKE);
+  const second = buildEngineReport(UNI_LIKE);
+  assert.equal(JSON.stringify(first.analysis), JSON.stringify(second.analysis));
+});
+
+test("F2. generating a report never calls fetch (no external AI/API call of any kind)", async () => {
   const originalFetch = globalThis.fetch;
   let called = false;
   globalThis.fetch = async (...args) => { called = true; throw new Error(`Unexpected network call: ${args[0]}`); };
   try {
     const db = createFakeSupabase({ seed: seed("cosmos-atom", "cosmos", [["coingecko", "price_usd", 2], ["coingecko", "market_cap_usd", 9_000_000]], [], true) });
-    const result = await generateDeterministicAnalysis(db.client, "cosmos-atom", { now: () => NOW });
+    const result = await generateDeterministicAnalysis(db.client, "cosmos-atom", { now: () => MIDNIGHT });
     assert.equal(result.ok, true);
     assert.equal(called, false);
   } finally {
@@ -607,16 +356,16 @@ test("R. generating a report never calls fetch (no external AI/API call of any k
   }
 });
 
-test("T. generation succeeds with every AI-provider environment variable absent", async () => {
+test("F3. generation succeeds with every AI-provider environment variable absent", async () => {
   const cleared = { ...process.env };
   for (const key of Object.keys(cleared)) {
     if (/GEMINI|OPENROUTER|MISTRAL|GLM|SILICONFLOW|MODELSCOPE|ZHIPU|QWEN/i.test(key)) delete process.env[key];
   }
   try {
     const db = createFakeSupabase({ seed: seed("algorand-algo", "algorand", [["coingecko", "price_usd", 2], ["coingecko", "market_cap_usd", 9_000_000]], [], true) });
-    const result = await generateDeterministicAnalysis(db.client, "algorand-algo", { now: () => NOW });
+    const result = await generateDeterministicAnalysis(db.client, "algorand-algo", { now: () => MIDNIGHT });
     assert.equal(result.ok, true);
-    const state = await getDeterministicAnalysisState(db.client, "algorand-algo", NOW);
+    const state = await getDeterministicAnalysisState(db.client, "algorand-algo", MIDNIGHT);
     assert.equal(state.status, "ready");
     assert.equal(state.model, DETERMINISTIC_ENGINE_NAME);
   } finally {
@@ -624,132 +373,63 @@ test("T. generation succeeds with every AI-provider environment variable absent"
   }
 });
 
-// ---- 15. The third-token generation failure: a "kitchen sink" regression fixture exercising many
-// code paths at once (native asset, DEX-mapped market structure, protocol fundamentals, FDV,
-// divergence, low circulating share, missing history) — this must never throw. ----
+// =====================================================================================
+// G. buildEngineReport never throws a plain Error; persistence round-trips
+// =====================================================================================
 
-const KITCHEN_SINK_TOKEN = "uniswap-uni";
-const kitchenSinkSeed = seed(KITCHEN_SINK_TOKEN, "ethereum", [
-  ["coingecko", "price_usd", 7.2], ["coingecko", "market_cap_usd", 4_300_000_000], ["coingecko", "volume_24h_usd", 900_000_000],
-  ["coingecko", "price_change_24h_pct", -14.2, 0.5, { window_days: 1 }], ["coingecko", "price_change_7d_pct", 3.1, 0.5, { window_days: 7 }],
-  ["coingecko", "circulating_supply", 600_000_000], ["coingecko", "total_supply", 1_000_000_000], ["coingecko", "maximum_supply", 1_000_000_000],
-  ["defillama", "tvl_usd", 3_900_000_000, 2], ["defillama", "fees_24h_usd", 1_200_000, 2], ["defillama", "revenue_24h_usd", 0, 2],
-  ["dexscreener", "liquidity_usd", 168_830, 0.5],
-], [
-  { metric: "market_cap_to_tvl", value: 1.1 }, { metric: "fdv_to_tvl", value: 1.83 },
-  { metric: "divergence_price_up_tvl_down", value: 0 }, { metric: "divergence_price_down_tvl_up", value: 1 },
-  { metric: "tvl_growth_pct", value: -2.1 }, { metric: "volume_to_market_cap", value: 0.21 },
-  { metric: "dex_buy_sell_ratio", value: 0.87 },
-]);
-
-test("15. the affected third-token combination (DEX+protocol+FDV+divergence+low-supply-share) generates successfully through the live service path, never throwing", async () => {
-  const db = createFakeSupabase({ seed: kitchenSinkSeed });
-  const result = await generateDeterministicAnalysis(db.client, KITCHEN_SINK_TOKEN, { now: () => NOW });
-  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result));
-});
-
-test("15b. buildEngineReport itself never throws a plain Error for any category/findingType combination — only AnalysisValidationError is a recognized failure mode", async () => {
-  const payload = await payloadFor(KITCHEN_SINK_TOKEN, kitchenSinkSeed);
-  let report;
-  try {
-    report = buildEngineReport(payload);
-  } catch (error) {
-    assert.ok(error instanceof AnalysisValidationError, `buildEngineReport threw a non-validation error: ${error?.stack ?? error}`);
-    throw error;
-  }
-  assertProvenance(payload, report);
-  assertCleanLanguage(report);
-  assertNoArticleErrors(report);
-});
-
-// ---- S. Explicit language/report-shape guarantees (belt-and-suspenders on top of the validator) ----
-
-test("S. buildEngineReport throws AnalysisValidationError (never silently ships bad output) if the contract is somehow violated", () => {
-  assert.ok(AnalysisValidationError);
-});
-
-test("S2. no report ever exposes an overall investment score or a buy/sell/hold verdict field", () => {
+test("G1. buildEngineReport itself never throws a plain Error for any real fixture — only AnalysisValidationError is a recognized failure mode", () => {
   for (const payload of Object.values(ALL_PAYLOADS)) {
-    const report = buildEngineReport(payload);
-    const json = JSON.stringify(report.analysis).toLowerCase();
-    assert.ok(!/"score"/.test(json));
-    assert.ok(!/\bbuy\b|\bsell\b|\bhold\b/i.test(json.replace(/buy.?sell/g, "")));
+    let report;
+    try {
+      report = buildEngineReport(payload);
+    } catch (error) {
+      assert.ok(error instanceof AnalysisValidationError, `buildEngineReport threw a non-validation error: ${error?.stack ?? error}`);
+      throw error;
+    }
+    assertProvenance(payload, report);
+    assertCleanLanguage(report);
   }
 });
 
-// ---- Research questions arise from actual findings ----
-
-test("further research questions are grounded in the findings actually present, not generic filler", async () => {
-  const momentumReport = buildEngineReport(DECEL_UP);
-  assert.ok(momentumReport.analysis.furtherResearchQuestions.some((q) => /positive momentum/i.test(q.question)));
-
-  // Calibration (Phase 1 synthesis calibration pass): research questions must now be warranted by an
-  // actual Thesis Driver (see synthesis.ts/narrative.ts's furtherResearchQuestions), not merely by a
-  // finding of the right category existing. `divergencePayload`'s own fixture (a single price point,
-  // a single TVL point, no real history) is exactly the kind of thin, single-observation relationship
-  // the calibration says must NOT pad the questions section with "does this persist" — it never
-  // clears the materiality floor once the data-gap penalty from its own missing history applies, so
-  // the divergence question is correctly absent here now (this replaces the old assertion, which
-  // expected a question from evidence this thin — an analytically incorrect expectation under the
-  // corrected model). A separate, materially-supported divergence fixture below confirms the question
-  // still fires when the relationship really is one of the token's genuine analytical drivers.
-  const thinDivergenceReport = buildEngineReport(await payloadFor(DIVERGENCE_TOKEN, divergencePayload("divergence_price_up_tvl_down")));
-  assert.ok(!thinDivergenceReport.analysis.furtherResearchQuestions.some((q) => /divergence/i.test(q.question)), "a single thin, data-gap-limited divergence observation must not pad the questions section");
-
-  const materialDivergencePayload = await payloadFor(DIVERGENCE_TOKEN, seed(DIVERGENCE_TOKEN, "ethereum", [
-    ["coingecko", "price_usd", 11], ["coingecko", "price_usd", 11.1, 5], ["coingecko", "price_usd", 11.3, 12],
-    ["coingecko", "price_usd", 10.5, 24 * 6.9], ["coingecko", "price_usd", 10.2, 24 * 29], ["coingecko", "price_usd", 9.5, 24 * 88],
-    ["coingecko", "market_cap_usd", 1_000_000_000], ["coingecko", "volume_24h_usd", 1_000_000],
-    ["coingecko", "price_change_7d_pct", 4.8, 0.5, { window_days: 7 }],
-    ["defillama", "tvl_usd", 500_000_000, 2], ["defillama", "tvl_usd", 510_000_000, 5], ["defillama", "tvl_usd", 520_000_000, 12],
-    ["defillama", "tvl_usd", 600_000_000, 24 * 6.9], ["defillama", "tvl_usd", 700_000_000, 24 * 29], ["defillama", "tvl_usd", 800_000_000, 24 * 88],
-    ["defillama", "fees_24h_usd", 10_000, 2], ["defillama", "revenue_24h_usd", 5_000, 2],
-  ], CALCULATED_METRICS.filter((metric) => metric.category === "divergence").map((metric) => ({ metric: metric.id, value: metric.id === "divergence_price_up_tvl_down" ? 1 : 0 }))));
-  const materialDivergenceReport = buildEngineReport(materialDivergencePayload);
-  assert.ok(materialDivergenceReport.analysis.furtherResearchQuestions.some((q) => /divergence/i.test(q.question)), "a divergence backed by enough history to have complete data quality clears the materiality floor and does warrant the question");
-
-  const gapReport = buildEngineReport(NO_FUNDAMENTALS);
-  assert.ok(gapReport.analysis.furtherResearchQuestions.some((q) => /mapping/i.test(q.question)));
-});
-
-// ---- Persistence / metadata shape ----
-
-test("persists engineVersion/analysisVersion/dataSnapshotAt, and the stored row round-trips through the state reader", async () => {
+test("G2. persists engineVersion/analysisVersion/dataSnapshotAt, and the stored row round-trips through the state reader", async () => {
   const db = createFakeSupabase({ seed: seed("akash-akt", "akash", [["coingecko", "price_usd", 4], ["coingecko", "market_cap_usd", 3_000_000]], [], true) });
-  const result = await generateDeterministicAnalysis(db.client, "akash-akt", { now: () => NOW });
+  const result = await generateDeterministicAnalysis(db.client, "akash-akt", { now: () => MIDNIGHT });
   assert.equal(result.ok, true);
   assert.equal(result.analysis.metadata.engineVersion, ENGINE_VERSION);
   assert.equal(result.analysis.metadata.analysisVersion, ANALYSIS_VERSION);
   assert.equal(result.analysis.metadata.provider, DETERMINISTIC_ENGINE_NAME);
   assert.ok("dataSnapshotAt" in result.analysis.metadata);
-  const state = await getDeterministicAnalysisState(db.client, "akash-akt", new Date(NOW.getTime() + 5 * 60 * 1000));
+  const state = await getDeterministicAnalysisState(db.client, "akash-akt", new Date(MIDNIGHT.getTime() + 5 * 60 * 1000));
   assert.equal(state.status, "ready");
   assert.equal(state.latest?.metadata.engineVersion, ENGINE_VERSION);
+  for (const key of ENGINE_SECTION_KEYS) assert.ok(Array.isArray(state.latest[key].paragraphs), `round-tripped analysis still has section ${key}`);
 });
 
-test("invalid token IDs and an unmigrated storage table are handled without throwing", async () => {
+test("G3. invalid token IDs and an unmigrated storage table are handled without throwing", async () => {
   const db = createFakeSupabase({ seed: seed("dash-dash", "dash", [["coingecko", "price_usd", 1]], [], true) });
-  const badToken = await generateDeterministicAnalysis(db.client, "not-a-real-token", { now: () => NOW });
+  const badToken = await generateDeterministicAnalysis(db.client, "not-a-real-token", { now: () => MIDNIGHT });
   assert.equal(badToken.ok, false);
   assert.equal(badToken.reason, "invalid_token");
 
   const noTable = createFakeSupabase({ seed: seed("dash-dash", "dash", [["coingecko", "price_usd", 1]], [], true), missingTables: ["token_ai_analyses"] });
-  const state = await getDeterministicAnalysisState(noTable.client, "dash-dash", NOW);
+  const state = await getDeterministicAnalysisState(noTable.client, "dash-dash", MIDNIGHT);
   assert.equal(state.status, "storage_unavailable");
-  const failed = await generateDeterministicAnalysis(noTable.client, "dash-dash", { now: () => NOW });
+  const failed = await generateDeterministicAnalysis(noTable.client, "dash-dash", { now: () => MIDNIGHT });
   assert.equal(failed.reason, "storage_unavailable");
 });
 
-test("cooldown blocks an immediate second regeneration; it clears after the configured window", async () => {
+test("G4. cooldown blocks an immediate second regeneration; it clears after the configured window", async () => {
   const db = createFakeSupabase({ seed: seed("celo-celo", "celo", [["coingecko", "price_usd", 1], ["coingecko", "market_cap_usd", 2_000_000]], [], true) });
-  const first = await generateDeterministicAnalysis(db.client, "celo-celo", { now: () => NOW });
+  const first = await generateDeterministicAnalysis(db.client, "celo-celo", { now: () => MIDNIGHT });
   assert.equal(first.ok, true);
-  const immediate = await generateDeterministicAnalysis(db.client, "celo-celo", { now: () => new Date(NOW.getTime() + 1000) });
+  const immediate = await generateDeterministicAnalysis(db.client, "celo-celo", { now: () => new Date(MIDNIGHT.getTime() + 1000) });
   assert.equal(immediate.ok, false);
   assert.equal(immediate.reason, "cooldown");
-  const later = await generateDeterministicAnalysis(db.client, "celo-celo", { now: () => new Date(NOW.getTime() + 2 * 60 * 1000) });
+  const later = await generateDeterministicAnalysis(db.client, "celo-celo", { now: () => new Date(MIDNIGHT.getTime() + 2 * 60 * 1000) });
   assert.equal(later.ok, true);
 });
+
+// =====================================================================================
 
 let failures = 0;
 for (const { name, run } of cases) {

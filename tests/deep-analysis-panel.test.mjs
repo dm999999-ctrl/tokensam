@@ -24,9 +24,16 @@ test("2. the raw evidence ID remains reachable through the intended provenance m
   assert.match(sourcesFn, /title=\{id\}/, "the id is still attached to the element, just not as visible body text");
 });
 
-test("3. every rendered section (statements, risks, data gaps, research questions) routes its citations through the same Sources component, so the fix applies report-wide", () => {
+test("3. every rendered section routes its citations through the same Sources component, so the fix applies report-wide", () => {
+  // The Phase 2 institutional-research report unified what used to be four separate render paths
+  // (statements, risks, data gaps, research questions) into one generic paragraph renderer shared by
+  // all eleven sections (see the `Section` component), plus the one remaining distinct list (further
+  // research questions). That is a stronger guarantee than four separate call sites, not a weaker
+  // one: risks and data gaps literally cannot render through a different, unpatched code path,
+  // because there is no longer a separate code path for them to render through.
   const usages = [...source.matchAll(/<Sources ids=\{[^}]+\} sources=\{sources\} \/>/g)];
-  assert.ok(usages.length >= 4, `expected at least 4 <Sources> usages (statements, risks, data gaps, questions), found ${usages.length}`);
+  assert.ok(usages.length >= 2, `expected at least 2 <Sources> usages (the shared per-section paragraph renderer, and research questions), found ${usages.length}`);
+  assert.match(source, /function Section\(/, "every one of the eleven sections renders through this single shared component");
 });
 
 let failures = 0;

@@ -5,8 +5,7 @@ import { LiveDataUnavailable } from "@/components/LiveDataUnavailable";
 import { AppShell } from "@/components/AppShell";
 import { canonicalTokens } from "@/data/canonical-tokens";
 import { getLiveTokenProfile, getSidebarMovers } from "@/lib/data/live-data";
-import { getDeterministicAnalysisState } from "@/lib/analysis/deterministic-service";
-import type { AnalysisState } from "@/lib/analysis/service";
+import { getDeterministicAnalysisState, type EngineAnalysisState } from "@/lib/analysis/deterministic-service";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +20,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   return token ? { title: `${token.name} (${token.symbol})`, description: `${token.name} market data, fundamentals, and market structure on Token Samurai.` } : { title: "Page not found" };
 }
 
-async function loadAnalysisState(id: string): Promise<AnalysisState> {
+async function loadAnalysisState(id: string): Promise<EngineAnalysisState> {
   try {
     return await getDeterministicAnalysisState(createSupabaseAdminClient(), id);
   } catch (error) {
