@@ -31,9 +31,21 @@ async function callRoute(baseUrl: string, path: string, secret: string): Promise
 }
 
 /**
- * Runs on every 5-minute Cron Trigger tick (see wrangler.toml). Both routes gate their own
- * actual work internally, so calling both on every tick is safe and is what makes their
- * intended cadences effective now that Vercel Hobby cannot run a sub-daily cron directly:
+ * Only a clean 2xx from `/api/cron/refresh` counts as "the refresh completed" for
+ * deciding whether it is safe to add GeckoTerminal's own database work on top of it
+ * this tick. `succeeded`/`partial`/nothing-due are all 200s. Anything else — a
+ * network-level failure (`result.error`, which is what a `fetch` throwing looks
+ * like, including the connection dropping mid-request the way a `maxDuration`-killed
+ * Vercel invocation does), a 4xx (409 busy included: another invocation may still be
+ * doing heavy work), or a 5xx — means Postgres may still be under load from that
+ * attempt, so GeckoTerminal is skipped for this tick.
+ */
+function isSuccessfulResponse(result: RouteResult): boolean {
+  return !result.error && result.status >= 200 && result.status < 300;
+}
+
+/**
+ * Runs on every 5-minute Cron Trigger tick (see wrangler.toml).
  *
  * - /api/cron/refresh: each provider's own REFRESH_POLICY interval (CoinGecko/DEX Screener
  *   15 min, DeFiLlama Coins 30 min, DeFiLlama 6 h, DUE_TOLERANCE_MS 2 min) decides what actually
@@ -47,21 +59,41 @@ async function callRoute(baseUrl: string, path: string, secret: string): Promise
  *
  * Sequential, not parallel: GeckoTerminal is rate-limit sensitive (6.5 s/request) and
  * independent of the main refresh, so there is no reason to race them against each other for
- * this Worker's own CPU-time budget.
+ * this Worker's own CPU-time budget. It is also a correctness requirement now, not just a CPU
+ * choice: GeckoTerminal only runs after `/api/cron/refresh`'s response is actually in hand, and
+ * only when that response indicates the refresh completed (not necessarily every provider
+ * succeeding — `partial`/`busy`/`skipped` still mean the route itself ran and returned cleanly).
+ * A network-level failure or a 5xx (including a 504, which is what a `maxDuration`-killed
+ * invocation looks like to an external caller) means Postgres may still be under load from that
+ * failed attempt, so GeckoTerminal is skipped for this tick rather than adding more concurrent
+ * database work on top of it. `ctx.waitUntil(run(env))` in the scheduled handler below already
+ * means this whole sequential sequence — refresh, then conditionally GeckoTerminal — completes
+ * (or the tick ends) before the next Cron Trigger tick's own `run(env)` starts; there is no
+ * second, independent path that launches either route out of order.
  */
 async function run(env: Env): Promise<RouteResult[]> {
   if (!env.REFRESH_URL || !env.CRON_SECRET) {
     console.error("refresh-scheduler: REFRESH_URL and CRON_SECRET must both be configured (see wrangler.toml).");
     return [];
   }
-  const results: RouteResult[] = [];
-  for (const path of ["/api/cron/refresh", "/api/cron/geckoterminal"]) {
-    const result = await callRoute(env.REFRESH_URL, path, env.CRON_SECRET);
-    results.push(result);
-    if (result.error) console.error(`refresh-scheduler: ${path} request failed: ${result.error}`);
-    else console.log(`refresh-scheduler: ${path} -> ${result.status} ${result.body.slice(0, 500)}`);
+
+  const refreshResult = await callRoute(env.REFRESH_URL, "/api/cron/refresh", env.CRON_SECRET);
+  if (refreshResult.error) console.error(`refresh-scheduler: /api/cron/refresh request failed: ${refreshResult.error}`);
+  else console.log(`refresh-scheduler: /api/cron/refresh -> ${refreshResult.status} ${refreshResult.body.slice(0, 500)}`);
+
+  if (!isSuccessfulResponse(refreshResult)) {
+    console.error(
+      `refresh-scheduler: skipping /api/cron/geckoterminal this tick because /api/cron/refresh did not return 2xx `
+      + `(status ${refreshResult.status}${refreshResult.error ? `, error: ${refreshResult.error}` : ""}); `
+      + "avoiding additional database load while refresh may still be under pressure.",
+    );
+    return [refreshResult];
   }
-  return results;
+
+  const geckoTerminalResult = await callRoute(env.REFRESH_URL, "/api/cron/geckoterminal", env.CRON_SECRET);
+  if (geckoTerminalResult.error) console.error(`refresh-scheduler: /api/cron/geckoterminal request failed: ${geckoTerminalResult.error}`);
+  else console.log(`refresh-scheduler: /api/cron/geckoterminal -> ${geckoTerminalResult.status} ${geckoTerminalResult.body.slice(0, 500)}`);
+  return [refreshResult, geckoTerminalResult];
 }
 
 export default {

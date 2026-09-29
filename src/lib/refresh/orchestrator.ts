@@ -189,15 +189,21 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
     const candidates = PROVIDER_STEPS.filter((step) => !options.only || options.only.includes(step));
     const due = candidates.filter((step) => options.force || isProviderDue(step, lastSuccess[step], now()));
 
-    // Different providers have independent rate limits, so they run concurrently;
-    // each collector still serializes and paces its own requests.
-    await Promise.all(due.map(async (step) => {
+    // Providers run one at a time, in PROVIDER_STEPS order: each collector fetches
+    // then persists internally (see persist-snapshots.ts), so running them
+    // concurrently would mean up to four heavy Supabase writes landing on
+    // PostgreSQL at once. Sequential execution means only one provider's
+    // persistence is ever in flight, which is what actually reduces statement-
+    // timeout (57014) pressure; provider correctness and independent rate
+    // limits are unaffected; a provider's own collector still serializes and
+    // paces its own HTTP requests exactly as before.
+    for (const step of due) {
       const startedAt = now().toISOString();
       const definition = collectors[step];
       const skipReason = definition.skipReason?.() ?? null;
       if (skipReason) {
         await record({ step, status: "skipped", startedAt, finishedAt: now().toISOString(), detail: {}, error: skipReason });
-        return;
+        continue;
       }
       const timeoutMs = timeoutFor(step);
       const deadline = new AbortController();
@@ -234,7 +240,7 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
       } finally {
         clearTimeout(timer);
       }
-    }));
+    }
 
     // Renewal boundary between the providers phase and metrics: a run that is
     // still genuinely in progress extends its own lease here so it is never

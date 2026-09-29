@@ -27,6 +27,28 @@ import {
   type OnchainMarketsData,
 } from "../../types/token.ts";
 
+/**
+ * Runs `tasks` with at most `limit` in flight at once, preserving each task's own
+ * result/rejection at its original index. Used to bound how many expensive optional
+ * Supabase reads the dashboard fires at PostgreSQL simultaneously (see
+ * getLiveDashboardData): those reads already catch their own failures and fall back
+ * to empty/null data, so this only changes how much concurrent DB work they create,
+ * never whether a single failed read can fail the whole dashboard.
+ */
+async function withConcurrencyLimit<T>(limit: number, tasks: Array<() => Promise<T>>): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await tasks[index]();
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return results;
+}
+
 const OBSERVED_METRICS = [
   "price_usd", "price_change_24h_pct", "price_change_7d_pct", "market_cap_usd", "volume_24h_usd",
   "tvl_usd", "fees_24h_usd", "revenue_24h_usd", "circulating_supply", "total_supply", "maximum_supply",
@@ -551,21 +573,28 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
     // 30-day TVL change needs DeFiLlama TVL around 30 days ago (plus baseline tolerance).
     const tvlSince = new Date(Date.now() - (TVL_CHANGE_DAYS + TVL_BASELINE_TOLERANCE_DAYS + 1) * DAY_MS);
     const latestRead = readLatest(client, tokenIds);
-    const [latest, tvlHistory, logos, fdv, calculatedRows, volume7d] = await Promise.all([
-      latestRead,
-      readObservationWindow<DbObservation>(client, tokenIds, [{ providerId: "defillama", metricId: "tvl_usd" }], tvlSince).catch((error) => {
+    // Bounded to 2 concurrent Supabase reads at a time: these six each hit PostgreSQL
+    // independently (latest observations, TVL history, logos, FDV, calculated metrics,
+    // 7D volume), and firing all of them at once was adding to the statement-timeout
+    // (57014) pressure seen under load. Each read already handles its own optional
+    // failure (falls back to empty/null data below) — only the concurrency changes.
+    const [latest, tvlHistory, logos, fdv, calculatedRows, volume7d] = await withConcurrencyLimit(2, [
+      () => latestRead,
+      () => readObservationWindow<DbObservation>(client, tokenIds, [{ providerId: "defillama", metricId: "tvl_usd" }], tvlSince).catch((error) => {
         console.error("Dashboard TVL history read failed (30D TVL change shown as unavailable):", error);
         return [] as DbObservation[];
       }),
-      readTokenLogos(client, tokenIds),
-      readReportedFdv(client, tokenIds),
+      () => readTokenLogos(client, tokenIds),
+      () => readReportedFdv(client, tokenIds),
       // Calculated columns are optional context: a failed read hides them instead of failing the page.
-      readDashboardCalculated(client, tokenIds).catch((error) => {
+      () => readDashboardCalculated(client, tokenIds).catch((error) => {
         console.error("Dashboard calculated-metric read failed:", error);
         return [] as DbCalculatedValue[];
       }),
-      latestRead.then((rows) => readSevenDayVolumes(client, rows)),
-    ]);
+      () => latestRead.then((rows) => readSevenDayVolumes(client, rows)),
+    ] satisfies Array<() => Promise<unknown>>) as [
+      DbObservation[], DbObservation[], Record<string, string>, Record<string, { value: number; collectedAt: string }>, DbCalculatedValue[], Record<string, number>,
+    ];
     const refreshStatus = await readRefreshStatus(client, latest);
     const baseTokens = buildDashboardTokens(tokens, (chainResult.data ?? []) as DbChain[], mergeById(latest, tvlHistory));
     return {
