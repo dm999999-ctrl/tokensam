@@ -17,12 +17,16 @@ const MINUTE = 60 * 1000;
  * - timeoutMs: provider-fetch budget inside one run. Collectors fetch before
  *   writing, so a timeout aborts before any Supabase change.
  *
- * Quota notes (see docs/*-integration.md): one CoinGecko run is one
- * /coins/markets call (238 IDs < 250 per call), so hourly is ~744 calls/month
- * against the documented 10,000/month Demo allowance. DEX Screener uses ~13
- * requests per run against its documented 300/minute (unchanged by the
- * Phase 16 token expansion, which adds no new DEX Screener mappings).
- * DeFiLlama publishes no numeric free-tier limit, so it is refreshed least often.
+ * Quota notes (see docs/*-integration.md): at this 15-min interval, CoinGecko runs up
+ * to ~96 times/day (~2,880/month). Each run batches its ~238 tokens into requests of
+ * MAX_IDS_PER_REQUEST each (see coingecko.ts — kept deliberately small to avoid a
+ * CloudFront-level 403 unrelated to CoinGecko's own rate limiting), currently 3
+ * calls/run, for ~8,640 calls/month against the documented 10,000/month Demo
+ * allowance — reduce the interval or revisit the batch size if the token universe
+ * grows enough to push this over quota. DEX Screener uses ~13 requests per run
+ * against its documented 300/minute (unchanged by the Phase 16 token expansion,
+ * which adds no new DEX Screener mappings). DeFiLlama publishes no numeric
+ * free-tier limit, so it is refreshed least often.
  *
  * Providers run in parallel, then metrics (METRICS_TIMEOUT_MS). The longest
  * provider budget plus the metrics budget must stay below the cron route's

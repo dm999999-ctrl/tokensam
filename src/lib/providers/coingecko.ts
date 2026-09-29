@@ -8,7 +8,17 @@ import type { CollectorDiagnostics } from "../refresh/collector-diagnostics.ts";
 
 const PROVIDER_ID = "coingecko";
 const ENDPOINT_LABEL = "GET /coins/markets";
-const MAX_IDS_PER_REQUEST = 250;
+// A single request for this project's ~238 tokens (all fitting under the 250/request API
+// limit) produces a multi-thousand-character URL that an AWS CloudFront WAF in front of
+// CoinGecko's /coins/markets started rejecting outright with a CloudFront-branded 403 —
+// confirmed by testing the identical URL from multiple networks/regions, where only the
+// request's size/shape (not its origin) explained the failure. Splitting into smaller
+// batches keeps each URL well under whatever length triggered that. This value balances
+// that against the Demo plan's ~10,000 calls/month quota (see REFRESH_POLICY's quota notes
+// in config.ts): at the current 15-min cadence and 238 tokens, 80 keeps this to 3
+// calls/run (~8,640/month) — some margin, but revisit both this and quota headroom if the
+// token universe grows meaningfully past ~250.
+const MAX_IDS_PER_REQUEST = 80;
 const MAX_ATTEMPTS = 3;
 // A legacy official support article still documents 30 RPM, while the current
 // pricing page lists 100 RPM. Stay below the lower published limit.
