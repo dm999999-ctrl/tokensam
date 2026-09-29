@@ -93,7 +93,17 @@ async function run(env: Env): Promise<RouteResult[]> {
   const geckoTerminalResult = await callRoute(env.REFRESH_URL, "/api/cron/geckoterminal", env.CRON_SECRET);
   if (geckoTerminalResult.error) console.error(`refresh-scheduler: /api/cron/geckoterminal request failed: ${geckoTerminalResult.error}`);
   else console.log(`refresh-scheduler: /api/cron/geckoterminal -> ${geckoTerminalResult.status} ${geckoTerminalResult.body.slice(0, 500)}`);
-  return [refreshResult, geckoTerminalResult];
+
+  // /api/cron/retention has its own once-a-day due-check (retention windows are
+  // day-granular), so calling it on every 5-minute tick like the routes above is cheap:
+  // almost every tick is a `{"status":"skipped"}` no-op. Called regardless of whether
+  // GeckoTerminal ran or was skipped above, since retention is independent database
+  // maintenance, not additional load tied to a successful refresh.
+  const retentionResult = await callRoute(env.REFRESH_URL, "/api/cron/retention", env.CRON_SECRET);
+  if (retentionResult.error) console.error(`refresh-scheduler: /api/cron/retention request failed: ${retentionResult.error}`);
+  else console.log(`refresh-scheduler: /api/cron/retention -> ${retentionResult.status} ${retentionResult.body.slice(0, 500)}`);
+
+  return [refreshResult, geckoTerminalResult, retentionResult];
 }
 
 export default {

@@ -65,10 +65,16 @@ export async function runMetricsCalculation(client: SupabaseAdminClient, now = n
 
   const calculatedAt = now.toISOString();
   const rows = calculateAllMetrics(tokens, observations, latestDexRaw, calculatedAt);
+  // onConflict is (token_id,chain_id,metric_id) only — NOT input_fingerprint. Each run
+  // recomputes input_fingerprint from that run's inputs, so including it in the conflict
+  // target made every run insert a new row instead of updating the existing one for that
+  // metric, growing this table unboundedly (218k rows / 374MB within 6 days in production).
+  // The unique constraint on the table still includes input_fingerprint for data integrity,
+  // but the upsert target intentionally collapses to "one row per token+chain+metric".
   for (let offset = 0; offset < rows.length; offset += 500) {
     const { error } = await client
       .from("calculated_metric_observations")
-      .upsert(rows.slice(offset, offset + 500), { onConflict: "token_id,chain_id,metric_id,input_fingerprint" });
+      .upsert(rows.slice(offset, offset + 500), { onConflict: "token_id,chain_id,metric_id" });
     throwOnError(error, "upsert calculated metric observations");
   }
 
