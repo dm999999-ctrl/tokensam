@@ -54,7 +54,7 @@ test("2. a Phase 16 token with a stored CoinGecko observation shows real, non-fa
 });
 
 test("3. representative Phase 16 tokens across distinct chains and categories all resolve identically to the original 100", async () => {
-  const representative = ["fantom-ftm", "berachain-bera", "ethereum-snx", "solana-mnde", "bnb-chain-xvs", "ton-not", "polygon-ghst", "arbitrum-magic", "tron-usdd"];
+  const representative = ["fantom-ftm", "berachain-bera", "ethereum-snx", "solana-mnde", "bnb-chain-xvs", "ton-not", "polygon-ghst", "arbitrum-magic", "linea-linea"];
   for (const tokenId of representative) {
     const token = byId(tokenId);
     assert.ok(token, `${tokenId} is a real canonical token`);

@@ -50,9 +50,9 @@ test("1. the 50 Phase 15 tokens have explicit, unique CoinGecko IDs and chain-sc
   assert.notEqual(coingeckoTokenIds["bitcoin-cash-bch"], coingeckoTokenIds["bitcoin-btc"]);
 });
 
-test("2. universe diversity: 104 chains and 22 categories, with no chain holding a native asset twice", () => {
-  assert.equal(new Set(canonicalTokens.map((token) => token.chainId)).size, 104);
-  assert.equal(new Set(canonicalTokens.map((token) => token.category)).size, 22);
+test("2. universe diversity: 106 chains and 23 categories, with no chain holding a native asset twice", () => {
+  assert.equal(new Set(canonicalTokens.map((token) => token.chainId)).size, 106);
+  assert.equal(new Set(canonicalTokens.map((token) => token.category)).size, 23);
   for (const category of ["Restaking", "RWA", "Privacy", "DePIN", "AI & compute", "Interoperability", "Derivatives", "Gaming", "Exchange token", "Identity"]) {
     assert.ok(canonicalTokens.some((token) => token.category === category), `${category} is represented`);
   }

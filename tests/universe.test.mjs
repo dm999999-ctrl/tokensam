@@ -60,7 +60,7 @@ test("provider mappings are unique, explicit, chain-consistent, and leave unsupp
   }
   assert.equal(new Set(defillamaProtocolMappings.map((mapping) => mapping.tokenId)).size, defillamaProtocolMappings.length);
   assert.ok(defillamaProtocolMappings.every((mapping) => ids.has(mapping.tokenId) && mapping.externalAssetId && mapping.relationship));
-  assert.equal(nativeTokenIds.size, 94);
+  assert.equal(nativeTokenIds.size, 93);
   assert.ok(canonicalTokens.every((token) => token.isNative === nativeTokenIds.has(token.id)), "native flags agree with the native set");
 });
 
