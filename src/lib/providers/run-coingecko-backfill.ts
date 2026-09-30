@@ -85,7 +85,13 @@ export async function runCoinGeckoBackfill(
       continue;
     }
     try {
-      const daily = await request(coinId, { days: BACKFILL_DAYS, interval: "daily" });
+      // No `interval` param: CoinGecko restricts the explicit interval=daily parameter to
+      // Enterprise plans, and Demo-tier requests using it were observed failing intermittently
+      // with 401 (not tied to a specific token -- the same key succeeded and failed on the
+      // same call shape across different runs). Omitting it lets CoinGecko auto-select
+      // granularity, which for a 90-day range is documented as hourly -- more than dense
+      // enough for the daily-closest-to-midnight sampling this backfill exists to support.
+      const daily = await request(coinId, { days: BACKFILL_DAYS });
       const hourly = await request(coinId, { days: 7 });
       const notAfter = Object.fromEntries(latest
         .filter((row) => row.token_id === token.id && row.provider_id === "coingecko")

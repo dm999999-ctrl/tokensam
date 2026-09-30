@@ -4,13 +4,15 @@ import type { NormalizedObservation, ProviderAsset, ProviderSnapshot } from "./t
 /**
  * CoinGecko historical market chart (GET /coins/{id}/market_chart).
  *
- * Per the official reference: with `days` 2-90 the API returns hourly points,
- * `interval=daily` returns daily 00:00 UTC points on all plans, and the arrays
- * are [unix_ms, value] for prices, market_caps, and total_volumes (the rolling
- * 24-hour volume at that time). Used only by the manual, bounded backfill.
+ * Per the official reference: with `days` 2-90 the API auto-selects hourly points;
+ * `interval=daily` is documented as Enterprise-plan only, and Demo-tier requests
+ * using it were observed failing intermittently with 401 (not tied to a specific
+ * token), so it is never passed here -- granularity is left to auto-selection. The
+ * arrays are [unix_ms, value] for prices, market_caps, and total_volumes (the
+ * rolling 24-hour volume at that time). Used only by the manual, bounded backfill.
  */
 
-export const BACKFILL_ENDPOINT_LABEL = "GET /coins/{id}/market_chart (days=90&interval=daily; days=7 hourly)";
+export const BACKFILL_ENDPOINT_LABEL = "GET /coins/{id}/market_chart (days=90 auto-hourly; days=7 hourly)";
 const MAX_ATTEMPTS = 3;
 const SERIES: { field: "prices" | "market_caps" | "total_volumes"; metricId: string }[] = [
   { field: "prices", metricId: "price_usd" },
@@ -124,7 +126,7 @@ export function normalizeMarketChartHistory(input: {
     observedAt: observedTimes.at(-1)!,
     collectedAt: input.collectedAt,
     rawPayload: {
-      request: { daily: { days: 90, interval: "daily" }, hourly: { days: 7 } },
+      request: { daily: { days: 90 }, hourly: { days: 7 } },
       daily: { prices: pairs(input.daily.prices), market_caps: pairs(input.daily.market_caps), total_volumes: pairs(input.daily.total_volumes) },
       hourly: { prices: pairs(input.hourly.prices), market_caps: pairs(input.hourly.market_caps), total_volumes: pairs(input.hourly.total_volumes) },
       retentionNote: "CoinGecko market_chart arrays as returned for this backfill (numeric pairs only).",
