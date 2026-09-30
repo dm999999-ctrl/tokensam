@@ -1,12 +1,12 @@
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
-// Lowered from 1000 after 2026-09-30's production incident: retention_collapse_series_intraday_batch's
-// correlated EXISTS subquery repeatedly hit "canceling statement due to statement timeout" at
-// batch_size=1000 on this project's Nano compute tier, and because a single function's error used to
-// abort the entire run (see below), every other function -- including retention_expire_raw_provider_records_batch,
-// last in RETENTION_FUNCTIONS -- silently stopped running too. Manual cleanup that day confirmed batches of
-// 100-500 complete reliably against the same tables; 200 keeps margin under live cron write contention.
-const BATCH_SIZE = 200;
+// Lowered from 1000, then from 200, during 2026-09-30's production incident. batch_size=200 still hit
+// "canceling statement due to statement timeout" (the database default, 2 minutes -- service_role has
+// no shorter override) on the three functions whose correlated EXISTS subquery has no index led by
+// metric_id or observed_at to narrow the outer scan; only the (token_id, metric_id, observed_at) index
+// helps the subquery itself, not finding candidate rows in the first place. Until that's indexed
+// properly, keep this small enough that even a slow candidate-row scan finishes inside 2 minutes.
+const BATCH_SIZE = 40;
 const MAX_BATCHES_PER_FUNCTION = 1000; // safety ceiling: 200k rows/function/run, unchanged from the prior 1000x200
 
 const RETENTION_FUNCTIONS = [
