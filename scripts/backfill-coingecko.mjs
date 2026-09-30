@@ -25,8 +25,10 @@ loadLocalEnvironment();
 try {
   const { createSupabaseAdminClient } = await import("../src/lib/supabase/admin.ts");
   const { runCoinGeckoBackfill, MAX_BACKFILL_TOKENS } = await import("../src/lib/providers/run-coingecko-backfill.ts");
+  const { MIN_REQUEST_INTERVAL_MS } = await import("../src/lib/providers/coingecko.ts");
   const { canonicalTokens } = await import("../src/data/canonical-tokens.ts");
   const client = createSupabaseAdminClient();
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   // MAX_BACKFILL_TOKENS caps a single call; auto-chunk the full universe (or an explicit
   // --tokens list) into batches that size instead of requiring the caller to split it
@@ -38,6 +40,10 @@ try {
   const allResults = [];
   let totalRequests = 0;
   for (const [index, batch] of batches.entries()) {
+    // runCoinGeckoBackfill's own pacing counter resets to 0 on each call, so its first
+    // request wouldn't otherwise wait -- without this, back-to-back batches could fire
+    // two requests less than MIN_REQUEST_INTERVAL_MS apart at the boundary.
+    if (index > 0) await sleep(MIN_REQUEST_INTERVAL_MS);
     if (batches.length > 1) console.log(`-- Batch ${index + 1}/${batches.length} (${batch.length} tokens) --`);
     const summary = await runCoinGeckoBackfill(client, { tokenIds: batch, dryRun, log: (line) => console.log(line) });
     allResults.push(...summary.results);
