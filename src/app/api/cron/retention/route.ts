@@ -61,12 +61,16 @@ export async function GET(request: Request): Promise<Response> {
   console.log(`[retention-cron] started (${trigger}), run ${runId}, at ${now.toISOString()}.`);
   try {
     const result = await runRetentionBatches(client, routeStart + PROCESSING_BUDGET_MS);
-    const status = result.stoppedEarly.length > 0 ? "partial" : "succeeded";
+    const failedFns = Object.keys(result.failed);
+    // A function's own RPC error (e.g. a timeout) no longer aborts the run -- see run-retention.ts --
+    // so it surfaces here as "partial" alongside stoppedEarly, never as the route's own "failed" status.
+    const status = result.stoppedEarly.length > 0 || failedFns.length > 0 ? "partial" : "succeeded";
     const finalized = await finishRetentionLock(client, runId, lockToken, status, new Date(), result, null);
     console.log(
       `[retention-cron] ${status}: ${result.totalDeleted} rows deleted across `
       + `${Object.values(result.batches).reduce((sum, n) => sum + n, 0)} batches`
-      + `${result.stoppedEarly.length > 0 ? ` (stopped early on: ${result.stoppedEarly.join(", ")})` : ""}.`,
+      + `${result.stoppedEarly.length > 0 ? ` (stopped early on: ${result.stoppedEarly.join(", ")})` : ""}`
+      + `${failedFns.length > 0 ? ` (errored on: ${failedFns.map((fn) => `${fn}: ${result.failed[fn as keyof typeof result.failed]}`).join("; ")})` : ""}.`,
     );
     if (!finalized) {
       console.error(`[retention-cron] run ${runId} lost lease ownership before finalization; its deletes are already committed.`);
