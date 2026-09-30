@@ -24,14 +24,35 @@ loadLocalEnvironment();
 
 try {
   const { createSupabaseAdminClient } = await import("../src/lib/supabase/admin.ts");
-  const { runCoinGeckoBackfill } = await import("../src/lib/providers/run-coingecko-backfill.ts");
-  const summary = await runCoinGeckoBackfill(createSupabaseAdminClient(), { tokenIds, dryRun, log: (line) => console.log(line) });
-  const count = (status) => summary.results.filter((result) => result.status === status).length;
-  const added = summary.results.reduce((sum, result) => sum + result.newObservations, 0);
-  console.log(`CoinGecko backfill ${dryRun ? "(dry run, nothing written) " : ""}completed: ${summary.requests} request(s).`);
+  const { runCoinGeckoBackfill, MAX_BACKFILL_TOKENS } = await import("../src/lib/providers/run-coingecko-backfill.ts");
+  const { canonicalTokens } = await import("../src/data/canonical-tokens.ts");
+  const client = createSupabaseAdminClient();
+
+  // MAX_BACKFILL_TOKENS caps a single call; auto-chunk the full universe (or an explicit
+  // --tokens list) into batches that size instead of requiring the caller to split it
+  // manually. Sequential (not parallel), same pacing as the live collector.
+  const allIds = tokenIds ?? canonicalTokens.map((token) => token.id);
+  const batches = [];
+  for (let i = 0; i < allIds.length; i += MAX_BACKFILL_TOKENS) batches.push(allIds.slice(i, i + MAX_BACKFILL_TOKENS));
+
+  const allResults = [];
+  let totalRequests = 0;
+  for (const [index, batch] of batches.entries()) {
+    if (batches.length > 1) console.log(`-- Batch ${index + 1}/${batches.length} (${batch.length} tokens) --`);
+    const summary = await runCoinGeckoBackfill(client, { tokenIds: batch, dryRun, log: (line) => console.log(line) });
+    allResults.push(...summary.results);
+    totalRequests += summary.requests;
+    if (summary.stoppedEarly) {
+      console.log(`${summary.stoppedEarly} Stopping remaining batches.`);
+      break;
+    }
+  }
+
+  const count = (status) => allResults.filter((result) => result.status === status).length;
+  const added = allResults.reduce((sum, result) => sum + result.newObservations, 0);
+  console.log(`CoinGecko backfill ${dryRun ? "(dry run, nothing written) " : ""}completed: ${totalRequests} request(s).`);
   console.log(`Tokens backfilled: ${count("backfilled")}; already up to date: ${count("up_to_date")}; failed: ${count("failed")}; skipped: ${count("skipped")}.`);
   console.log(`${dryRun ? "Observations that would be added" : "New historical observations stored"}: ${added}.`);
-  if (summary.stoppedEarly) console.log(summary.stoppedEarly);
   if (count("failed") > 0) process.exitCode = 1;
 } catch (error) {
   const message = error instanceof Error ? error.message : "Unknown backfill error.";
