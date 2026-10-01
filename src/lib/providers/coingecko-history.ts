@@ -10,7 +10,7 @@ import type { NormalizedObservation, ProviderAsset, ProviderSnapshot } from "./t
  * daily history rather than another large hourly archive.
  */
 
-export const BACKFILL_ENDPOINT_LABEL = "GET /coins/{id}/market_chart (days=90 auto-hourly; days=7 hourly)";
+export const BACKFILL_ENDPOINT_LABEL = "GET /coins/{id}/market_chart (days=90, sampled daily)";
 const MAX_ATTEMPTS = 3;
 const SERIES: { field: "prices" | "market_caps" | "total_volumes"; metricId: string }[] = [
   { field: "prices", metricId: "price_usd" },
@@ -93,8 +93,7 @@ function dailyPairs(value: unknown): [number, number][] {
  * - Provider timestamps are kept as observed_at; collection time is separate.
  * - Points at or after `notAfter` (the newest stored observation for that
  *   metric) are excluded, so backfill never supersedes live refresh data.
- * - Points whose timestamp is already stored (`existing`) are excluded, and a
- *   timestamp appearing in both the daily and hourly responses is kept once.
+ * - Points whose timestamp is already stored (`existing`) are excluded.
  */
 export function normalizeMarketChartHistory(input: {
   asset: ProviderAsset;
