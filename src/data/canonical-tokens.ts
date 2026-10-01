@@ -295,7 +295,21 @@ const phase16OneThirtyEight: CanonicalTokenDefinition[] = [
   { id: "neon-evm-neon", name: "Neon", symbol: "NEON", chainId: "neon-evm", chainName: "Neon EVM", category: "Layer 2", isNative: false, contractAddress: null, identityNote: "NEON on Neon EVM (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
 ];
 
-export const canonicalTokens: CanonicalTokenDefinition[] = [...originalTwenty, ...additionalThirty, ...phase15Fifty, ...phase16OneThirtyEight];
+const retiredCanonicalSymbols = new Set([
+  "ACX", "AIOZ", "AKT", "ALCX", "ATH", "AURORA", "BAL", "BGB", "BIFI", "BLAST",
+  "BOBA", "CORE", "CRO", "DAI", "DRIFT", "EOS", "EURC", "FLR", "FTM", "GFI",
+  "GHST", "GRASS", "GT", "HNT", "KAS", "KCS", "LEO", "MNDE", "MNT", "MON",
+  "NEON", "NOS", "OCEAN", "OKB", "OM", "PEAQ", "POKT", "PRIME", "PYUSD", "RON",
+  "RSS3", "SAFE", "SCRT", "SD", "STORJ", "SYS", "TAIKO", "TEL", "TLOS", "USDe",
+  "VVV", "XCH", "XDC", "XMR", "XRD", "ZETA", "ZORA",
+]);
+
+export const canonicalTokens: CanonicalTokenDefinition[] = [
+  ...originalTwenty,
+  ...additionalThirty,
+  ...phase15Fifty,
+  ...phase16OneThirtyEight,
+].filter((token) => !retiredCanonicalSymbols.has(token.symbol.toUpperCase()));
 export const additionalCanonicalTokens = additionalThirty;
 export const phase15CanonicalTokens = phase15Fifty;
 export const phase16CanonicalTokens = phase16OneThirtyEight;
