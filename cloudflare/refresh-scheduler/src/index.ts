@@ -215,29 +215,29 @@ async function run(env: Env): Promise<RouteResult[]> {
     }
   }
 
-  if (!isSuccessfulResponse(refreshResult)) {
+  let geckoTerminalResult: RouteResult | null = null;
+
+  if (isSuccessfulResponse(refreshResult)) {
+    geckoTerminalResult = await callRoute(env.REFRESH_URL, "/api/cron/geckoterminal", env.CRON_SECRET);
+    if (geckoTerminalResult.error) console.error(`refresh-scheduler: /api/cron/geckoterminal request failed: ${geckoTerminalResult.error}`);
+    else console.log(`refresh-scheduler: /api/cron/geckoterminal -> ${geckoTerminalResult.status} ${geckoTerminalResult.body.slice(0, 500)}`);
+  } else {
     console.error(
       `refresh-scheduler: skipping /api/cron/geckoterminal this tick because /api/cron/refresh did not return 2xx `
       + `(status ${refreshResult.status}${refreshResult.error ? `, error: ${refreshResult.error}` : ""}); `
-      + "avoiding additional database load while refresh may still be under pressure.",
+      + "retention will still be attempted independently.",
     );
-    return [refreshResult];
   }
 
-  const geckoTerminalResult = await callRoute(env.REFRESH_URL, "/api/cron/geckoterminal", env.CRON_SECRET);
-  if (geckoTerminalResult.error) console.error(`refresh-scheduler: /api/cron/geckoterminal request failed: ${geckoTerminalResult.error}`);
-  else console.log(`refresh-scheduler: /api/cron/geckoterminal -> ${geckoTerminalResult.status} ${geckoTerminalResult.body.slice(0, 500)}`);
-
-  // /api/cron/retention has its own once-a-day due-check (retention windows are
-  // day-granular), so calling it on every 5-minute tick like the routes above is cheap:
-  // almost every tick is a `{"status":"skipped"}` no-op. Called regardless of whether
-  // GeckoTerminal ran or was skipped above, since retention is independent database
-  // maintenance, not additional load tied to a successful refresh.
+  // Retention is independent of refresh success. If a scheduled retention window is due,
+  // this call must be attempted even when /api/cron/refresh failed. A failed retention
+  // attempt leaves the last successful retention timestamp unchanged, so the same
+  // scheduled window remains due and is retried on the next 5-minute Worker tick.
   const retentionResult = await callRoute(env.REFRESH_URL, "/api/cron/retention", env.CRON_SECRET);
   if (retentionResult.error) console.error(`refresh-scheduler: /api/cron/retention request failed: ${retentionResult.error}`);
   else console.log(`refresh-scheduler: /api/cron/retention -> ${retentionResult.status} ${retentionResult.body.slice(0, 500)}`);
 
-  return [refreshResult, geckoTerminalResult, retentionResult];
+  return [refreshResult, ...(geckoTerminalResult ? [geckoTerminalResult] : []), retentionResult];
 }
 
 export default {
