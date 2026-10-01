@@ -1,3 +1,4 @@
+import { canonicalTokens } from "../../data/canonical-tokens.ts";
 import { geckoTerminalTokenMappings } from "../../data/geckoterminal-token-mappings.ts";
 import {
   configuredGeckoTerminalAssets,
@@ -89,7 +90,10 @@ export async function runGeckoTerminalCollection(
   // Fail before provider calls if the Supabase migration has not been applied.
   await verifySchema(client);
   return withGeckoTerminalSyncLock(client, "manual", LOCK_LEASE_MS, async () => {
-    const assets = configuredGeckoTerminalAssets().filter((asset) => !options.tokenIds || options.tokenIds.includes(asset.tokenId));
+    const activeCanonicalTokenIds = new Set(canonicalTokens.map((token) => token.id));
+    const assets = configuredGeckoTerminalAssets().filter(
+      (asset) => activeCanonicalTokenIds.has(asset.tokenId) && (!options.tokenIds || options.tokenIds.includes(asset.tokenId)),
+    );
     const provider = new GeckoTerminalMarketDataProvider(options);
     const snapshots = await provider.fetchSnapshots(assets);
     if (snapshots.length !== assets.length) throw new Error("GeckoTerminal returned an incomplete token collection.");
@@ -179,7 +183,10 @@ export async function runGeckoTerminalScheduledCollection(
 ): Promise<GeckoTerminalScheduledResult & { ownershipLostDuringCollection: boolean }> {
   const startedAt = Date.now();
   await verifySchema(client);
-  const assets = configuredGeckoTerminalAssets().filter((asset) => !options.tokenIds || options.tokenIds.includes(asset.tokenId));
+  const activeCanonicalTokenIds = new Set(canonicalTokens.map((token) => token.id));
+  const assets = configuredGeckoTerminalAssets().filter(
+    (asset) => activeCanonicalTokenIds.has(asset.tokenId) && (!options.tokenIds || options.tokenIds.includes(asset.tokenId)),
+  );
   const startTokenId = options.startTokenId !== undefined ? options.startTokenId : await resolveGeckoTerminalStartTokenId(client);
   let ownershipLostDuringCollection = false;
   const onHeartbeat = options.onHeartbeat
