@@ -85,21 +85,17 @@ export async function runCoinGeckoBackfill(
       continue;
     }
     try {
-      // No `interval` param: CoinGecko restricts the explicit interval=daily parameter to
-      // Enterprise plans, and Demo-tier requests using it were observed failing intermittently
-      // with 401 (not tied to a specific token -- the same key succeeded and failed on the
-      // same call shape across different runs). Omitting it lets CoinGecko auto-select
-      // granularity, which for a 90-day range is documented as hourly -- more than dense
-      // enough for the daily-closest-to-midnight sampling this backfill exists to support.
+      // No `interval` param: CoinGecko restricts explicit interval=daily on the relevant
+      // plans. Omitting it lets CoinGecko auto-select hourly granularity for a 90-day
+      // range; normalizeMarketChartHistory then selects one real provider point per UTC
+      // day, nearest to midnight.
       const daily = await request(coinId, { days: BACKFILL_DAYS });
-      const hourly = await request(coinId, { days: 7 });
       const notAfter = Object.fromEntries(latest
         .filter((row) => row.token_id === token.id && row.provider_id === "coingecko")
         .map((row) => [row.metric_id, row.observed_at]));
       const snapshot = normalizeMarketChartHistory({
         asset: { tokenId: token.id, chainId: token.chainId, externalAssetId: coinId },
         daily,
-        hourly,
         collectedAt: now().toISOString(),
         notAfter,
         existing: await existingKeys(client, token.id, new Date(now().getTime() - (BACKFILL_DAYS + 1) * 24 * 60 * 60 * 1000)),
