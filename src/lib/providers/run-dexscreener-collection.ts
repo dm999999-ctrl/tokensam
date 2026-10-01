@@ -1,3 +1,4 @@
+import { canonicalTokens } from "../../data/canonical-tokens.ts";
 import { dexScreenerTokenMappings } from "../../data/dexscreener-token-mappings.ts";
 import {
   configuredDexScreenerAssets,
@@ -42,7 +43,10 @@ export async function runDexScreenerCollection(
 ) {
   // Fail before provider calls if the Supabase migration has not been applied.
   await verifySchema(client);
-  const assets = configuredDexScreenerAssets().filter((asset) => !options.tokenIds || options.tokenIds.includes(asset.tokenId));
+  const activeCanonicalTokenIds = new Set(canonicalTokens.map((token) => token.id));
+  const assets = configuredDexScreenerAssets().filter(
+    (asset) => activeCanonicalTokenIds.has(asset.tokenId) && (!options.tokenIds || options.tokenIds.includes(asset.tokenId)),
+  );
   const provider = new DexScreenerMarketDataProvider(options);
   const snapshots = await provider.fetchSnapshots(assets);
   if (snapshots.length !== assets.length) throw new Error("DEX Screener returned an incomplete token collection.");
@@ -78,7 +82,7 @@ export async function runDexScreenerCollection(
 
   return {
     provider: "dexscreener",
-    tokensInUniverse: dexScreenerTokenMappings.length,
+    tokensInUniverse: canonicalTokens.length,
     mappedTokens: assets.length,
     unmappedTokens: getUnmappedDexScreenerTokens(),
     returnedTokens: snapshots.length,
