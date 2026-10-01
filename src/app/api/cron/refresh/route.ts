@@ -42,6 +42,49 @@ export async function GET(request: Request): Promise<Response> {
       force: url.searchParams.get("force") === "1",
       only: requested as ProviderStep[] | undefined,
     });
+
+    // Check storage after every scheduled refresh so the Cloudflare scheduler can
+    // alert before the Supabase Free-plan limit is reached. The alert is edge-triggered:
+    // once 440 MiB is crossed, it fires once and stays quiet until usage falls back below
+    // the threshold and crosses it again.
+    const { data: databaseSizeBytes, error: databaseSizeError } = await client.rpc("get_database_size_bytes");
+    if (databaseSizeError) {
+      console.error("Database size check failed:", databaseSizeError);
+    }
+
+    let databaseAlert = false;
+    const databaseSizeMb = typeof databaseSizeBytes === "number"
+      ? databaseSizeBytes / (1024 * 1024)
+      : null;
+    if (typeof databaseSizeBytes === "number") {
+      const thresholdBytes = 440 * 1024 * 1024;
+      const { data: monitorState, error: monitorStateError } = await client
+        .from("database_monitor_state")
+        .select("alert_active")
+        .eq("id", true)
+        .maybeSingle();
+
+      if (monitorStateError) {
+        console.error("Database monitor state read failed:", monitorStateError);
+      } else {
+        const isOverThreshold = databaseSizeBytes >= thresholdBytes;
+        if (isOverThreshold && !monitorState?.alert_active) {
+          databaseAlert = true;
+        }
+
+        const { error: monitorStateWriteError } = await client
+          .from("database_monitor_state")
+          .upsert({
+            id: true,
+            alert_active: isOverThreshold,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "id" });
+
+        if (monitorStateWriteError) {
+          console.error("Database monitor state write failed:", monitorStateWriteError);
+        }
+      }
+    }
     // "lost_ownership" means this invocation's lease was reclaimed mid-run (see
     // runDataRefresh): its recorded steps are still committed, but it could not
     // finalize the run's own status row, so it is reported distinctly rather
@@ -55,6 +98,9 @@ export async function GET(request: Request): Promise<Response> {
       failed: result.steps.filter((step) => step.status === "failed").map((step) => step.step),
       timedOut: result.steps.filter((step) => step.status === "timed_out").map((step) => step.step),
       metrics: result.steps.find((step) => step.step === "metrics")?.status ?? null,
+      databaseSizeBytes: typeof databaseSizeBytes === "number" ? databaseSizeBytes : null,
+      databaseSizeMb,
+      databaseAlert,
       steps: result.steps.map(({ step, status: stepStatus, finishedAt, error }) => ({ step, status: stepStatus, finishedAt, error })),
     }, { status });
   } catch (error) {
