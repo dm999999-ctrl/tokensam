@@ -345,7 +345,7 @@ function normalizeDefiLlamaHistory(
           currentChainTvls: protocol.currentChainTvls ?? null,
           tvl: points,
         },
-        retentionNote: `DeFiLlama protocol identity, current chain TVL, and raw TVL points within the ${HISTORY_DAYS}-day normalization window are retained. Older TVL points and per-token/per-chain breakdowns are omitted to keep the raw snapshot bounded.`,
+        retentionNote: `DeFiLlama protocol identity and one real TVL point per UTC day within the ${HISTORY_DAYS}-day normalization window are retained. Older TVL points and per-token/per-chain breakdowns are omitted to keep the raw snapshot bounded.`,
       },
       observations: points.map((point) =>
         observation(
