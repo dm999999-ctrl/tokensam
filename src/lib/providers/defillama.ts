@@ -290,7 +290,22 @@ export function normalizeDefiLlamaCurrent(
  * the record is not the verified one or has no usable points, so a history
  * run never writes an "unavailable" row that would mask the current value.
  */
-export function normalizeDefiLlamaHistory(
+export function dailyHistoryPoints(points: Array<{ date?: number | null; totalLiquidityUSD?: number | null }>): Array<{ date?: number | null; totalLiquidityUSD?: number | null }> {
+  const byDay = new Map<string, { date?: number | null; totalLiquidityUSD?: number | null }>();
+  for (const point of points) {
+    if (!isNumber(point.date) || !isNumber(point.totalLiquidityUSD)) continue;
+    const dayStart = new Date(point.date * 1000);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const day = dayStart.toISOString().slice(0, 10);
+    const previous = byDay.get(day);
+    if (!previous || Math.abs(point.date * 1000 - dayStart.getTime()) < Math.abs((previous.date ?? 0) * 1000 - dayStart.getTime())) {
+      byDay.set(day, point);
+    }
+  }
+  return [...byDay.values()].sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+}
+
+function normalizeDefiLlamaHistory(
   asset: DefiLlamaProtocolAsset,
   protocol: ProtocolPayload,
   collectedAt = new Date().toISOString(),
@@ -308,9 +323,7 @@ export function normalizeDefiLlamaHistory(
   const tvlWithinWindow = series.filter(
     (point) => isNumber(point.date) && point.date >= cutoffSeconds && point.date <= now.getTime() / 1000,
   );
-  const points = tvlWithinWindow
-    .filter((point) => isNumber(point.totalLiquidityUSD))
-    .sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+  const points = dailyHistoryPoints(tvlWithinWindow);
   const latest = points.at(-1);
   if (!latest) {
     return { snapshot: null, skipReason: "No numeric protocol TVL point was returned in the requested history window." };
@@ -330,7 +343,7 @@ export function normalizeDefiLlamaHistory(
           name: protocol.name ?? null,
           symbol: protocol.symbol ?? null,
           currentChainTvls: protocol.currentChainTvls ?? null,
-          tvl: tvlWithinWindow,
+          tvl: points,
         },
         retentionNote: `DeFiLlama protocol identity, current chain TVL, and raw TVL points within the ${HISTORY_DAYS}-day normalization window are retained. Older TVL points and per-token/per-chain breakdowns are omitted to keep the raw snapshot bounded.`,
       },
