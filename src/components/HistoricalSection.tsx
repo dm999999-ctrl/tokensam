@@ -16,6 +16,23 @@ const SERIES: Record<HistoricalMetric, { label: string; color: string }> = {
 };
 const AXIS = { fill: "#7d776c", fontSize: 11 };
 
+function chartDisplayPoints(points: { timestamp: string; valueUsd: number }[], period: HistoricalPeriod) {
+  if (period === "24H") return points;
+
+  // Retention intentionally keeps recent observations at higher frequency than
+  // older observations. The chart should not expose that storage density as
+  // visual noise, so 7D/30D/90D use one actual stored observation per UTC day.
+  // No values are interpolated or synthesized; days with no stored observation
+  // remain gaps in the underlying history.
+  const byDay = new Map<string, { timestamp: string; valueUsd: number }>();
+  for (const point of points) {
+    const day = new Date(Date.parse(point.timestamp)).toISOString().slice(0, 10);
+    const previous = byDay.get(day);
+    if (!previous || Date.parse(point.timestamp) > Date.parse(previous.timestamp)) byDay.set(day, point);
+  }
+  return [...byDay.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+}
+
 function utcLabel(time: number, withTime = true) {
   return new Date(time).toLocaleString("en-GB", withTime
     ? { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" }
@@ -43,7 +60,8 @@ function ChartCard({ metric, data, period, wide = false }: { metric: HistoricalM
   const coverage = series.periods[period];
   const points = pointsInPeriod(series.points, period, new Date(data.asOf));
   // A numeric time axis keeps spacing proportional to time when daily and hourly points are mixed.
-  const chartPoints = points.map((item) => ({ time: Date.parse(item.timestamp), valueUsd: item.valueUsd }));
+  const displayPoints = chartDisplayPoints(points, period);
+  const chartPoints = displayPoints.map((item) => ({ time: Date.parse(item.timestamp), valueUsd: item.valueUsd }));
   const latest = points.at(-1);
   const hasTrend = coverage.status === "available";
   const change = hasTrend ? formatChange(coverageChangePct(points)) : null;
@@ -74,7 +92,7 @@ function ChartCard({ metric, data, period, wide = false }: { metric: HistoricalM
               <Tooltip content={<ChartTooltip seriesLabel={label} />} cursor={{ stroke: "#6d6559", strokeDasharray: "3 3" }} />
               <Line
                 type="linear" dataKey="valueUsd" name={label} stroke={color} strokeWidth={1.75}
-                dot={points.length <= MAX_POINTS_WITH_DOTS ? { r: 2, fill: color, strokeWidth: 0 } : false}
+                dot={displayPoints.length <= MAX_POINTS_WITH_DOTS ? { r: 2, fill: color, strokeWidth: 0 } : false}
                 activeDot={{ r: 3.5, fill: color, stroke: "#0b0b0c", strokeWidth: 1.5 }}
                 isAnimationActive={false}
               />
