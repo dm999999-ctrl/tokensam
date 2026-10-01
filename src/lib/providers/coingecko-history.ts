@@ -72,6 +72,21 @@ function pairs(value: unknown): [number, number][] {
     && typeof pair[0] === "number" && Number.isFinite(pair[0]) && typeof pair[1] === "number" && Number.isFinite(pair[1]));
 }
 
+function dailyPairs(value: unknown): [number, number][] {
+  const points = pairs(value);
+  const byDay = new Map<string, [number, number]>();
+  for (const point of points) {
+    const dayStart = new Date(point[0]);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const day = dayStart.toISOString().slice(0, 10);
+    const previous = byDay.get(day);
+    if (!previous || Math.abs(point[0] - dayStart.getTime()) < Math.abs(previous[0] - dayStart.getTime())) {
+      byDay.set(day, point);
+    }
+  }
+  return [...byDay.values()].sort((a, b) => a[0] - b[0]);
+}
+
 /**
  * Convert market chart payloads into historical observations for one asset.
  *
@@ -86,7 +101,6 @@ function pairs(value: unknown): [number, number][] {
 export function normalizeMarketChartHistory(input: {
   asset: ProviderAsset;
   daily: MarketChartPayload;
-  hourly: MarketChartPayload;
   collectedAt: string;
   notAfter: Partial<Record<string, string>>;
   existing: Set<string>;
@@ -95,8 +109,7 @@ export function normalizeMarketChartHistory(input: {
   for (const { field, metricId } of SERIES) {
     const cutoff = input.notAfter[metricId] ? Date.parse(input.notAfter[metricId]!) : Number.POSITIVE_INFINITY;
     const seen = new Set<string>();
-    for (const [source, granularity] of [[input.daily, "daily"], [input.hourly, "hourly"]] as const) {
-      for (const [timeMs, value] of pairs(source[field])) {
+    for (const [timeMs, value] of dailyPairs(input.daily[field])) {
         const observedAt = new Date(timeMs).toISOString();
         const key = `${metricId}|${observedAt}`;
         if (timeMs >= cutoff || seen.has(key) || input.existing.has(key)) continue;
@@ -112,7 +125,7 @@ export function normalizeMarketChartHistory(input: {
           windowDays: null,
           scope: "token",
           sourceField: `market_chart.${field}`,
-          note: `CoinGecko historical market_chart point (${granularity} granularity), backfilled with the provider timestamp.`,
+          note: "CoinGecko historical market_chart point sampled to one observation per UTC day, using the provider timestamp.",
         });
       }
     }
@@ -126,10 +139,9 @@ export function normalizeMarketChartHistory(input: {
     observedAt: observedTimes.at(-1)!,
     collectedAt: input.collectedAt,
     rawPayload: {
-      request: { daily: { days: 90 }, hourly: { days: 7 } },
-      daily: { prices: pairs(input.daily.prices), market_caps: pairs(input.daily.market_caps), total_volumes: pairs(input.daily.total_volumes) },
-      hourly: { prices: pairs(input.hourly.prices), market_caps: pairs(input.hourly.market_caps), total_volumes: pairs(input.hourly.total_volumes) },
-      retentionNote: "CoinGecko market_chart arrays as returned for this backfill (numeric pairs only).",
+      request: { days: 90, sampling: "nearest point to 00:00 UTC per day" },
+      daily: { prices: dailyPairs(input.daily.prices), market_caps: dailyPairs(input.daily.market_caps), total_volumes: dailyPairs(input.daily.total_volumes) },
+      retentionNote: "CoinGecko market_chart data reduced to one real provider point per UTC day; no values were interpolated or synthesized.",
     },
     observations,
   };
