@@ -4,12 +4,10 @@ import type { NormalizedObservation, ProviderAsset, ProviderSnapshot } from "./t
 /**
  * CoinGecko historical market chart (GET /coins/{id}/market_chart).
  *
- * Per the official reference: with `days` 2-90 the API auto-selects hourly points;
- * `interval=daily` is documented as Enterprise-plan only, and Demo-tier requests
- * using it were observed failing intermittently with 401 (not tied to a specific
- * token), so it is never passed here -- granularity is left to auto-selection. The
- * arrays are [unix_ms, value] for prices, market_caps, and total_volumes (the
- * rolling 24-hour volume at that time). Used only by the manual, bounded backfill.
+ * A 90-day request returns hourly historical points on plans where explicit
+ * daily intervals are unavailable. The backfill reduces that response to one
+ * real provider point per UTC day, nearest to 00:00 UTC, so the database gains
+ * daily history rather than another large hourly archive.
  */
 
 export const BACKFILL_ENDPOINT_LABEL = "GET /coins/{id}/market_chart (days=90 auto-hourly; days=7 hourly)";
@@ -110,24 +108,23 @@ export function normalizeMarketChartHistory(input: {
     const cutoff = input.notAfter[metricId] ? Date.parse(input.notAfter[metricId]!) : Number.POSITIVE_INFINITY;
     const seen = new Set<string>();
     for (const [timeMs, value] of dailyPairs(input.daily[field])) {
-        const observedAt = new Date(timeMs).toISOString();
-        const key = `${metricId}|${observedAt}`;
-        if (timeMs >= cutoff || seen.has(key) || input.existing.has(key)) continue;
-        seen.add(key);
-        observations.push({
-          tokenId: input.asset.tokenId,
-          chainId: input.asset.chainId,
-          metricId,
-          value,
-          status: "available",
-          observedAt,
-          collectedAt: input.collectedAt,
-          windowDays: null,
-          scope: "token",
-          sourceField: `market_chart.${field}`,
-          note: "CoinGecko historical market_chart point sampled to one observation per UTC day, using the provider timestamp.",
-        });
-      }
+      const observedAt = new Date(timeMs).toISOString();
+      const key = `${metricId}|${observedAt}`;
+      if (timeMs >= cutoff || seen.has(key) || input.existing.has(key)) continue;
+      seen.add(key);
+      observations.push({
+        tokenId: input.asset.tokenId,
+        chainId: input.asset.chainId,
+        metricId,
+        value,
+        status: "available",
+        observedAt,
+        collectedAt: input.collectedAt,
+        windowDays: null,
+        scope: "token",
+        sourceField: `market_chart.${field}`,
+        note: "CoinGecko historical market_chart point sampled to one observation per UTC day, using the provider timestamp.",
+      });
     }
   }
   if (observations.length === 0) return null;
@@ -140,7 +137,11 @@ export function normalizeMarketChartHistory(input: {
     collectedAt: input.collectedAt,
     rawPayload: {
       request: { days: 90, sampling: "nearest point to 00:00 UTC per day" },
-      daily: { prices: dailyPairs(input.daily.prices), market_caps: dailyPairs(input.daily.market_caps), total_volumes: dailyPairs(input.daily.total_volumes) },
+      daily: {
+        prices: dailyPairs(input.daily.prices),
+        market_caps: dailyPairs(input.daily.market_caps),
+        total_volumes: dailyPairs(input.daily.total_volumes),
+      },
       retentionNote: "CoinGecko market_chart data reduced to one real provider point per UTC day; no values were interpolated or synthesized.",
     },
     observations,
