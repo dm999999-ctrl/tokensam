@@ -6,11 +6,10 @@ import { runRetentionBatches } from "../../../../lib/retention/run-retention.ts"
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Retention windows are day-granular (see supabase/migrations/20260930130000_retention_framework.sql),
-// so once-a-day is enough; the Cloudflare Worker still ticks every 5 minutes like the other cron
-// routes, so this due-check turns almost every tick into a cheap no-op, the same pattern
-// /api/cron/geckoterminal uses for its own slower cadence.
-const DEFAULT_RUN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// Retention windows are day-granular (see supabase/migrations/20260930130000_retention_framework.sql).
+// The Cloudflare Worker still ticks every 5 minutes like the other cron routes; this due-check
+// turns most ticks into a cheap no-op and permits one normal retention pass every 6 hours.
+const DEFAULT_RUN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // Leaves headroom below maxDuration for lock finalization + response construction.
 const PROCESSING_BUDGET_MS = 280_000;
 const LOCK_LEASE_MS = 320_000;
@@ -28,7 +27,7 @@ function positiveNumber(value: string | undefined): number | null {
  * running regularly, token_metric_observations alone regrows past the Supabase Free
  * Plan's 0.5 GB quota within about two weeks at the current refresh cadence.
  *
- * `force=1` bypasses the once-daily due-check for manual testing.
+ * `force=1` bypasses the six-hour due-check for manual testing.
  */
 export async function GET(request: Request): Promise<Response> {
   if (!isAuthorizedRefreshRequest(request.headers.get("authorization"))) {
