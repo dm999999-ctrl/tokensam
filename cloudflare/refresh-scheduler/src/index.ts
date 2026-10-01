@@ -13,6 +13,8 @@ export interface Env {
   COINGECKO_API_KEY?: string;
   /** "demo" (default) or "pro" — must match the actual key's plan. */
   COINGECKO_API_PLAN?: string;
+  /** Resend API key used only for threshold alerts. */
+  RESEND_API_KEY?: string;
 }
 
 const COINGECKO_PROXY_PREFIX = "/coingecko-proxy";
@@ -82,6 +84,48 @@ async function handleCoinGeckoProxy(request: Request, env: Env): Promise<Respons
 }
 
 type RouteResult = { path: string; status: number; body: string; error: string | null };
+
+const DATABASE_ALERT_RECIPIENT = "dm9381369@gmail.com";
+const DATABASE_ALERT_SENDER = "onboarding@resend.dev";
+
+async function sendDatabaseAlert(env: Env, databaseSizeMb: number): Promise<void> {
+  if (!env.RESEND_API_KEY) {
+    console.error("refresh-scheduler: RESEND_API_KEY is not configured; database alert email was not sent.");
+    return;
+  }
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      from: DATABASE_ALERT_SENDER,
+      to: [DATABASE_ALERT_RECIPIENT],
+      subject: "Token Samurai — Supabase database storage alert",
+      html: `
+        <h2>Token Samurai database storage alert</h2>
+        <p>Supabase database storage has reached <strong>440 MiB</strong> or more.</p>
+        <ul>
+          <li><strong>Current size:</strong> ${databaseSizeMb.toFixed(1)} MiB</li>
+          <li><strong>Threshold:</strong> 440 MiB</li>
+          <li><strong>Checked:</strong> ${new Date().toISOString()}</li>
+        </ul>
+        <p>Please investigate database growth before the 500 MB Supabase Free Plan limit is reached.</p>
+      `,
+    }),
+  });
+
+  const body = await response.text();
+  if (!response.ok) {
+    console.error("refresh-scheduler: Resend database alert failed:", response.status, body.slice(0, 500));
+    return;
+  }
+
+  console.log("refresh-scheduler: database storage alert email sent.");
+}
+
 
 /**
  * Calls one scheduled route with the same `Authorization: Bearer <CRON_SECRET>` convention
@@ -156,6 +200,20 @@ async function run(env: Env): Promise<RouteResult[]> {
   const refreshResult = await callRoute(env.REFRESH_URL, "/api/cron/refresh", env.CRON_SECRET);
   if (refreshResult.error) console.error(`refresh-scheduler: /api/cron/refresh request failed: ${refreshResult.error}`);
   else console.log(`refresh-scheduler: /api/cron/refresh -> ${refreshResult.status} ${refreshResult.body.slice(0, 500)}`);
+
+  if (isSuccessfulResponse(refreshResult)) {
+    try {
+      const refreshBody = JSON.parse(refreshResult.body) as {
+        databaseSizeMb?: unknown;
+        databaseAlert?: unknown;
+      };
+      if (refreshBody.databaseAlert === true && typeof refreshBody.databaseSizeMb === "number") {
+        await sendDatabaseAlert(env, refreshBody.databaseSizeMb);
+      }
+    } catch (error) {
+      console.error("refresh-scheduler: could not parse refresh database monitoring result:", error);
+    }
+  }
 
   if (!isSuccessfulResponse(refreshResult)) {
     console.error(
