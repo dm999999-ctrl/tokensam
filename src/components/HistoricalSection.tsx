@@ -105,7 +105,7 @@ function ChartCard({ metric, data, period, wide = false }: { metric: HistoricalM
         </p>
       )}
       <footer className="chart-foot">
-        <span>{coverage.coverageLabel}</span>
+        <span>{period === "24H" ? coverage.coverageLabel : (displayPoints.length + " daily display " + (displayPoints.length === 1 ? "point" : "points") + " · " + coverage.observationCount + " stored observations")}</span>
         {hasTrend && !coverage.fullCoverage && coverage.coverageHours !== null ? <span className="chart-partial">Partial: {formatDuration(coverage.coverageHours)} of {period}</span> : null}
       </footer>
     </article>
