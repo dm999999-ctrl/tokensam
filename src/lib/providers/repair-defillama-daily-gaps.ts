@@ -11,7 +11,7 @@ const COIN_METRICS = ["price_usd"];
 const COINS_BASE_URL = "https://coins.llama.fi";
 
 type Gap = { token_id: string; metric_id: string; missing_date: string };
-type Mapping = { token_id: string; external_asset_id: string; chain_id: string };
+type Mapping = { id: number; token_id: string; external_asset_id: string; chain_id: string };
 
 function dayStart(date: string): number {
   return Date.parse(`${date}T00:00:00.000Z`);
@@ -151,7 +151,7 @@ export async function repairDefiLlamaDailyGaps(
   if (protocolTokenIds.length > 0) {
     const { data: mappings, error } = await client
       .from("provider_token_mappings")
-      .select("token_id,external_asset_id,chain_id")
+      .select("id,token_id,external_asset_id,chain_id")
       .eq("provider_id", "defillama")
       .in("token_id", protocolTokenIds);
     if (error) throw new Error(`Supabase DeFiLlama protocol mapping lookup failed: ${error.message}`);
@@ -187,7 +187,7 @@ export async function repairDefiLlamaDailyGaps(
           note: "Provider-native daily gap repair from DeFiLlama /protocol/{slug}; real historical point, no interpolation.",
           scope: "protocol",
           provider_asset_id: mapping.external_asset_id,
-          mapping_id: null,
+          mapping_id: mapping.id,
         }));
       observations += await insertMissing(client, rows);
     }
