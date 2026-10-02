@@ -45,7 +45,7 @@ export async function GET(request: Request): Promise<Response> {
 
     // Check storage after every scheduled refresh so the Cloudflare scheduler can
     // alert before the Supabase Free-plan limit is reached. The alert is edge-triggered:
-    // once 440 MiB is crossed, it fires once and stays quiet until usage falls back below
+    // once 450 MiB is crossed, it fires once and stays quiet until usage falls back below
     // the threshold and crosses it again.
     const { data: databaseSizeBytes, error: databaseSizeError } = await client.rpc("get_database_size_bytes");
     if (databaseSizeError) {
@@ -57,7 +57,7 @@ export async function GET(request: Request): Promise<Response> {
       ? databaseSizeBytes / (1024 * 1024)
       : null;
     if (typeof databaseSizeBytes === "number") {
-      const thresholdBytes = 440 * 1024 * 1024;
+      const thresholdBytes = 450 * 1024 * 1024;
       const { data: monitorState, error: monitorStateError } = await client
         .from("database_monitor_state")
         .select("alert_active")
