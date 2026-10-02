@@ -9,8 +9,8 @@ const MINUTE = 60 * 1000;
  * Per-provider refresh policy.
  *
  * - intervalMs: a provider is "due" once this long has passed since its last
- *   successful refresh. The scheduler fires hourly; each run collects only the
- *   providers that are due, so a missed or duplicated cron delivery self-heals.
+ *   successful refresh. The external scheduler fires every few minutes; each run
+ *   collects only the providers that are due, so a missed or duplicated delivery self-heals.
  * - staleAfterMs: when stored data stops being "current" in the UI. Roughly
  *   interval x 3 (one missed run plus slack), and a full day for DeFiLlama,
  *   whose fees/revenue are 24-hour totals and whose TVL history is daily.
@@ -37,8 +37,9 @@ export const REFRESH_POLICY: Record<ProviderStep, { label: string; intervalMs: n
   dexscreener: { label: "DEX Screener", intervalMs: 15 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 40_000 },
   // Current TVL + fees + revenue: three small requests per protocol (72 for 24), paced 1.1 s apart.
   // Measured 2026-09-25 at 109 s for 24 protocols, so the budget is 150 s (pacing is unchanged).
-  // Dated TVL history (/protocol, up to ~69 MB per record) is a separate explicit backfill.
-  defillama: { label: "DeFiLlama", intervalMs: 6 * 60 * MINUTE, staleAfterMs: 24 * 60 * MINUTE, timeoutMs: 150_000 },
+  // Run hourly so 24H protocol TVL/fees/revenue charts receive materially denser live coverage.
+  // Dated TVL history (/protocol, up to ~69 MB per record) remains a separate explicit backfill.
+  defillama: { label: "DeFiLlama", intervalMs: 60 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 150_000 },
   // Token-level DeFiLlama prices: small batched requests (25 keys each; four for 100 tokens).
   defillama_coins: { label: "DeFiLlama (token prices)", intervalMs: 30 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 30_000 },
 };
