@@ -72,6 +72,7 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
         const repaired = await repairDefiLlamaDailyGaps(client, {
           fetchImpl: options.fetchImpl,
           sleep: options.sleep,
+          scope: "protocol",
         });
         return { ...collected, gapRepair: repaired };
       } catch (error) {
@@ -90,7 +91,20 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
         return errorMessage(error);
       }
     },
-    collect: (client, options) => runDefiLlamaCoinsCollection(client, options),
+    collect: async (client, options) => {
+      const collected = await runDefiLlamaCoinsCollection(client, options);
+      try {
+        const repaired = await repairDefiLlamaDailyGaps(client, {
+          fetchImpl: options.fetchImpl,
+          sleep: options.sleep,
+          scope: "coins",
+        });
+        return { ...collected, gapRepair: repaired };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown DeFiLlama coins gap-repair error.";
+        return { ...collected, gapRepairError: message };
+      }
+    },
   },
 };
 
