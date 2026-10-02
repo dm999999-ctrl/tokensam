@@ -37,9 +37,10 @@ export const REFRESH_POLICY: Record<ProviderStep, { label: string; intervalMs: n
   dexscreener: { label: "DEX Screener", intervalMs: 15 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 40_000 },
   // Current TVL + fees + revenue: three small requests per protocol (72 for 24), paced 1.1 s apart.
   // Measured 2026-09-25 at 109 s for 24 protocols, so the budget is 150 s (pacing is unchanged).
-  // Run hourly so 24H protocol TVL/fees/revenue charts receive materially denser live coverage.
+  // Keep the 6-hour cadence because DeFiLlama does not publish a free-tier request limit or
+  // guarantee hourly TVL freshness; production observations have also remained ~6–7 hours apart.
   // Dated TVL history (/protocol, up to ~69 MB per record) remains a separate explicit backfill.
-  defillama: { label: "DeFiLlama", intervalMs: 60 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 150_000 },
+  defillama: { label: "DeFiLlama", intervalMs: 6 * 60 * MINUTE, staleAfterMs: 24 * 60 * MINUTE, timeoutMs: 150_000 },
   // Token-level DeFiLlama prices: small batched requests (25 keys each; four for 100 tokens).
   defillama_coins: { label: "DeFiLlama (token prices)", intervalMs: 30 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 30_000 },
 };
