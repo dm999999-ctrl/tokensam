@@ -1,6 +1,7 @@
 import { getDefiLlamaConfig } from "../providers/defillama.ts";
 import { runCoinGeckoCollection } from "../providers/run-coingecko-collection.ts";
 import { repairCoinGeckoDailyGaps } from "../providers/repair-coingecko-daily-gaps.ts";
+import { repairDefiLlamaDailyGaps } from "../providers/repair-defillama-daily-gaps.ts";
 import { runDefiLlamaCollection } from "../providers/run-defillama-collection.ts";
 import { runDexScreenerCollection } from "../providers/run-dexscreener-collection.ts";
 import { runDefiLlamaCoinsCollection } from "../providers/run-defillama-coins-collection.ts";
@@ -63,7 +64,21 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
         return errorMessage(error);
       }
     },
-    collect: (client, options) => runDefiLlamaCollection(client, options),
+    collect: async (client, options) => {
+      const collected = await runDefiLlamaCollection(client, options);
+      // Historical repair is best-effort. A repair failure cannot turn a successful
+      // live DeFiLlama refresh into a provider failure; the next successful run retries it.
+      try {
+        const repaired = await repairDefiLlamaDailyGaps(client, {
+          fetchImpl: options.fetchImpl,
+          sleep: options.sleep,
+        });
+        return { ...collected, gapRepair: repaired };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown DeFiLlama gap-repair error.";
+        return { ...collected, gapRepairError: message };
+      }
+    },
   },
   defillama_coins: {
     // Token-level DeFiLlama prices use the same written-permission gate.
