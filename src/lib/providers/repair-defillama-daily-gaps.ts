@@ -1,4 +1,3 @@
-import { defillamaProtocolMappings } from "../../data/defillama-protocol-mappings.ts";
 import { getDefiLlamaConfig } from "./defillama.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
@@ -198,7 +197,7 @@ export async function repairDefiLlamaDailyGaps(
   if (coinTokenIds.length > 0) {
     const { data: mappings, error } = await client
       .from("provider_token_mappings")
-      .select("token_id,external_asset_id,chain_id")
+      .select("id,token_id,external_asset_id,chain_id")
       .eq("provider_id", "defillama_coins")
       .in("token_id", coinTokenIds);
     if (error) throw new Error(`Supabase DeFiLlama coins mapping lookup failed: ${error.message}`);
