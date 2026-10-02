@@ -5,7 +5,7 @@ import { getCoinGeckoConfig, MIN_REQUEST_INTERVAL_MS } from "./coingecko.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
-export const COINGECKO_GAP_DAYS = 14;
+export const COINGECKO_GAP_DAYS = 30;
 export const MAX_GAP_REPAIR_TOKENS = 10;
 
 const METRICS = ["price_usd", "market_cap_usd", "volume_24h_usd"];
@@ -60,7 +60,7 @@ function toObservationRows(
 }
 
 /**
- * Repairs only missing daily CoinGecko observations in the last 14 completed UTC days.
+ * Repairs only missing daily CoinGecko observations in the last 30 completed UTC days.
  * It deliberately does not write raw market_chart payloads and does not run a 90-day
  * backfill, keeping automatic recovery bounded in both storage and API usage.
  */
