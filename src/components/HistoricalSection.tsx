@@ -118,7 +118,7 @@ function RiskTooltip({ active, label, payload }: { active?: boolean; label?: num
       <span>{utcLabel(Number(label))} UTC</span>
       <strong>{RISK.volatility.label} {typeof volatility === "number" ? pct(volatility) : "—"}</strong>
       <strong>{RISK.drawdown.label} {typeof drawdown === "number" ? pct(drawdown) : "—"}</strong>
-      <small>Daily close · 7-day rolling volatility, annualized</small>
+      <small>Hourly price · 7-day rolling volatility, annualized</small>
     </div>
   );
 }
@@ -131,15 +131,15 @@ function RiskTooltip({ active, label, payload }: { active?: boolean; label?: num
  * a volatility level or a drawdown, so none is shown.
  */
 function RiskProfileCard({ data, period }: { data: TokenHistoricalData; period: HistoricalPeriod }) {
-  const { daily, volatility, drawdown } = riskProfile(data.priceUsd.points, period, new Date(data.asOf));
-  const rows = new Map<number, RiskRow>(daily.map((point) => [Date.parse(point.timestamp), { time: Date.parse(point.timestamp) }]));
+  const { hourly, volatility, drawdown } = riskProfile(data.priceUsd.points, period, new Date(data.asOf));
+  const rows = new Map<number, RiskRow>(hourly.map((point) => [Date.parse(point.timestamp), { time: Date.parse(point.timestamp) }]));
   for (const point of volatility) rows.get(Date.parse(point.timestamp))!.volatility = point.valueUsd;
   for (const point of drawdown) rows.get(Date.parse(point.timestamp))!.drawdown = point.valueUsd;
   const chartRows = [...rows.values()];
   const latestVolatility = volatility.at(-1)?.valueUsd;
   const latestDrawdown = drawdown.at(-1)?.valueUsd;
-  const hasTrend = daily.length >= 2;
-  const span = hasTrend ? formatDuration((Date.parse(daily.at(-1)!.timestamp) - Date.parse(daily[0].timestamp)) / 3_600_000) : null;
+  const hasTrend = hourly.length >= 2;
+  const span = hasTrend ? formatDuration((Date.parse(hourly.at(-1)!.timestamp) - Date.parse(hourly[0].timestamp)) / 3_600_000) : null;
 
   return (
     <article className="chart-card" aria-label="Risk profile history">
@@ -151,7 +151,7 @@ function RiskProfileCard({ data, period }: { data: TokenHistoricalData; period: 
         </div>
       </header>
       {hasTrend ? (
-        <div className="chart-plot" role="img" aria-label={`Volatility and drawdown in percent: ${daily.length} daily closes within the ${period} window`}>
+        <div className="chart-plot" role="img" aria-label={`Volatility and drawdown in percent: ${hourly.length} hourly price samples within the ${period} window`}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartRows} margin={{ top: 10, right: 6, bottom: 0, left: 0 }}>
               <CartesianGrid stroke="rgba(236, 230, 218, 0.06)" vertical={false} />
@@ -175,11 +175,11 @@ function RiskProfileCard({ data, period }: { data: TokenHistoricalData; period: 
           </ResponsiveContainer>
         </div>
       ) : (
-        <p className="chart-empty" role="status">The risk profile uses daily closes; fewer than two fall in the {period} window.</p>
+        <p className="chart-empty" role="status">The risk profile uses granular hourly price history; fewer than two hourly samples fall in the {period} window.</p>
       )}
       <footer className="chart-foot">
         <span>{RISK.summary}</span>
-        <span>{daily.length} daily {daily.length === 1 ? "close" : "closes"}{span ? ` spanning ${span}` : ""}</span>
+        <span>{hourly.length} hourly {hourly.length === 1 ? "sample" : "samples"}{span ? ` spanning ${span}` : ""}</span>
       </footer>
     </article>
   );
