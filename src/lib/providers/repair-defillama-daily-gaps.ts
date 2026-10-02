@@ -5,7 +5,7 @@ type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createS
 
 const LOOKBACK_DAYS = 14;
 const MAX_PROTOCOL_TOKENS = 1;
-const MAX_COIN_PRICE_TOKENS = 10;
+const MAX_COIN_PRICE_TOKENS = 50;
 const PROTOCOL_METRICS = ["tvl_usd"];
 const COIN_METRICS = ["price_usd"];
 const COINS_BASE_URL = "https://coins.llama.fi";
@@ -114,6 +114,7 @@ export async function repairDefiLlamaDailyGaps(
     fetchImpl?: typeof fetch;
     sleep?: (ms: number) => Promise<void>;
     now?: () => Date;
+    scope?: "all" | "protocol" | "coins";
   } = {},
 ) {
   getDefiLlamaConfig();
@@ -121,15 +122,16 @@ export async function repairDefiLlamaDailyGaps(
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? (() => new Date());
   const { start, end } = completedWindow(now());
+  const scope = options.scope ?? "all";
 
   const [protocolResult, coinResult] = await Promise.all([
-    client.rpc("get_provider_daily_gaps", {
+    scope === "coins" ? Promise.resolve({ data: [], error: null }) : client.rpc("get_provider_daily_gaps", {
       p_provider_id: "defillama",
       p_start_date: start,
       p_end_date: end,
       p_metric_ids: PROTOCOL_METRICS,
     }),
-    client.rpc("get_provider_daily_gaps", {
+    scope === "protocol" ? Promise.resolve({ data: [], error: null }) : client.rpc("get_provider_daily_gaps", {
       p_provider_id: "defillama_coins",
       p_start_date: start,
       p_end_date: end,
