@@ -11,7 +11,7 @@ const close = (a, b, tolerance = 1e-9) => assert.ok(Math.abs(a - b) <= tolerance
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const TODAY = Date.parse("2026-09-25T00:00:00.000Z");
-const asOf = new Date("2026-09-25T06:00:00.000Z");
+const asOf = new Date(TODAY);
 const iso = (daysAgo, extraMs = 0) => new Date(TODAY - daysAgo * DAY + extraMs).toISOString();
 const hourly = (values) => values.map((value, i) => ({ timestamp: new Date(TODAY - (values.length - 1 - i) * HOUR).toISOString(), valueUsd: value, sourceId: `obs:${id++}` }));
 let id = 1;
@@ -19,16 +19,19 @@ let id = 1;
 const daily = (values) => values.map((value, i) => ({ timestamp: iso(values.length - 1 - i), valueUsd: value, sourceId: `obs:${id++}` }));
 const values = (points) => points.map((p) => p.valueUsd);
 
-test("1. volatility = sample σ of 7 daily log returns × √365 × 100", () => {
-  const prices = [100, 102, 99, 101, 105, 103, 104, 108];
-  const [v] = rollingVolatility(daily(prices));
+test("1. volatility = sample σ of hourly log returns × √(24×365) × 100, capped at 7 days", () => {
+  const prices = Array.from({ length: 169 }, (_, i) => 100 + Math.sin(i / 8) * 5 + i * 0.01);
+  const points = hourly(prices);
+  const risk = rollingVolatility(points);
+  const v = risk.at(-1);
   const r = prices.slice(1).map((p, i) => Math.log(p / prices[i]));
   const mean = r.reduce((a, b) => a + b) / r.length;
   const sd = Math.sqrt(r.reduce((a, b) => a + (b - mean) ** 2, 0) / (r.length - 1));
-  close(v.valueUsd, sd * Math.sqrt(365) * 100);
+  close(v.valueUsd, sd * Math.sqrt(24 * 365) * 100);
   assert.equal(RISK_VOLATILITY_WINDOW_DAYS, 7);
-  assert.equal(rollingVolatility(daily(prices.slice(0, 7))).length, 0, "7 closes give only 6 returns: no value");
-  assert.equal(values(rollingVolatility(daily([5, 5, 5, 5, 5, 5, 5, 5])))[0], 0, "constant prices → 0% volatility (a genuine zero)");
+  assert.equal(risk.length, 167, "169 hourly prices produce an expanding warm-up plus the full 168-return endpoint");
+  assert.equal(rollingVolatility(daily(prices)).length, 0, "non-hourly points are never treated as hourly returns");
+  assert.equal(values(rollingVolatility(hourly([5, 5, 5])))[0], 0, "constant prices → 0% volatility (a genuine zero)");
 });
 
 test("2–5. drawdown from the running peak: 0 at a peak, negative below, never positive", () => {
@@ -60,9 +63,13 @@ test("6. missing, null, zero, negative and non-finite prices are skipped, never 
   assert.deepEqual(values(profile.drawdown).map((v) => Math.round(v)), [0, -20]);
 });
 
-test("gaps are never bridged: a missing day inside the lookback yields no volatility", () => {
-  const points = daily([100, 101, 102, 103, 104, 105, 106, 107, 108]).filter((_, i) => i !== 4);
-  assert.equal(rollingVolatility(points).length, 0);
+test("gaps are never bridged: volatility resets its expanding warm-up after a missing hour", () => {
+  const points = hourly(Array.from({ length: 20 }, (_, i) => 100 + i)).filter((_, i) => i !== 10);
+  const risk = rollingVolatility(points);
+  assert.ok(risk.length > 0);
+  const afterGap = risk.filter((point) => Date.parse(point.timestamp) > Date.parse(points[9].timestamp));
+  assert.ok(afterGap.length > 0);
+  assert.ok(Date.parse(afterGap[0].timestamp) - Date.parse(points[9].timestamp) >= 2 * HOUR, "post-gap volatility needs two consecutive returns");
 });
 
 test("7. chronological order: drawdown sorts by time; risk samples normalize to UTC hourly boundaries", () => {
@@ -76,7 +83,7 @@ test("7. chronological order: drawdown sorts by time; risk samples normalize to 
   assert.deepEqual(values(hourlyRiskSamples(mixed, asOf)), [100, 101, 102], "nearest observations within 30 minutes represent hourly boundaries");
 });
 
-test("8. 24H / 7D / 30D windows use granular hourly prices and volatility can warm up before the window", () => {
+test("8. 24H / 7D / 30D windows use granular hourly prices and volatility starts after a short expanding warm-up", () => {
   const prices = Array.from({ length: 30 * 24 + 1 }, (_, i) => 100 + Math.sin(i / 8) * 5 + i * 0.01);
   const points = hourly(prices);
   for (const [period, expectedMin] of [["24H", 24], ["7D", 7 * 24], ["30D", 30 * 24]]) {
@@ -86,8 +93,13 @@ test("8. 24H / 7D / 30D windows use granular hourly prices and volatility can wa
     assert.equal(drawdown[0].valueUsd, 0, `${period} starts at its own peak`);
     assert.ok(volatility.every((p) => pointsInPeriod([p], period, asOf).length === 1), `${period} volatility dates lie inside the window`);
   }
-  assert.ok(riskProfile(points, "24H", asOf).volatility.length > 0, "24H volatility uses the prior 7-day granular lookback");
-  assert.ok(riskProfile(points, "7D", asOf).volatility.length > 0, "7D volatility uses the prior 7-day granular lookback");
+  for (const period of ["24H", "7D", "30D"]) {
+    const profile = riskProfile(points, period, asOf);
+    assert.ok(profile.volatility.length > 0, `${period} volatility is available`);
+    const firstWindowTime = Date.parse(profile.hourly[0].timestamp);
+    const firstVolatilityTime = Date.parse(profile.volatility[0].timestamp);
+    assert.ok(firstVolatilityTime - firstWindowTime <= 2 * HOUR, `${period} volatility starts within the first two calculable hourly returns`);
+  }
 });
 
 test("9. both series are present and independent; the card is wired into Market History", () => {
