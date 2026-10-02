@@ -23,7 +23,7 @@ import { buildProfileModel, type Card } from "../ui/profile-model.ts";
 import { formatChange, formatDuration, formatUsd, formatUtc, isValidNumber } from "../ui/format.ts";
 import { formatReading } from "../ui/indicator-format.ts";
 import { presentMetric } from "../ui/calculated.ts";
-import { HISTORICAL_PERIODS, PERIOD_HOURS, coverageChangePct, dailyCloses, pointsInPeriod, riskProfile, rollingVolatility } from "../data/historical-series.ts";
+import { HISTORICAL_PERIODS, coverageChangePct, pointsInPeriod, riskProfile } from "../data/historical-series.ts";
 
 export const PROFILE_PAYLOAD_VERSION = "profile-1";
 
@@ -230,28 +230,17 @@ export function buildProfilePayload(data: LiveTokenProfileData): ProfilePayload 
       }
     }
     if (model.history.series.includes("riskProfile")) {
-      // historical-series.ts's own `riskProfile`/`rollingVolatility` always use a fixed 7-day
-      // lookback (RISK_VOLATILITY_WINDOW_DAYS) — that is correct and unchanged for the chart it
-      // feeds (HistoricalSection.tsx's RiskProfileCard shows how the rolling 7-day figure evolved
-      // across the window). But taking only `.at(-1)` of that per-period-filtered series, as this
-      // module used to, always lands on the same "today's 7-day volatility" point regardless of
-      // whether the period is 7D, 30D, or 90D — so the "30D"/"90D" volatility figure was silently
-      // identical to the 7D one. For this evidence field (a single AI-report figure per period, not
-      // a chart), volatility is instead computed directly with a lookback matching the period
-      // itself (7/30/90 consecutive daily closes ending today), so it is genuinely a 7-, 30-, or
-      // 90-day realized-volatility reading — and correctly comes back unavailable (never a
-      // fabricated or resampled number) when that many consecutive daily closes are not stored.
-      const allDaily = dailyCloses(data.history.priceUsd.points, asOf);
+      // The Risk Profile chart uses granular hourly CoinGecko history. Keep the evidence
+      // payload aligned with the same calculation rather than falling back to daily closes.
       for (const period of HISTORICAL_PERIODS) {
-        const { daily, drawdown } = riskProfile(data.history.priceUsd.points, period, asOf);
-        const periodDays = PERIOD_HOURS[period] / 24;
-        const vol = rollingVolatility(allDaily, periodDays).at(-1)?.valueUsd;
+        const { hourly, volatility, drawdown } = riskProfile(data.history.priceUsd.points, period, asOf);
+        const vol = volatility.at(-1)?.valueUsd;
         const dd = drawdown.at(-1)?.valueUsd;
-        if (daily.length < 2 || (vol === undefined && dd === undefined)) continue;
+        if (hourly.length < 2 || (vol === undefined && dd === undefined)) continue;
         const value = [vol !== undefined ? `volatility ${riskPct(vol)}` : null, dd !== undefined ? `drawdown ${riskPct(dd)}` : null].filter(Boolean).join(" · ");
         fields.push(field({
           id: `hist:risk_${period.toLowerCase()}`, section: "Market history", label: `Risk profile · ${period}`, value, raw: vol ?? dd ?? null, scope: "token",
-          period: `${period} window: ${daily.length} daily closes`, note: "Volatility and drawdown from daily price closes.", asOf: daily.at(-1)?.timestamp ?? null,
+          period: `${period} window: ${hourly.length} hourly samples`, note: "Volatility and drawdown from granular hourly price history.", asOf: hourly.at(-1)?.timestamp ?? null,
         }));
       }
     }
