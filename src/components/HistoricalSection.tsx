@@ -118,7 +118,7 @@ function RiskTooltip({ active, label, payload }: { active?: boolean; label?: num
       <span>{utcLabel(Number(label))} UTC</span>
       <strong>{RISK.volatility.label} {typeof volatility === "number" ? pct(volatility) : "—"}</strong>
       <strong>{RISK.drawdown.label} {typeof drawdown === "number" ? pct(drawdown) : "—"}</strong>
-      <small>Hourly price · 7-day rolling volatility, annualized</small>
+      <small>Hourly price · up to 7-day rolling volatility, annualized</small>
     </div>
   );
 }
