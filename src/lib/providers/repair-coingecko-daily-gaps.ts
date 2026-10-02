@@ -55,7 +55,7 @@ function toObservationRows(
       note: "CoinGecko automatic gap repair; one real provider point per missing UTC day; no values were interpolated or synthesized.",
       scope: row.scope,
       provider_asset_id: externalAssetId,
-      mapping_id: null,
+      mapping_id: null as number | null,
     }));
 }
 
