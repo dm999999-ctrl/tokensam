@@ -101,9 +101,11 @@ export function coverageChangePct(points: HistoricalPoint[]): number | null {
 // normalize the stored observations to one representative point per UTC hour,
 // choosing the nearest observation within 30 minutes. Missing hours remain gaps.
 //
-// Volatility uses a rolling 7-day window of hourly log returns. The window is
-// allowed to begin before the selected chart window so that 24H and 7D views can
-// still show a volatility value when sufficient prior 30-day history exists.
+// Volatility uses up to a rolling 7-day window of hourly log returns. During the
+// initial warm-up, or after a gap, it uses the longest consecutive hourly run
+// available at that endpoint; once 168 returns are available it is the full
+// 7-day rolling volatility. This avoids fabricating pre-window history while
+// allowing the plotted line to begin near the start of each selected window.
 // Drawdown uses every normalized hourly price inside the selected chart window.
 
 export const RISK_VOLATILITY_WINDOW_DAYS = 7;
@@ -152,29 +154,33 @@ export function hourlyRiskSamples(points: HistoricalPoint[], asOf: Date): Histor
  * Rolling annualized volatility from hourly log returns:
  *
  *   r_i = ln(price_i / price_{i-1})
- *   sigma = sample standard deviation of the 168 hourly returns
+ *   sigma = sample standard deviation of the available returns, capped at 168
+ *           hourly returns (7 days)
  *   volatility = sigma * sqrt(24 * 365) * 100
  *
- * A missing hour inside the lookback yields no value for that endpoint.
+ * The warm-up uses an expanding consecutive run until 168 returns are available.
+ * After a missing hour, the run resets; no gap is ever bridged or interpolated.
  */
 export function rollingVolatility(hourly: HistoricalPoint[], windowHours = RISK_VOLATILITY_HOURS): HistoricalPoint[] {
   const out: HistoricalPoint[] = [];
   const times = hourly.map((point) => Date.parse(point.timestamp));
+  let consecutiveReturns = 0;
 
-  for (let t = windowHours; t < hourly.length; t += 1) {
-    let consecutive = true;
-    for (let i = t - windowHours + 1; i <= t; i += 1) {
-      if (times[i] - times[i - 1] !== RISK_HOUR_MS) {
-        consecutive = false;
-        break;
-      }
+  for (let t = 1; t < hourly.length; t += 1) {
+    if (times[t] - times[t - 1] !== RISK_HOUR_MS) {
+      consecutiveReturns = 0;
+      continue;
     }
-    if (!consecutive) continue;
 
+    consecutiveReturns += 1;
+    const returnCount = Math.min(windowHours, consecutiveReturns);
+    if (returnCount < 2) continue;
+
+    const start = t - returnCount;
     const returns = hourly
-      .slice(t - windowHours, t + 1)
+      .slice(start, t + 1)
       .slice(1)
-      .map((point, i) => Math.log(point.valueUsd / hourly[t - windowHours + i].valueUsd));
+      .map((point, i) => Math.log(point.valueUsd / hourly[start + i].valueUsd));
 
     const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length;
     const variance = returns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (returns.length - 1);
