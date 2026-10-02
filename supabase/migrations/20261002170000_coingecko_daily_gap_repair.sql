@@ -12,11 +12,9 @@ as $$
     select generate_series(p_start_date, p_end_date, interval '1 day')::date as missing_date
   ),
   token_metrics as (
-    select distinct o.token_id, m.metric_id
-    from public.token_metric_observations o
+    select t.id as token_id, m.metric_id
+    from public.tokens t
     cross join unnest(p_metric_ids) as m(metric_id)
-    where o.provider_id = 'coingecko'
-      and o.metric_id = m.metric_id
   )
   select tm.token_id, tm.metric_id, d.missing_date
   from token_metrics tm
