@@ -1,5 +1,6 @@
 import { getDefiLlamaConfig } from "../providers/defillama.ts";
 import { runCoinGeckoCollection } from "../providers/run-coingecko-collection.ts";
+import { repairCoinGeckoDailyGaps } from "../providers/repair-coingecko-daily-gaps.ts";
 import { runDefiLlamaCollection } from "../providers/run-defillama-collection.ts";
 import { runDexScreenerCollection } from "../providers/run-dexscreener-collection.ts";
 import { runDefiLlamaCoinsCollection } from "../providers/run-defillama-coins-collection.ts";
@@ -33,7 +34,24 @@ export type CollectorDefinition = {
 };
 
 export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
-  coingecko: { collect: (client, options) => runCoinGeckoCollection(client, options) },
+  coingecko: {
+    collect: async (client, options) => {
+      const collected = await runCoinGeckoCollection(client, options);
+      // Historical repair is deliberately best-effort: a repair failure must not turn an
+      // otherwise successful live refresh into a provider failure. The next successful
+      // CoinGecko refresh will retry the bounded repair.
+      try {
+        const repaired = await repairCoinGeckoDailyGaps(client, {
+          fetchImpl: options.fetchImpl,
+          sleep: options.sleep,
+        });
+        return { ...collected, gapRepair: repaired };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown CoinGecko gap-repair error.";
+        return { ...collected, gapRepairError: message };
+      }
+    },
+  },
   dexscreener: { collect: (client, options) => runDexScreenerCollection(client, options) },
   defillama: {
     // The written-permission gate is enforced, never bypassed: without it the step is skipped.
