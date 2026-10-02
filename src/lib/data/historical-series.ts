@@ -94,69 +94,104 @@ export function coverageChangePct(points: HistoricalPoint[]): number | null {
   return first === 0 ? null : ((last - first) / first) * 100;
 }
 
-// ---- Risk profile (Market History): volatility and drawdown from stored prices ----
+// ---- Risk profile (Market History): granular volatility and drawdown from stored prices ----
 //
-// Both series are calculated at page load from the price observations already in
-// `priceUsd`; nothing is stored, fetched or interpolated.
+// The risk profile uses the granular CoinGecko price history rather than reducing
+// the series to one UTC daily close. Recent CoinGecko history is hourly, so we
+// normalize the stored observations to one representative point per UTC hour,
+// choosing the nearest observation within 30 minutes. Missing hours remain gaps.
 //
-// Daily closes: stored price history mixes daily points (00:00 UTC) with hourly
-// and irregular snapshots, and returns over unequal intervals are not comparable.
-// Both series therefore use one sample per UTC midnight, chosen by the same rule
-// as the technical indicators (the observation nearest 00:00 UTC within 30
-// minutes; missing, zero, negative or non-finite prices are never samples).
+// Volatility uses a rolling 7-day window of hourly log returns. The window is
+// allowed to begin before the selected chart window so that 24H and 7D views can
+// still show a volatility value when sufficient prior 30-day history exists.
+// Drawdown uses every normalized hourly price inside the selected chart window.
 
 export const RISK_VOLATILITY_WINDOW_DAYS = 7;
+export const RISK_GRANULAR_TOLERANCE_MS = 30 * 60 * 1000;
+export const RISK_HOUR_MS = 60 * 60 * 1000;
+export const RISK_VOLATILITY_HOURS = RISK_VOLATILITY_WINDOW_DAYS * 24;
 
-/** One price sample per UTC midnight (the technical-indicator daily-close rule), chronological. */
-export function dailyCloses(points: HistoricalPoint[], asOf: Date): HistoricalPoint[] {
-  const rows: ObservationRow[] = points.map((point, index) => ({
-    id: Number(point.sourceId.replace(/^obs:/, "")) || -(index + 1),
-    metric_id: SERIES_RULES.price.metricId,
-    provider_id: SERIES_RULES.price.providerId,
-    value: point.valueUsd,
-    status: "available",
-    observed_at: point.timestamp,
-  }));
-  return dailySamples(rows, SERIES_RULES.price, asOf.getTime())
-    .map((sample) => ({ timestamp: new Date(sample.time).toISOString(), valueUsd: sample.value, sourceId: `obs:${sample.obsId}` }));
+type RiskPricePoint = { time: number; value: number; obsId: number };
+
+/** One price sample per UTC hour, choosing the nearest valid stored observation within 30 minutes. */
+export function hourlyRiskSamples(points: HistoricalPoint[], asOf: Date): HistoricalPoint[] {
+  const candidates = points
+    .map((point, index) => ({
+      time: Date.parse(point.timestamp),
+      value: point.valueUsd,
+      obsId: Number(point.sourceId.replace(/^obs:/, "")) || -(index + 1),
+    }))
+    .filter((point): point is RiskPricePoint =>
+      Number.isFinite(point.time) &&
+      point.time <= asOf.getTime() &&
+      Number.isFinite(point.value) &&
+      point.value > 0,
+    );
+
+  const byHour = new Map<number, { point: RiskPricePoint; distance: number }>();
+  for (const point of candidates) {
+    const boundary = Math.round(point.time / RISK_HOUR_MS) * RISK_HOUR_MS;
+    const distance = Math.abs(point.time - boundary);
+    if (distance > RISK_GRANULAR_TOLERANCE_MS || boundary > asOf.getTime()) continue;
+    const current = byHour.get(boundary);
+    if (!current || distance < current.distance || (distance === current.distance && point.obsId > current.point.obsId)) {
+      byHour.set(boundary, { point, distance });
+    }
+  }
+
+  return [...byHour.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([time, { point }]) => ({
+      timestamp: new Date(time).toISOString(),
+      valueUsd: point.value,
+      sourceId: `obs:${point.obsId}`,
+    }));
 }
 
 /**
- * Rolling volatility, in percent, at each daily close t that has
- * RISK_VOLATILITY_WINDOW_DAYS + 1 consecutive daily closes ending at t:
+ * Rolling annualized volatility from hourly log returns:
  *
- *   r_i = ln(close_i / close_{i−1})          (7 daily log returns)
- *   σ   = sample standard deviation of r     (n − 1 denominator)
- *   volatility_t = σ × √365 × 100            (annualized; crypto trades every day)
+ *   r_i = ln(price_i / price_{i-1})
+ *   sigma = sample standard deviation of the 168 hourly returns
+ *   volatility = sigma * sqrt(24 * 365) * 100
  *
- * A missing day inside the lookback yields no value for that t (gaps are never
- * bridged). The lookback may start before a chart window; the chart shows only
- * values whose date t falls inside the selected window.
+ * A missing hour inside the lookback yields no value for that endpoint.
  */
-export function rollingVolatility(daily: HistoricalPoint[], windowDays = RISK_VOLATILITY_WINDOW_DAYS): HistoricalPoint[] {
+export function rollingVolatility(hourly: HistoricalPoint[], windowHours = RISK_VOLATILITY_HOURS): HistoricalPoint[] {
   const out: HistoricalPoint[] = [];
-  const times = daily.map((point) => Date.parse(point.timestamp));
-  for (let t = windowDays; t < daily.length; t += 1) {
+  const times = hourly.map((point) => Date.parse(point.timestamp));
+
+  for (let t = windowHours; t < hourly.length; t += 1) {
     let consecutive = true;
-    for (let i = t - windowDays + 1; i <= t; i += 1) if (times[i] - times[i - 1] !== DAY_MS) consecutive = false;
+    for (let i = t - windowHours + 1; i <= t; i += 1) {
+      if (times[i] - times[i - 1] !== RISK_HOUR_MS) {
+        consecutive = false;
+        break;
+      }
+    }
     if (!consecutive) continue;
-    const returns = daily.slice(t - windowDays, t + 1).slice(1).map((point, i) => Math.log(point.valueUsd / daily[t - windowDays + i].valueUsd));
+
+    const returns = hourly
+      .slice(t - windowHours, t + 1)
+      .slice(1)
+      .map((point, i) => Math.log(point.valueUsd / hourly[t - windowHours + i].valueUsd));
+
     const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length;
     const variance = returns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (returns.length - 1);
-    const value = Math.sqrt(variance) * Math.sqrt(365) * 100;
-    if (Number.isFinite(value)) out.push({ timestamp: daily[t].timestamp, valueUsd: value, sourceId: daily[t].sourceId });
+    const value = Math.sqrt(variance) * Math.sqrt(24 * 365) * 100;
+    if (Number.isFinite(value)) {
+      out.push({ timestamp: hourly[t].timestamp, valueUsd: value, sourceId: hourly[t].sourceId });
+    }
   }
   return out;
 }
 
 /**
- * Drawdown, in percent, for daily closes already restricted to a chart window,
- * in chronological order: drawdown_t = (close_t / max(close_first..close_t) − 1) × 100.
- * The running peak starts at the window's first close, so values are 0 at a new
- * peak and negative below it; they are never positive.
+ * Drawdown from the running hourly peak inside the selected chart window:
+ * drawdown_t = (price_t / max(price_first..price_t) - 1) * 100.
  */
-export function drawdownSeries(dailyInWindow: HistoricalPoint[]): HistoricalPoint[] {
-  const sorted = [...dailyInWindow].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+export function drawdownSeries(granularInWindow: HistoricalPoint[]): HistoricalPoint[] {
+  const sorted = [...granularInWindow].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
   let peak = -Infinity;
   const out: HistoricalPoint[] = [];
   for (const point of sorted) {
@@ -168,11 +203,19 @@ export function drawdownSeries(dailyInWindow: HistoricalPoint[]): HistoricalPoin
   return out;
 }
 
-/** Risk profile for one requested window: volatility and drawdown share the window's daily-close timestamps. */
+/**
+ * Risk profile for one requested window. Granular hourly prices inside the
+ * selected window drive drawdown, while volatility uses a 7-day hourly lookback
+ * that may begin before the selected window.
+ */
 export function riskProfile(pricePoints: HistoricalPoint[], period: HistoricalPeriod, asOf: Date): {
-  daily: HistoricalPoint[]; volatility: HistoricalPoint[]; drawdown: HistoricalPoint[];
+  hourly: HistoricalPoint[]; volatility: HistoricalPoint[]; drawdown: HistoricalPoint[];
 } {
-  const allDaily = dailyCloses(pricePoints, asOf);
-  const daily = pointsInPeriod(allDaily, period, asOf);
-  return { daily, volatility: pointsInPeriod(rollingVolatility(allDaily), period, asOf), drawdown: drawdownSeries(daily) };
+  const allHourly = hourlyRiskSamples(pricePoints, asOf);
+  const hourly = pointsInPeriod(allHourly, period, asOf);
+  return {
+    hourly,
+    volatility: pointsInPeriod(rollingVolatility(allHourly), period, asOf),
+    drawdown: drawdownSeries(hourly),
+  };
 }
