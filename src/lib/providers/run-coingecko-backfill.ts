@@ -8,7 +8,7 @@ import { persistProviderSnapshots } from "./persist-snapshots.ts";
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
 const BACKFILL_METRICS = ["price_usd", "market_cap_usd", "volume_24h_usd"];
-const BACKFILL_DAYS = 90;
+const BACKFILL_DAYS = 30;
 /** One market_chart request per token; the current 182-token universe fits in four bounded batches. */
 export const MAX_BACKFILL_TOKENS = 50;
 
@@ -85,10 +85,9 @@ export async function runCoinGeckoBackfill(
       continue;
     }
     try {
-      // No `interval` param: CoinGecko may auto-select hourly granularity for a 90-day
-      // range. normalizeMarketChartHistory preserves every genuine provider point in
-      // the current 30-day window and reduces only the older >30-day portion to one
-      // genuine provider point per UTC day. Provider timestamps are never synthesized.
+      // No `interval` param: CoinGecko may return the provider's native granularity for
+      // the 30-day range. Only genuine provider points from that rolling 30-day window
+      // are stored. Provider timestamps are never synthesized, rounded, shifted, or retimed.
       const daily = await request(coinId, { days: BACKFILL_DAYS });
       const notAfter = Object.fromEntries(latest
         .filter((row) => row.token_id === token.id && row.provider_id === "coingecko")
