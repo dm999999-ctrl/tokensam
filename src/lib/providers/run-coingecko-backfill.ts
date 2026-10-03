@@ -85,10 +85,10 @@ export async function runCoinGeckoBackfill(
       continue;
     }
     try {
-      // No `interval` param: CoinGecko restricts explicit interval=daily on the relevant
-      // plans. Omitting it lets CoinGecko auto-select hourly granularity for a 90-day
-      // range; normalizeMarketChartHistory then selects one real provider point per UTC
-      // day, nearest to midnight.
+      // No `interval` param: CoinGecko may auto-select hourly granularity for a 90-day
+      // range. normalizeMarketChartHistory preserves every genuine provider point in
+      // the current 30-day window and reduces only the older >30-day portion to one
+      // genuine provider point per UTC day. Provider timestamps are never synthesized.
       const daily = await request(coinId, { days: BACKFILL_DAYS });
       const notAfter = Object.fromEntries(latest
         .filter((row) => row.token_id === token.id && row.provider_id === "coingecko")
