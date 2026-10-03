@@ -5,8 +5,9 @@ const MAX_BATCHES_PER_FUNCTION = 1000;
 
 // Retention policy:
 // - 0–30 days: preserve all granular chart observations.
-// - 30–90 days: retain exactly one observation per token/metric/UTC calendar day;
-//   delete every other observation.
+// - >30–<90 days: retain exactly one daily historical observation per
+//   token/metric/provider/UTC calendar day: the observation closest to 00:00 UTC;
+//   delete every other granular observation immediately after it crosses 30 days.
 // - >=90 days: delete all observations.
 // Raw provider records are retained for 7 days.
 // The database trigger trg_protect_30d_chart_observations is the final guard
