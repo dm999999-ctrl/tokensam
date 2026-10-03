@@ -60,6 +60,14 @@ export async function GET(request: Request): Promise<Response> {
   console.log(`[retention-cron] started (${trigger}), run ${runId}, at ${now.toISOString()}.`);
   try {
     const result = await runRetentionBatches(client, routeStart + PROCESSING_BUDGET_MS);
+    const { data: vacuumMaintenance, error: vacuumMaintenanceError } = await client.rpc("manage_retention_full_vacuum");
+    if (vacuumMaintenanceError) {
+      console.error(
+        `[retention-cron] vacuum maintenance check failed: ${vacuumMaintenanceError.message}`,
+      );
+    } else {
+      console.log(`[retention-cron] vacuum maintenance: ${JSON.stringify(vacuumMaintenance)}`);
+    }
     const failedFns = Object.keys(result.failed);
     // A function's own RPC error (e.g. a timeout) no longer aborts the run -- see run-retention.ts --
     // so it surfaces here as "partial" alongside stoppedEarly, never as the route's own "failed" status.
@@ -75,7 +83,7 @@ export async function GET(request: Request): Promise<Response> {
       console.error(`[retention-cron] run ${runId} lost lease ownership before finalization; its deletes are already committed.`);
       return Response.json({ status: "lost_ownership", runId, ...result }, { status: 500 });
     }
-    return Response.json({ status, runId, ...result });
+    return Response.json({ status, runId, ...result, vacuumMaintenance, vacuumMaintenanceError: vacuumMaintenanceError?.message ?? null });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error.";
     await finishRetentionLock(client, runId, lockToken, "failed", new Date(), {}, message).catch(() => undefined);
