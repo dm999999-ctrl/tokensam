@@ -4,7 +4,6 @@ const BATCH_SIZE = 40;
 const MAX_BATCHES_PER_FUNCTION = 1000;
 
 const RETENTION_FUNCTIONS = [
-  "retention_collapse_chart_intraday_batch",
   "retention_collapse_series_intraday_batch",
   "retention_collapse_other_intraday_batch",
   "retention_collapse_weekly_batch",
