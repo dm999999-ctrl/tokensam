@@ -4,15 +4,13 @@ import type { NormalizedObservation, ProviderAsset, ProviderSnapshot } from "./t
 /**
  * CoinGecko historical market chart (GET /coins/{id}/market_chart).
  *
- * For the rolling retention model:
- *   - 0-30 days: preserve every genuine provider observation at its exact
- *     provider timestamp.
- *   - >30 and <90 days: reduce to one genuine provider observation per UTC
- *     day, choosing the point closest to 00:00 UTC.
+ * This manual backfill is intentionally limited to the current rolling 30-day
+ * granular window. Existing 30-90 day daily observations are not fetched,
+ * modified, or regenerated.
  *
  * No timestamps are generated, retimed, interpolated, or synthesized.
  */
-export const BACKFILL_ENDPOINT_LABEL = "GET /coins/{id}/market_chart (days=90, sampled daily)";
+export const BACKFILL_ENDPOINT_LABEL = "GET /coins/{id}/market_chart (days=30, actual provider timestamps)";
 const MAX_ATTEMPTS = 3;
 const SERIES: { field: "prices" | "market_caps" | "total_volumes"; metricId: string }[] = [
   { field: "prices", metricId: "price_usd" },
@@ -114,9 +112,7 @@ export function normalizeMarketChartHistory(input: {
     const seen = new Set<string>();
     const points = pairs(input.daily[field]).sort((a, b) => a[0] - b[0]);
 
-    const granular = points.filter(([timeMs]) => timeMs >= granularCutoff && timeMs <= nowMs);
-    const older = points.filter(([timeMs]) => timeMs < granularCutoff);
-    const selected = [...dailyPairs(older), ...granular];
+    const selected = points.filter(([timeMs]) => timeMs >= granularCutoff && timeMs <= nowMs);
 
     for (const [timeMs, value] of selected) {
       const observedAt = new Date(timeMs).toISOString();
@@ -135,9 +131,7 @@ export function normalizeMarketChartHistory(input: {
         windowDays: null,
         scope: "token",
         sourceField: `market_chart.${field}`,
-        note: timeMs >= granularCutoff
-          ? "CoinGecko historical market_chart observation stored at the exact provider timestamp."
-          : "CoinGecko historical market_chart observation retained as the daily 30-90 day representative point at its exact provider timestamp.",
+        note: "CoinGecko historical market_chart observation stored at the exact provider timestamp for the rolling 30-day granular window.",
       });
     }
   }
@@ -152,13 +146,13 @@ export function normalizeMarketChartHistory(input: {
     observedAt: observedTimes.at(-1)!,
     collectedAt: input.collectedAt,
     rawPayload: {
-      request: { days: 90, sampling: "actual provider timestamps for 0-30d; nearest-to-midnight actual point per UTC day for >30d" },
+      request: { days: 30, sampling: "actual provider timestamps only" },
       daily: {
-        prices: [...dailyPairs(olderForPayload(input.daily.prices, granularCutoff)), ...granularForPayload(input.daily.prices, granularCutoff, nowMs)],
-        market_caps: [...dailyPairs(olderForPayload(input.daily.market_caps, granularCutoff)), ...granularForPayload(input.daily.market_caps, granularCutoff, nowMs)],
-        total_volumes: [...dailyPairs(olderForPayload(input.daily.total_volumes, granularCutoff)), ...granularForPayload(input.daily.total_volumes, granularCutoff, nowMs)],
+        prices: granularForPayload(input.daily.prices, granularCutoff, nowMs),
+        market_caps: granularForPayload(input.daily.market_caps, granularCutoff, nowMs),
+        total_volumes: granularForPayload(input.daily.total_volumes, granularCutoff, nowMs),
       },
-      retentionNote: "No values or timestamps were interpolated, synthesized, or retimed. Current 30-day observations retain exact CoinGecko provider timestamps; older observations are reduced only for the 30-90 day retention tier.",
+      retentionNote: "This backfill only stores genuine CoinGecko observations in the rolling 30-day granular window. Existing 30-90 day daily observations are untouched. No values or timestamps were interpolated, synthesized, or retimed.",
     },
     observations,
   };
