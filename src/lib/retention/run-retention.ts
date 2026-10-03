@@ -3,6 +3,12 @@ type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createS
 const BATCH_SIZE = 40;
 const MAX_BATCHES_PER_FUNCTION = 1000;
 
+// Retention policy:
+// - 0–30 days: preserve granular chart observations.
+// - 30–90 days: collapse to one UTC-day observation per token/metric.
+// - >=90 days: expire observations.
+// The database trigger trg_protect_30d_chart_observations provides a final
+// guard against deleting price/market-cap/volume observations inside 30 days.
 const RETENTION_FUNCTIONS = [
   "retention_collapse_series_intraday_batch",
   "retention_collapse_other_intraday_batch",
