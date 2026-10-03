@@ -52,6 +52,7 @@ export async function runCoinGeckoBackfill(
     log?: (line: string) => void;
   } = {},
 ): Promise<{ results: BackfillTokenResult[]; requests: number; stoppedEarly: string | null }> {
+  const config = getCoinGeckoConfig(options.env);
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? (() => new Date());
