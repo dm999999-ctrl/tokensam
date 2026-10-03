@@ -1,18 +1,17 @@
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
-const BATCH_SIZE = 200;
+const BATCH_SIZE = 1000;
 const MAX_BATCHES_PER_FUNCTION = 1000;
 
 // Retention policy:
-// - 0–30 days: preserve granular chart observations.
-// - 30–90 days: reduce to one UTC-day observation per token/metric and delete
-//   every other observation in that UTC day.
-// - >=90 days: expire observations.
-// The database trigger trg_protect_30d_chart_observations provides a final
-// guard against deleting price/market-cap/volume observations inside 30 days.
+// - 0–30 days: preserve all granular chart observations.
+// - 30–90 days: retain exactly one observation per token/metric/UTC calendar day;
+//   delete every other observation.
+// - >=90 days: delete all observations.
+// Raw provider records are retained for 7 days.
+// The database trigger trg_protect_30d_chart_observations is the final guard
+// against deleting protected chart observations inside the 30-day window.
 const RETENTION_FUNCTIONS = [
-  "retention_collapse_series_intraday_batch",
-  "retention_collapse_other_intraday_batch",
   "retention_collapse_daily_batch",
   "retention_expire_observations_batch",
   "retention_expire_raw_provider_records_batch",
