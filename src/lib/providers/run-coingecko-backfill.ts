@@ -52,14 +52,13 @@ export async function runCoinGeckoBackfill(
     log?: (line: string) => void;
   } = {},
 ): Promise<{ results: BackfillTokenResult[]; requests: number; stoppedEarly: string | null }> {
-  const config = getCoinGeckoConfig(options.env);
-  log("Backfill diagnostics: CoinGecko configuration resolved; reading latest stored observations...");
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? (() => new Date());
   const log = options.log ?? (() => {});
 
-  const wanted = options.tokenIds ?? canonicalTokens.map((token) => token.id);
+  log("Backfill diagnostics: CoinGecko configuration resolved; reading latest stored observations...");
+    const wanted = options.tokenIds ?? canonicalTokens.map((token) => token.id);
   const unknown = wanted.filter((id) => !canonicalTokens.some((token) => token.id === id));
   if (unknown.length > 0) throw new Error(`Unknown canonical token ID(s): ${unknown.join(", ")}.`);
   if (wanted.length > MAX_BACKFILL_TOKENS) throw new Error(`At most ${MAX_BACKFILL_TOKENS} tokens per backfill run.`);
