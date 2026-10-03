@@ -53,6 +53,7 @@ export async function runCoinGeckoBackfill(
   } = {},
 ): Promise<{ results: BackfillTokenResult[]; requests: number; stoppedEarly: string | null }> {
   const config = getCoinGeckoConfig(options.env);
+  log("Backfill diagnostics: CoinGecko configuration resolved; reading latest stored observations...");
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? (() => new Date());
@@ -65,6 +66,7 @@ export async function runCoinGeckoBackfill(
   const tokens = canonicalTokens.filter((token) => wanted.includes(token.id));
 
   const latest = await readLatestObservations<{ id: number; token_id: string; provider_id: string; metric_id: string; observed_at: string; collected_at: string }>(client, tokens.map((token) => token.id));
+  log(`Backfill diagnostics: latest-observation read complete (${latest.length} row(s)); starting token requests.`);
   const results: BackfillTokenResult[] = [];
   let requests = 0;
   let stoppedEarly: string | null = null;
@@ -85,26 +87,35 @@ export async function runCoinGeckoBackfill(
       continue;
     }
     try {
+      log(`${token.id}: starting market_chart request for CoinGecko ID ${coinId}`);
+      const requestStartedAt = Date.now();
       // No `interval` param: CoinGecko may return the provider's native granularity for
       // the 30-day range. Only genuine provider points from that rolling 30-day window
       // are stored. Provider timestamps are never synthesized, rounded, shifted, or retimed.
       const daily = await request(coinId, { days: BACKFILL_DAYS });
+      log(`${token.id}: market_chart response received in ${Date.now() - requestStartedAt}ms`);
       const notAfter = Object.fromEntries(latest
         .filter((row) => row.token_id === token.id && row.provider_id === "coingecko")
         .map((row) => [row.metric_id, row.observed_at]));
+      log(`${token.id}: checking existing CoinGecko timestamps before normalization`);
+      const existing = await existingKeys(client, token.id, new Date(now().getTime() - (BACKFILL_DAYS + 1) * 24 * 60 * 60 * 1000));
+      log(`${token.id}: existing timestamp read complete (${existing.size} key(s)); normalizing provider points`);
       const snapshot = normalizeMarketChartHistory({
         asset: { tokenId: token.id, chainId: token.chainId, externalAssetId: coinId },
         daily,
         collectedAt: now().toISOString(),
         notAfter,
-        existing: await existingKeys(client, token.id, new Date(now().getTime() - (BACKFILL_DAYS + 1) * 24 * 60 * 60 * 1000)),
+        existing,
       });
+      log(`${token.id}: normalization complete (${snapshot?.observations.length ?? 0} new observation(s))`);
       if (!snapshot) {
         results.push({ tokenId: token.id, status: "up_to_date", newObservations: 0, rawRecords: 0 });
       } else if (options.dryRun) {
         results.push({ tokenId: token.id, status: "backfilled", newObservations: snapshot.observations.length, rawRecords: 0 });
       } else {
+        log(`${token.id}: persisting ${snapshot.observations.length} observation(s)`);
         const persisted = await persistProviderSnapshots(client, [snapshot]);
+        log(`${token.id}: persistence complete (${persisted.observations} observation(s), ${persisted.rawRecords} raw record(s))`);
         results.push({ tokenId: token.id, status: persisted.observations > 0 ? "backfilled" : "up_to_date", newObservations: persisted.observations, rawRecords: persisted.rawRecords });
       }
       const result = results.at(-1)!;
