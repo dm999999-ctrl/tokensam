@@ -36,39 +36,21 @@ try {
   let allIds = tokenIds ?? canonicalTokens.map((token) => token.id);
 
   if (!tokenIds) {
-    const start = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    start.setUTCHours(0, 0, 0, 0);
-    const end = new Date();
-    end.setUTCHours(0, 0, 0, 0);
+    // Backfill the current production token universe. Do not use day-count
+    // coverage as the skip condition: a token can have 91 calendar days
+    // represented while still having large intraday gaps in the current
+    // 30-day granular window.
+    const { data: productionTokens, error } = await client
+      .from("tokens")
+      .select("id");
 
-    const { data, error } = await client
-      .from("token_metric_observations")
-      .select("token_id,metric_id,observed_at")
-      .eq("provider_id", "coingecko")
-      .in("metric_id", ["price_usd", "market_cap_usd", "volume_24h_usd"])
-      .gte("observed_at", start.toISOString())
-      .lt("observed_at", new Date(end.getTime() + 24 * 60 * 60 * 1000).toISOString());
+    if (error) throw new Error("Supabase production token-universe lookup failed: " + error.message);
 
-    if (error) throw new Error("Supabase 90D coverage audit failed: " + error.message);
+    const productionIds = new Set((productionTokens ?? []).map((row) => row.id));
+    allIds = allIds.filter((id) => productionIds.has(id));
 
-    const daysByTokenMetric = new Map();
-    for (const row of data ?? []) {
-      const day = new Date(row.observed_at).toISOString().slice(0, 10);
-      const key = row.token_id + "|" + row.metric_id;
-      let days = daysByTokenMetric.get(key);
-      if (!days) {
-        days = new Set();
-        daysByTokenMetric.set(key, days);
-      }
-      days.add(day);
-    }
-
-    allIds = allIds.filter((id) =>
-      ["price_usd", "market_cap_usd", "volume_24h_usd"].some((metric) =>
-        (daysByTokenMetric.get(id + "|" + metric)?.size ?? 0) < 91));
-
-    console.log("Gap audit: " + allIds.length + " token(s) need CoinGecko 90D chart history; "
-      + (canonicalTokens.length - allIds.length) + " token(s) already have 91/91/91 daily coverage.");
+    console.log("Production token universe: " + allIds.length + " token(s).");
+    console.log("Backfill mode: fill missing genuine CoinGecko observations in the rolling 30-day granular window; existing timestamps are skipped.");
   }
 
   const batches = [];
