@@ -4,12 +4,14 @@ import type { NormalizedObservation, ProviderAsset, ProviderSnapshot } from "./t
 /**
  * CoinGecko historical market chart (GET /coins/{id}/market_chart).
  *
- * A 90-day request returns hourly historical points on plans where explicit
- * daily intervals are unavailable. The backfill reduces that response to one
- * real provider point per UTC day, nearest to 00:00 UTC, so the database gains
- * daily history rather than another large hourly archive.
+ * For the rolling retention model:
+ *   - 0-30 days: preserve every genuine provider observation at its exact
+ *     provider timestamp.
+ *   - >30 and <90 days: reduce to one genuine provider observation per UTC
+ *     day, choosing the point closest to 00:00 UTC.
+ *
+ * No timestamps are generated, retimed, interpolated, or synthesized.
  */
-
 export const BACKFILL_ENDPOINT_LABEL = "GET /coins/{id}/market_chart (days=90, sampled daily)";
 const MAX_ATTEMPTS = 3;
 const SERIES: { field: "prices" | "market_caps" | "total_volumes"; metricId: string }[] = [
@@ -101,16 +103,27 @@ export function normalizeMarketChartHistory(input: {
   collectedAt: string;
   notAfter: Partial<Record<string, string>>;
   existing: Set<string>;
+  nowMs?: number;
 }): ProviderSnapshot | null {
   const observations: NormalizedObservation[] = [];
+  const nowMs = input.nowMs ?? Date.parse(input.collectedAt);
+  const granularCutoff = nowMs - 30 * 24 * 60 * 60 * 1000;
+
   for (const { field, metricId } of SERIES) {
     const cutoff = input.notAfter[metricId] ? Date.parse(input.notAfter[metricId]!) : Number.POSITIVE_INFINITY;
     const seen = new Set<string>();
-    for (const [timeMs, value] of dailyPairs(input.daily[field])) {
+    const points = pairs(input.daily[field]).sort((a, b) => a[0] - b[0]);
+
+    const granular = points.filter(([timeMs]) => timeMs >= granularCutoff && timeMs <= nowMs);
+    const older = points.filter(([timeMs]) => timeMs < granularCutoff);
+    const selected = [...dailyPairs(older), ...granular];
+
+    for (const [timeMs, value] of selected) {
       const observedAt = new Date(timeMs).toISOString();
       const key = `${metricId}|${observedAt}`;
       if (timeMs >= cutoff || seen.has(key) || input.existing.has(key)) continue;
       seen.add(key);
+
       observations.push({
         tokenId: input.asset.tokenId,
         chainId: input.asset.chainId,
@@ -122,12 +135,16 @@ export function normalizeMarketChartHistory(input: {
         windowDays: null,
         scope: "token",
         sourceField: `market_chart.${field}`,
-        note: "CoinGecko historical market_chart point sampled to one observation per UTC day, using the provider timestamp.",
+        note: timeMs >= granularCutoff
+          ? "CoinGecko historical market_chart observation stored at the exact provider timestamp."
+          : "CoinGecko historical market_chart observation retained as the daily 30-90 day representative point at its exact provider timestamp.",
       });
     }
   }
+
   if (observations.length === 0) return null;
   const observedTimes = observations.map((observation) => observation.observedAt).sort();
+
   return {
     providerId: "coingecko",
     endpointLabel: BACKFILL_ENDPOINT_LABEL,
@@ -135,14 +152,22 @@ export function normalizeMarketChartHistory(input: {
     observedAt: observedTimes.at(-1)!,
     collectedAt: input.collectedAt,
     rawPayload: {
-      request: { days: 90, sampling: "nearest point to 00:00 UTC per day" },
+      request: { days: 90, sampling: "actual provider timestamps for 0-30d; nearest-to-midnight actual point per UTC day for >30d" },
       daily: {
-        prices: dailyPairs(input.daily.prices),
-        market_caps: dailyPairs(input.daily.market_caps),
-        total_volumes: dailyPairs(input.daily.total_volumes),
+        prices: [...dailyPairs(olderForPayload(input.daily.prices, granularCutoff)), ...granularForPayload(input.daily.prices, granularCutoff, nowMs)],
+        market_caps: [...dailyPairs(olderForPayload(input.daily.market_caps, granularCutoff)), ...granularForPayload(input.daily.market_caps, granularCutoff, nowMs)],
+        total_volumes: [...dailyPairs(olderForPayload(input.daily.total_volumes, granularCutoff)), ...granularForPayload(input.daily.total_volumes, granularCutoff, nowMs)],
       },
-      retentionNote: "CoinGecko market_chart data reduced to one real provider point per UTC day; no values were interpolated or synthesized.",
+      retentionNote: "No values or timestamps were interpolated, synthesized, or retimed. Current 30-day observations retain exact CoinGecko provider timestamps; older observations are reduced only for the 30-90 day retention tier.",
     },
     observations,
   };
+}
+
+function olderForPayload(value: unknown, cutoffMs: number): [number, number][] {
+  return pairs(value).filter(([timeMs]) => timeMs < cutoffMs);
+}
+
+function granularForPayload(value: unknown, cutoffMs: number, nowMs: number): [number, number][] {
+  return pairs(value).filter(([timeMs]) => timeMs >= cutoffMs && timeMs <= nowMs);
 }
