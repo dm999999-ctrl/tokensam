@@ -1,10 +1,10 @@
 begin;
 
--- Retention policy v2: 30-day granular chart history.
+-- Retention policy v3: 30-day granular chart history + daily UTC 30-90 day history.
 --
 -- token_metric_observations:
 --   * 0-30 days: FULL granular resolution for chart data and all other metrics.
---   * 30-91 days: weekly representation.
+--   * 30-90 days: one observation per token/metric/UTC day.
 --   * >90 days: delete.
 --
 -- raw_provider_records:
