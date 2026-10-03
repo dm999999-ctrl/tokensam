@@ -34,7 +34,7 @@ const MINUTE = 60 * 1000;
  */
 export const REFRESH_POLICY: Record<ProviderStep, { label: string; intervalMs: number; staleAfterMs: number; timeoutMs: number }> = {
   coingecko: { label: "CoinGecko", intervalMs: 15 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 140_000 },
-  dexscreener: { label: "DEX Screener", intervalMs: 15 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 40_000 },
+  dexscreener: { label: "DEX Screener", intervalMs: 30 * MINUTE, staleAfterMs: 2 * 60 * MINUTE, timeoutMs: 40_000 },
   // Current TVL + fees + revenue: three small requests per protocol (72 for 24), paced 1.1 s apart.
   // Measured 2026-09-25 at 109 s for 24 protocols, so the budget is 150 s (pacing is unchanged).
   // Keep the 6-hour cadence because DeFiLlama does not publish a free-tier request limit or
@@ -42,7 +42,7 @@ export const REFRESH_POLICY: Record<ProviderStep, { label: string; intervalMs: n
   // Dated TVL history (/protocol, up to ~69 MB per record) remains a separate explicit backfill.
   defillama: { label: "DeFiLlama", intervalMs: 6 * 60 * MINUTE, staleAfterMs: 24 * 60 * MINUTE, timeoutMs: 150_000 },
   // Token-level DeFiLlama prices: small batched requests (25 keys each; four for 100 tokens).
-  defillama_coins: { label: "DeFiLlama (token prices)", intervalMs: 30 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 30_000 },
+  defillama_coins: { label: "DeFiLlama (token prices)", intervalMs: 60 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 30_000 },
 };
 
 /** Cron delivery can be late or early by minutes; treat a provider as due slightly early. */
