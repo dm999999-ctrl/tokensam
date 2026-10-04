@@ -74,6 +74,12 @@ function card(id: string, label: string, value: string | null, extra: Partial<Ca
   return value === null ? null : { id, label, value, tone: "neutral", ...extra };
 }
 
+/** A horizon-pinned % change (e.g. "Market cap change · 24h"); null input hides the card. */
+function changeCard(id: string, label: string, value: number | null): Card | null {
+  const change = formatChange(value);
+  return change ? { id, label, value: change.text, tone: change.tone } : null;
+}
+
 /** Changes always carry their actual interval; short ones are labelled as snapshot changes, not trends. */
 function intervalNote(display: MetricDisplay): string | undefined {
   if (!display.interval) return undefined;
@@ -125,6 +131,10 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
   const onChainVolume = metric("dex_aggregate_volume_24h_usd");
   const onChainLiquidity = metric("dex_aggregate_liquidity_usd");
   const onChainBuySell = metric("dex_buy_sell_ratio");
+  // Horizon-pinned changes (market cap, volume, volume/market cap), computed server-side in
+  // buildDashboardTokens from matched-timestamp CoinGecko observations -- not the opportunistic
+  // "latest vs previous stored point" the calculated-metrics engine's growth_pct metrics use,
+  // which is why these carry a fixed, labeled horizon instead of a variable snapshot interval.
   const snapshot = {
     cards: present([
       card("market_cap", "Market cap", formatUsd(token.marketCapUsd, true)),
@@ -137,7 +147,11 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
       card("transactions_24h", "Transactions · 24h", formatCount(data.dexActivity.transactions24h)),
       onChainBuySell ? fromMetric(onChainBuySell) : null,
     ]) : [],
-    changes: inSection("market", "growth"),
+    changes: present([
+      changeCard("market_cap_change_24h", "Market cap change · 24h", token.marketCapChange24hPct),
+      changeCard("volume_change_48h", "Volume change · 48h", token.volumeChange48hPct),
+      changeCard("volume_to_market_cap_change_24h", "Volume / market cap change · 24h", token.volumeToMarketCapChange24hPct),
+    ]),
   };
 
   // B. Market history: token-scope series with at least one stored point; protocol TVL only with a curated mapping.
