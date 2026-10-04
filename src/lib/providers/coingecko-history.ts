@@ -101,11 +101,13 @@ export function normalizeMarketChartHistory(input: {
   collectedAt: string;
   notAfter: Partial<Record<string, string>>;
   existing: Set<string>;
+  granularDays?: number;
   nowMs?: number;
 }): ProviderSnapshot | null {
   const observations: NormalizedObservation[] = [];
   const nowMs = input.nowMs ?? Date.parse(input.collectedAt);
-  const granularCutoff = nowMs - 30 * 24 * 60 * 60 * 1000;
+  const granularDays = input.granularDays ?? 30;
+  const granularCutoff = nowMs - granularDays * 24 * 60 * 60 * 1000;
 
   for (const { field, metricId } of SERIES) {
     const cutoff = input.notAfter[metricId] ? Date.parse(input.notAfter[metricId]!) : Number.POSITIVE_INFINITY;
@@ -146,13 +148,13 @@ export function normalizeMarketChartHistory(input: {
     observedAt: observedTimes.at(-1)!,
     collectedAt: input.collectedAt,
     rawPayload: {
-      request: { days: 30, sampling: "actual provider timestamps only" },
+      request: { days: granularDays, sampling: "actual provider timestamps only" },
       daily: {
         prices: granularForPayload(input.daily.prices, granularCutoff, nowMs),
         market_caps: granularForPayload(input.daily.market_caps, granularCutoff, nowMs),
         total_volumes: granularForPayload(input.daily.total_volumes, granularCutoff, nowMs),
       },
-      retentionNote: "This backfill only stores genuine CoinGecko observations in the rolling 30-day granular window. Existing 30-90 day daily observations are untouched. No values or timestamps were interpolated, synthesized, or retimed.",
+      retentionNote: `This backfill only stores genuine CoinGecko observations in the rolling ${granularDays}-day granular window. Existing 30-90 day daily observations are untouched. No values or timestamps were interpolated, synthesized, or retimed.`,
     },
     observations,
   };
