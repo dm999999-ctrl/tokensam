@@ -166,8 +166,9 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 
 /* Research Universe */
 /* Homepage hero (UniverseHero.tsx): real text, inline-SVG ink-wash scene, and live metric cards. */
-.samurai-hero { position: relative; isolation: isolate; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); align-items: center; gap: 28px 48px; min-height: 400px; overflow: hidden; padding: 52px 40px 52px 52px; border: 1px solid var(--line-soft); border-radius: var(--radius-lg); background: #0b0b0c; }
-.hero-art { z-index: -2; object-fit: cover; object-position: 62% 30%; pointer-events: none; user-select: none; }
+.samurai-hero { position: relative; isolation: isolate; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 34%); align-items: center; gap: 28px 40px; min-height: 440px; overflow: hidden; padding: 52px 40px 52px 52px; border: 1px solid var(--line-soft); border-radius: var(--radius-lg); background: #0b0b0c; }
+.hero-art { position: absolute; z-index: -2; top: 0; bottom: 0; left: -12%; width: 112%; pointer-events: none; user-select: none; }
+.hero-art img { object-fit: cover; object-position: 50% 30%; }
 .hero-veil { position: absolute; inset: 0; z-index: -1; background: linear-gradient(90deg, rgb(11 11 12 / 62%) 0, rgb(11 11 12 / 34%) 42%, rgb(11 11 12 / 6%) 66%, transparent 100%); pointer-events: none; }
 .samurai-hero .hero-copy { position: relative; display: grid; justify-items: start; gap: 18px; max-width: 560px; }
 .hero-eyebrow { margin: 0; font-size: 13px; letter-spacing: .18em; }
@@ -197,7 +198,7 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .hero-card-label { order: 2; margin-top: 8px; }
 .hero-card-kicker { display: flex; align-items: center; gap: 8px; order: 0; margin-bottom: 6px; }
 .hero-card-detail { order: 3; margin-top: 8px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
-.hero-card-updated .hero-card-value { font-size: clamp(22px, 1.6vw, 27px); white-space: normal; }
+.hero-card-updated .hero-card-value { font-size: clamp(20px, 1.4vw, 25px); }
 .hero-card-status { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--positive); box-shadow: 0 0 0 3px rgb(134 179 149 / 16%); }
 .hero-card-status.stale { background: #d6a44a; box-shadow: 0 0 0 3px rgb(214 164 74 / 16%); }
 .error-banner { padding: 10px 12px; border: 1px solid rgb(195 50 43 / 45%); border-left: 3px solid var(--crimson); border-radius: var(--radius); background: var(--crimson-soft); color: #e7b4ae; font-size: 13px; }
@@ -512,7 +513,8 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 
 @media (max-width: 1100px) {
   .samurai-hero { grid-template-columns: 1fr; min-height: 0; }
-  .hero-art { object-position: 70% 30%; }
+  .hero-art { left: 0; width: 100%; }
+  .hero-art img { object-position: 70% 30%; }
   .hero-veil { background: linear-gradient(180deg, rgb(11 11 12 / 55%), rgb(11 11 12 / 30%)); }
   .hero-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
   .hero-card { flex-direction: column; align-items: flex-start; gap: 10px; min-height: 0; }
@@ -548,7 +550,8 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 /* Mobile: identity, price, primary metrics, section nav, charts, analysis */
 @media (max-width: 720px) {
   .samurai-hero { gap: 22px; padding: 28px 18px 20px; }
-  .hero-art { object-position: 64% 30%; }
+  .hero-art { left: 0; width: 100%; }
+  .hero-art img { object-position: 64% 30%; }
   .hero-veil { background: rgb(11 11 12 / 58%); }
   .hero-eyebrow { font-size: 11px; letter-spacing: .14em; }
   .samurai-hero .hero-lede { font-size: 14.5px; }

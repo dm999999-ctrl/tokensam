@@ -92,7 +92,9 @@ export function UniverseHero({ assets, chains, metricsPerAsset, updatedAt, refre
 
   return (
     <section className="samurai-hero" aria-labelledby="page-title">
-      <Image className="hero-art" src="/brand/token-samurai-hero.png" alt="" fill priority sizes="(max-width: 1280px) 100vw, 1700px" quality={90} aria-hidden="true" />
+      <div className="hero-art" aria-hidden="true">
+        <Image src="/brand/token-samurai-hero.png" alt="" fill priority sizes="(max-width: 1280px) 100vw, 1900px" quality={90} />
+      </div>
       <div className="hero-veil" aria-hidden="true" />
       <div className="hero-copy">
         <p className="eyebrow hero-eyebrow">AI-powered crypto market intelligence</p>
