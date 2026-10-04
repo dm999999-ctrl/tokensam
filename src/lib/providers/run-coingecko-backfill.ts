@@ -25,7 +25,7 @@ async function existingKeys(client: SupabaseAdminClient, tokenId: string, since:
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await client.from("token_metric_observations")
       .select("metric_id,observed_at").eq("token_id", tokenId).eq("provider_id", "coingecko")
-      .in("metric_id", BACKFILL_METRICS).gte("observed_at", since.toISOString())
+      .in("metric_id", metrics).gte("observed_at", since.toISOString())
       .order("observed_at", { ascending: true })
       .order("metric_id", { ascending: true })
       .range(offset, offset + 999);
@@ -47,6 +47,8 @@ export async function runCoinGeckoBackfill(
   options: {
     tokenIds?: string[];
     dryRun?: boolean;
+    days?: number;
+    metrics?: string[];
     env?: Record<string, string | undefined>;
     fetchImpl?: typeof fetch;
     sleep?: (ms: number) => Promise<void>;
@@ -55,6 +57,8 @@ export async function runCoinGeckoBackfill(
   } = {},
 ): Promise<{ results: BackfillTokenResult[]; requests: number; stoppedEarly: string | null }> {
   const config = getCoinGeckoConfig(options.env);
+  const backfillDays = options.days ?? BACKFILL_DAYS;
+  const metrics = options.metrics ?? BACKFILL_METRICS;
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? (() => new Date());
@@ -94,13 +98,13 @@ export async function runCoinGeckoBackfill(
       // No `interval` param: CoinGecko may return the provider's native granularity for
       // the 30-day range. Only genuine provider points from that rolling 30-day window
       // are stored. Provider timestamps are never synthesized, rounded, shifted, or retimed.
-      const daily = await request(coinId, { days: BACKFILL_DAYS });
+      const daily = await request(coinId, { days: backfillDays });
       log(`${token.id}: market_chart response received in ${Date.now() - requestStartedAt}ms`);
       const notAfter = Object.fromEntries(latest
         .filter((row) => row.token_id === token.id && row.provider_id === "coingecko")
         .map((row) => [row.metric_id, row.observed_at]));
       log(`${token.id}: checking existing CoinGecko timestamps before normalization`);
-      const existing = await existingKeys(client, token.id, new Date(now().getTime() - (BACKFILL_DAYS + 1) * 24 * 60 * 60 * 1000));
+      const existing = await existingKeys(client, token.id, new Date(now().getTime() - (backfillDays + 1) * 24 * 60 * 60 * 1000));
       log(`${token.id}: existing timestamp read complete (${existing.size} key(s)); normalizing provider points`);
       const snapshot = normalizeMarketChartHistory({
         asset: { tokenId: token.id, chainId: token.chainId, externalAssetId: coinId },
@@ -109,14 +113,17 @@ export async function runCoinGeckoBackfill(
         notAfter,
         existing,
       });
-      log(`${token.id}: normalization complete (${snapshot?.observations.length ?? 0} new observation(s))`);
-      if (!snapshot) {
+      const filteredSnapshot = snapshot
+        ? { ...snapshot, observations: snapshot.observations.filter((observation) => metrics.includes(observation.metricId)) }
+        : null;
+      log(`${token.id}: normalization complete (${filteredSnapshot?.observations.length ?? 0} new observation(s))`);
+      if (!filteredSnapshot || filteredSnapshot.observations.length === 0) {
         results.push({ tokenId: token.id, status: "up_to_date", newObservations: 0, rawRecords: 0 });
       } else if (options.dryRun) {
-        results.push({ tokenId: token.id, status: "backfilled", newObservations: snapshot.observations.length, rawRecords: 0 });
+        results.push({ tokenId: token.id, status: "backfilled", newObservations: filteredSnapshot.observations.length, rawRecords: 0 });
       } else {
-        log(`${token.id}: persisting ${snapshot.observations.length} observation(s)`);
-        const persisted = await persistProviderSnapshots(client, [snapshot]);
+        log(`${token.id}: persisting ${filteredSnapshot.observations.length} observation(s)`);
+        const persisted = await persistProviderSnapshots(client, [filteredSnapshot]);
         log(`${token.id}: persistence complete (${persisted.observations} observation(s), ${persisted.rawRecords} raw record(s))`);
         results.push({ tokenId: token.id, status: persisted.observations > 0 ? "backfilled" : "up_to_date", newObservations: persisted.observations, rawRecords: persisted.rawRecords });
       }
