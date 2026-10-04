@@ -115,7 +115,20 @@ export async function runCoinGeckoBackfill(
         granularDays: backfillDays,
       });
       const filteredSnapshot = snapshot
-        ? { ...snapshot, observations: snapshot.observations.filter((observation) => metrics.includes(observation.metricId)) }
+        ? {
+            ...snapshot,
+            observations: snapshot.observations.filter((observation) => metrics.includes(observation.metricId)),
+            rawPayload: {
+              ...snapshot.rawPayload,
+              daily: Object.fromEntries(
+                Object.entries(snapshot.rawPayload.daily as Record<string, unknown>).filter(([field]) =>
+                  (field === "prices" && metrics.includes("price_usd")) ||
+                  (field === "market_caps" && metrics.includes("market_cap_usd")) ||
+                  (field === "total_volumes" && metrics.includes("volume_24h_usd")),
+                ),
+              ),
+            },
+          }
         : null;
       log(`${token.id}: normalization complete (${filteredSnapshot?.observations.length ?? 0} new observation(s))`);
       if (!filteredSnapshot || filteredSnapshot.observations.length === 0) {
