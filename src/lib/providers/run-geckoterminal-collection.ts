@@ -8,6 +8,8 @@ import {
 } from "./geckoterminal.ts";
 import { geckoTerminalSyncLockTableExists, resolveGeckoTerminalStartTokenId, withGeckoTerminalSyncLock } from "./geckoterminal-sync-lock.ts";
 import { persistProviderSnapshots } from "./persist-snapshots.ts";
+import { MAX_GAP_REPAIR_TOKENS as GECKOTERMINAL_MAX_GAP_REPAIR_TOKENS, repairGeckoTerminalDailyGaps } from "./repair-geckoterminal-daily-gaps.ts";
+import { MIN_REQUEST_INTERVAL_MS } from "./geckoterminal.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
@@ -27,6 +29,14 @@ const REQUIRED_METRICS = [
 // deadline well under this; a manual sync of 63 tokens is ~7 minutes with no throttling),
 // short enough that a crashed run self-heals well within a day's cadence.
 const LOCK_LEASE_MS = 15 * 60 * 1000;
+
+// The gap repair's own worst case is MAX_GAP_REPAIR_TOKENS requests paced at
+// MIN_REQUEST_INTERVAL_MS apart, plus per-request latency; this is that
+// worst case with headroom. Scheduled collection only attempts the repair
+// when at least this much of the caller's deadline remains, so it can never
+// turn an on-time collection into one that blows the cron route's own budget
+// (see PROCESSING_BUDGET_MS in src/app/api/cron/geckoterminal/route.ts).
+const GAP_REPAIR_MIN_BUDGET_MS = GECKOTERMINAL_MAX_GAP_REPAIR_TOKENS * MIN_REQUEST_INTERVAL_MS + 10_000;
 
 function throwOnSupabaseError(error: { message: string } | null, action: string): void {
   if (error) throw new Error(`Supabase ${action} failed: ${error.message}`);
@@ -141,6 +151,9 @@ export type GeckoTerminalScheduledResult = {
    * invocations without a dedicated cursor table.
    */
   nextTokenId: string | null;
+  /** Present only when the gap repair actually ran (skipped when too little deadline budget remained). */
+  gapRepair?: Awaited<ReturnType<typeof repairGeckoTerminalDailyGaps>>;
+  gapRepairError?: string;
 };
 
 /**
@@ -230,6 +243,27 @@ export async function runGeckoTerminalScheduledCollection(
       .map((item) => ({ tokenId: item.tokenId, metricId: item.metricId })),
   );
 
+  // Historical repair is deliberately best-effort, same as the CoinGecko/DeFiLlama
+  // gap repairs: a repair failure must not turn an otherwise successful live
+  // collection into a failure, and it is skipped outright (not attempted) when
+  // too little of the caller's deadline remains, so it can never cause this
+  // route to blow its own time budget. The next successful scheduled run
+  // retries the bounded repair.
+  let gapRepair: GeckoTerminalScheduledResult["gapRepair"];
+  let gapRepairError: string | undefined;
+  const remainingMs = options.deadlineAt !== undefined ? options.deadlineAt - Date.now() : null;
+  if (!ownershipLostDuringCollection && (remainingMs === null || remainingMs > GAP_REPAIR_MIN_BUDGET_MS)) {
+    try {
+      gapRepair = await repairGeckoTerminalDailyGaps(client, {
+        fetchImpl: options.fetchImpl,
+        sleep: options.sleep,
+        now: options.now,
+      });
+    } catch (error) {
+      gapRepairError = error instanceof Error ? error.message : "Unknown GeckoTerminal gap-repair error.";
+    }
+  }
+
   return {
     provider: "geckoterminal",
     attempted: assets.length,
@@ -245,6 +279,8 @@ export async function runGeckoTerminalScheduledCollection(
     durationMs: Date.now() - startedAt,
     startTokenId: startTokenId ?? null,
     nextTokenId,
+    gapRepair,
+    gapRepairError,
     ownershipLostDuringCollection,
   };
 }
