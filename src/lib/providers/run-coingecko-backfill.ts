@@ -112,6 +112,7 @@ export async function runCoinGeckoBackfill(
         collectedAt: now().toISOString(),
         notAfter,
         existing,
+        granularDays: backfillDays,
       });
       const filteredSnapshot = snapshot
         ? { ...snapshot, observations: snapshot.observations.filter((observation) => metrics.includes(observation.metricId)) }
