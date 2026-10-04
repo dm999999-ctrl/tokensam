@@ -20,7 +20,7 @@ export type BackfillTokenResult = {
   error?: string;
 };
 
-async function existingKeys(client: SupabaseAdminClient, tokenId: string, since: Date): Promise<Set<string>> {
+async function existingKeys(client: SupabaseAdminClient, tokenId: string, since: Date, metrics: string[]): Promise<Set<string>> {
   const keys = new Set<string>();
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await client.from("token_metric_observations")
@@ -96,7 +96,7 @@ export async function runCoinGeckoBackfill(
       log(`${token.id}: starting market_chart request for CoinGecko ID ${coinId}`);
       const requestStartedAt = Date.now();
       // No `interval` param: CoinGecko may return the provider's native granularity for
-      // the 30-day range. Only genuine provider points from that rolling 30-day window
+      // the requested range. Only genuine provider points from that rolling window
       // are stored. Provider timestamps are never synthesized, rounded, shifted, or retimed.
       const daily = await request(coinId, { days: backfillDays });
       log(`${token.id}: market_chart response received in ${Date.now() - requestStartedAt}ms`);
@@ -104,7 +104,7 @@ export async function runCoinGeckoBackfill(
         .filter((row) => row.token_id === token.id && row.provider_id === "coingecko")
         .map((row) => [row.metric_id, row.observed_at]));
       log(`${token.id}: checking existing CoinGecko timestamps before normalization`);
-      const existing = await existingKeys(client, token.id, new Date(now().getTime() - (backfillDays + 1) * 24 * 60 * 60 * 1000));
+      const existing = await existingKeys(client, token.id, new Date(now().getTime() - (backfillDays + 1) * 24 * 60 * 60 * 1000), metrics);
       log(`${token.id}: existing timestamp read complete (${existing.size} key(s)); normalizing provider points`);
       const snapshot = normalizeMarketChartHistory({
         asset: { tokenId: token.id, chainId: token.chainId, externalAssetId: coinId },
