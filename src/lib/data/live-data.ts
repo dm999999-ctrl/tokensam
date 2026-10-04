@@ -249,7 +249,7 @@ export function buildDashboardTokens(tokens: DbToken[], chains: DbChain[], obser
     };
     const marketCapChange24hPct = changeOverHorizon(observations, token.id, "coingecko", "market_cap_usd", MARKET_CAP_CHANGE_HOURS);
     const volumeChange48hPct = changeOverHorizon(observations, token.id, "coingecko", "volume_24h_usd", VOLUME_CHANGE_TARGET_HOURS);
-    const volumeToMarketCapChange24hPct = volumeToMarketCapChangeOverHorizon(observations, token.id, VOLUME_TO_MARKET_CAP_CHANGE_HOURS);
+    const volumeToMarketCapChange48hPct = volumeToMarketCapChangeOverHorizon(observations, token.id, VOLUME_TO_MARKET_CAP_CHANGE_HOURS);
     const latestMarketCap = observationFor(observations, token.id, "coingecko", "market_cap_usd");
     if (latestMarketCap) metricSources.marketCapChange24hPct = {
       providerId: "calculated",
@@ -262,10 +262,10 @@ export function buildDashboardTokens(tokens: DbToken[], chains: DbChain[], obser
       collectedAt: latestVolume.collected_at,
       note: "The latest stored 24h volume (itself already a trailing 24-hour figure) vs. the closest stored 24h volume observation approximately 24 hours before that -- i.e. the past 24 hours' volume vs. the preceding 24 hours'.",
     };
-    if (latestVolume) metricSources.volumeToMarketCapChange24hPct = {
+    if (latestVolume) metricSources.volumeToMarketCapChange48hPct = {
       providerId: "calculated",
       collectedAt: latestVolume.collected_at,
-      note: "Calculated server-side from the volume_24h_usd / market_cap_usd ratio at matching CoinGecko collection timestamps approximately 24 hours apart.",
+      note: "Calculated server-side from the volume_24h_usd / market_cap_usd ratio at matching CoinGecko collection timestamps approximately 24 hours apart (volume_24h_usd is itself already a trailing 24h figure, so this spans 48h of underlying trading activity, like volumeChange48hPct).",
     };
     const tokenRows = observations.filter((row) => row.token_id === token.id);
     const observedAt = tokenRows.map((row) => row.collected_at).sort().at(-1) ?? "";
@@ -287,7 +287,7 @@ export function buildDashboardTokens(tokens: DbToken[], chains: DbChain[], obser
       tvlChange30dPct,
       marketCapChange24hPct,
       volumeChange48hPct,
-      volumeToMarketCapChange24hPct,
+      volumeToMarketCapChange48hPct,
       fees24hUsd: valueFor("fees_24h_usd", "defillama", "fees24hUsd"),
       revenue24hUsd: valueFor("revenue_24h_usd", "defillama", "revenue24hUsd"),
       observedAt,

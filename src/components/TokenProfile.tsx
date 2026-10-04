@@ -169,18 +169,16 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
 
       <section className="profile-section" id="market" aria-labelledby="market-title">
         <SectionHead eyebrow="Token" title="Market snapshot" id="market-title" />
-        {model.snapshot.cards.length > 0 ? (
-          <div className="tile-grid">{model.snapshot.cards.map((item) => <Tile key={item.id} item={item} emphasis />)}</div>
-        ) : <p className="muted-copy">No token-level market figures are stored for this token.</p>}
-        {model.snapshot.onChain.length > 0 ? (
-          <div className="subsection">
-            <h3>On-chain trading</h3>
-            <div className="tile-grid">{model.snapshot.onChain.map((item) => <Tile key={item.id} item={item} />)}</div>
+        {model.snapshot.pairs.length > 0 ? (
+          <div className="snapshot-pairs">
+            {model.snapshot.pairs.map((pair) => (
+              <div key={pair.id} className="snapshot-pair">
+                <Tile item={pair.main} emphasis />
+                {pair.change ? <Tile item={pair.change} /> : null}
+              </div>
+            ))}
           </div>
-        ) : null}
-        {model.snapshot.changes.length > 0 ? (
-          <div className="snapshot-changes">{model.snapshot.changes.map((item) => <Tile key={item.id} item={item} />)}</div>
-        ) : null}
+        ) : <p className="muted-copy">No token-level market figures are stored for this token.</p>}
       </section>
 
       {fundamentals.available ? (

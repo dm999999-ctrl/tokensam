@@ -14,6 +14,8 @@ import { TECHNICAL_PROVENANCE, datasetLabel, plainLanguage } from "./data-langua
  */
 
 export type Card = { id: string; label: string; value: string; tone: Tone; note?: string; title?: string; interval?: Interval | null };
+/** A main Market Snapshot card paired with its own horizon-pinned change, for column-matched display. */
+export type SnapshotPair = { id: string; main: Card; change: Card | null };
 export type SectionNote = { title: string; reason: string };
 /** Circulating vs maximum supply. `barPct` is clamped to 0–100 for drawing; `circulatingPct` is the actual ratio. */
 export type SupplyComposition = { circulatingPct: number; remainingPct: number; barPct: number; circulating: string; maximum: string; symbol: string };
@@ -24,7 +26,7 @@ export type SectionId =
   | "history" | "technical" | "analysis" | "sources";
 
 export type ProfileModel = {
-  snapshot: { cards: Card[]; onChain: Card[]; changes: Card[] };
+  snapshot: { cards: Card[]; changes: Card[]; pairs: SnapshotPair[] };
   /** Historical Signals: token-scope market series, plus the associated protocol's TVL series (kept separate by scope). */
   history: { available: true; series: HistoryChartKey[]; tvl: boolean } | { available: false; note: SectionNote };
   fundamentals:
@@ -123,34 +125,33 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
     calculatedMetrics.filter((item) => item.category === category && metricSection(item) === section)
       .map((item) => displays.get(item.id)).filter((item): item is MetricDisplay => item !== undefined).map(fromMetric);
 
-  // A. Market snapshot: token scope only. On-chain trading is a headline echo of verified DEX
-  // data (see section D, Trading & Liquidity, for the deeper detail) — shown only when a curated
-  // DEX mapping exists, and only the individual metrics that are actually available; never a
-  // fabricated zero, and never an empty group when nothing on-chain is available.
-  const volumeToMcap = metric("volume_to_market_cap");
-  const onChainVolume = metric("dex_aggregate_volume_24h_usd");
-  const onChainLiquidity = metric("dex_aggregate_liquidity_usd");
-  const onChainBuySell = metric("dex_buy_sell_ratio");
-  // Horizon-pinned changes (market cap, volume, volume/market cap), computed server-side in
-  // buildDashboardTokens from matched-timestamp CoinGecko observations -- not the opportunistic
+  // A. Market snapshot: token scope only. On-chain trading conditions live in their own
+  // Trading & Liquidity section (see D below) rather than being echoed here too.
+  //
+  // Each card pairs with its own horizon-pinned change directly beneath it (market cap/its 24h
+  // change, volume/its 48h change, volume-market-cap ratio/its 48h change), computed server-side
+  // in buildDashboardTokens from matched-timestamp CoinGecko observations -- not the opportunistic
   // "latest vs previous stored point" the calculated-metrics engine's growth_pct metrics use,
   // which is why these carry a fixed, labeled horizon instead of a variable snapshot interval.
+  // volume_24h_usd is itself already a trailing 24-hour figure, so comparing two readings of it
+  // (or of the ratio built from it) 24 hours apart spans 48 hours of underlying trading activity --
+  // hence the "48h" label on both the volume and the volume/market-cap change, even though the
+  // comparison itself is a point-to-point reading 24 hours apart, same as the market cap change.
+  const volumeToMcap = metric("volume_to_market_cap");
+  const marketCapCard = card("market_cap", "Market cap", formatUsd(token.marketCapUsd, true));
+  const volumeCard = card("volume_24h", "Volume · 24h", formatUsd(token.volume24hUsd, true));
+  const volumeToMcapCard = volumeToMcap ? fromMetric(volumeToMcap) : null;
+  const marketCapChange = changeCard("market_cap_change_24h", "Market cap change · 24h", token.marketCapChange24hPct);
+  const volumeChange = changeCard("volume_change_48h", "Volume change · 48h", token.volumeChange48hPct);
+  const volumeToMcapChange = changeCard("volume_to_market_cap_change_48h", "Volume / market cap change · 48h", token.volumeToMarketCapChange48hPct);
   const snapshot = {
-    cards: present([
-      card("market_cap", "Market cap", formatUsd(token.marketCapUsd, true)),
-      card("volume_24h", "Volume · 24h", formatUsd(token.volume24hUsd, true)),
-      volumeToMcap ? fromMetric(volumeToMcap) : null,
-    ]),
-    onChain: dexMapped ? present([
-      onChainVolume ? fromMetric(onChainVolume) : null,
-      onChainLiquidity ? fromMetric(onChainLiquidity) : null,
-      card("transactions_24h", "Transactions · 24h", formatCount(data.dexActivity.transactions24h)),
-      onChainBuySell ? fromMetric(onChainBuySell) : null,
-    ]) : [],
-    changes: present([
-      changeCard("market_cap_change_24h", "Market cap change · 24h", token.marketCapChange24hPct),
-      changeCard("volume_change_48h", "Volume change · 48h", token.volumeChange48hPct),
-      changeCard("volume_to_market_cap_change_24h", "Volume / market cap change · 24h", token.volumeToMarketCapChange24hPct),
+    cards: present([marketCapCard, volumeCard, volumeToMcapCard]),
+    changes: present([marketCapChange, volumeChange, volumeToMcapChange]),
+    /** Each main card paired with its own change card directly beneath it, for column-matched display. */
+    pairs: present([
+      marketCapCard ? { id: "market_cap", main: marketCapCard, change: marketCapChange } : null,
+      volumeCard ? { id: "volume_24h", main: volumeCard, change: volumeChange } : null,
+      volumeToMcapCard ? { id: "volume_to_market_cap", main: volumeToMcapCard, change: volumeToMcapChange } : null,
     ]),
   };
 

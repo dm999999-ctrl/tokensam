@@ -92,7 +92,7 @@ const PERIOD_7D = "7D (rolling 7 days, as reported by the provider)";
 const PERIOD_30D_TVL = "30D (TVL observations about 30 days apart)";
 const PERIOD_MARKET_CAP_CHANGE_24H = "24H (market cap observations about 24 hours apart)";
 const PERIOD_VOLUME_CHANGE_48H = "48H (the past 24h volume vs. the preceding 24h volume)";
-const PERIOD_VOLUME_TO_MARKET_CAP_CHANGE_24H = "24H (volume/market cap ratio observations about 24 hours apart)";
+const PERIOD_VOLUME_TO_MARKET_CAP_CHANGE_48H = "48H (volume/market cap ratio observations about 24 hours apart; volume_24h_usd is itself a trailing 24h figure, spanning 48h of underlying activity)";
 
 function field(input: Omit<PayloadField, "status" | "period" | "periodRequired" | "note" | "asOf" | "raw" | "intervalHours" | "technicalState" | "technicalReadings"> & Partial<Pick<PayloadField, "period" | "note" | "asOf" | "raw" | "intervalHours" | "technicalState" | "technicalReadings">>): PayloadField {
   const period = input.period ?? null;
@@ -160,7 +160,7 @@ export function buildProfilePayload(data: LiveTokenProfileData): ProfilePayload 
     // falling through fromCard's calculated.get(card.id) lookup (which would leave them ungrounded).
     market_cap_change_24h: { id: "calc:market_cap_change_24h", raw: token.marketCapChange24hPct, period: PERIOD_MARKET_CAP_CHANGE_24H, asOfKey: "marketCapChange24hPct" },
     volume_change_48h: { id: "calc:volume_change_48h", raw: token.volumeChange48hPct, period: PERIOD_VOLUME_CHANGE_48H, asOfKey: "volumeChange48hPct" },
-    volume_to_market_cap_change_24h: { id: "calc:volume_to_market_cap_change_24h", raw: token.volumeToMarketCapChange24hPct, period: PERIOD_VOLUME_TO_MARKET_CAP_CHANGE_24H, asOfKey: "volumeToMarketCapChange24hPct" },
+    volume_to_market_cap_change_48h: { id: "calc:volume_to_market_cap_change_48h", raw: token.volumeToMarketCapChange48hPct, period: PERIOD_VOLUME_TO_MARKET_CAP_CHANGE_48H, asOfKey: "volumeToMarketCapChange48hPct" },
   };
   for (const card of [...model.snapshot.cards, ...model.snapshot.changes]) fields.push(fromCard(card, market, "token", marketObserved));
   if (!model.snapshot.cards.some((card) => card.id === "market_cap")) fields.push(notReported("obs:market_cap", market, "Market cap", "token"));

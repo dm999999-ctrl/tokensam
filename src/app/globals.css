@@ -308,6 +308,11 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .tile:not(.tile-emphasis) .tile-value { font-size: 18px; }
 .tile-note { color: var(--subtle); font-size: 12px; line-height: 1.4; }
 .snapshot-changes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 10px; }
+/** Market Snapshot: each main card (e.g. Market cap) stacked directly above its own
+ *  horizon-pinned change card (e.g. Market cap change · 24h), column-matched rather than
+ *  shown as two separately-wrapping grids. */
+.snapshot-pairs { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.snapshot-pair { display: grid; gap: 10px; min-width: 0; }
 .scope-banner { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 18px; margin-bottom: 14px; padding: 10px 14px; border-left: 2px solid var(--gold); background: var(--gold-soft); font-size: 13px; }
 .scope-banner p:first-child { color: var(--ink); }
 .scope-banner strong { color: var(--ink-strong); }
@@ -592,6 +597,7 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
   .tile { padding: 12px; }
   .tile-value, .tile:not(.tile-emphasis) .tile-value { font-size: 17px; }
   .snapshot-changes { grid-template-columns: 1fr; }
+  .snapshot-pairs { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .chart-grid { grid-template-columns: 1fr; }
   .chart-plot, .chart-wide .chart-plot { height: 210px; }
   .history-toolbar { justify-content: stretch; }
@@ -615,6 +621,7 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 
 @media (max-width: 340px) {
   .tile-grid { grid-template-columns: 1fr; }
+  .snapshot-pairs { grid-template-columns: 1fr; }
   .mobile-wordmark { display: none; }
 }
 
