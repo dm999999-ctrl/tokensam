@@ -14,11 +14,24 @@ export const COINGECKO_GAP_DAYS = 30;
 // lookback beyond its own 30-day display window.
 export const PRICE_GAP_DAYS = 37;
 export const MAX_GAP_REPAIR_TOKENS = 10;
+// A real outage (e.g. the Cloudflare Worker scheduler going down for hours) leaves a
+// partial-day hole that get_coingecko_daily_gaps cannot see: as long as some data
+// exists on both the day the outage started and the day it ended, neither day reads
+// as "missing". This threshold is well above CoinGecko's normal ~1h observation
+// cadence, so only a genuine multi-hour outage trips it, not ordinary polling jitter.
+export const INTRADAY_GAP_HOURS = 6;
 
 const PRICE_METRIC = "price_usd";
 const OTHER_METRICS = ["market_cap_usd", "volume_24h_usd"];
+// market_cap_usd is deliberately excluded here: retention collapses it to one
+// observation/day beyond 48h (see run-retention.ts), so every daily collapse point
+// would otherwise look like a ~24h "intraday gap" forever, even with no real
+// outage. price_usd and volume_24h_usd are the only metrics retained continuously
+// granular, so they're the only ones an intraday gap check is meaningful for.
+const INTRADAY_METRICS = [PRICE_METRIC, "volume_24h_usd"];
 
 type Gap = { token_id: string; metric_id: string; missing_date: string };
+type IntradayGap = { token_id: string; metric_id: string; gap_start: string; gap_end: string };
 
 function utcDateDaysAgo(days: number, now: Date): string {
   const d = new Date(now);
@@ -27,11 +40,18 @@ function utcDateDaysAgo(days: number, now: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+function withinIntradayGap(metricId: string, observedAtMs: number, intradayGaps: IntradayGap[]): boolean {
+  return intradayGaps.some((gap) => gap.metric_id === metricId
+    && observedAtMs > Date.parse(gap.gap_start)
+    && observedAtMs < Date.parse(gap.gap_end));
+}
+
 function toObservationRows(
   tokenId: string,
   chainId: string,
   externalAssetId: string,
   missing: Set<string>,
+  intradayGaps: IntradayGap[],
   payload: Awaited<ReturnType<typeof fetchMarketChart>>,
   collectedAt: string,
 ) {
@@ -46,7 +66,8 @@ function toObservationRows(
   return snapshot.observations
     .filter((row) => {
       const day = row.observedAt.slice(0, 10);
-      return missing.has(`${row.metricId}|${day}`);
+      if (missing.has(`${row.metricId}|${day}`)) return true;
+      return withinIntradayGap(row.metricId, Date.parse(row.observedAt), intradayGaps);
     })
     .map((row) => ({
       token_id: row.tokenId,
@@ -89,7 +110,7 @@ export async function repairCoinGeckoDailyGaps(
   const config = getCoinGeckoConfig(options.env);
   const endDate = utcDateDaysAgo(1, now());
 
-  const [priceGapsResult, otherGapsResult] = await Promise.all([
+  const [priceGapsResult, otherGapsResult, intradayGapsResult] = await Promise.all([
     client.rpc("get_coingecko_daily_gaps", {
       p_start_date: utcDateDaysAgo(PRICE_GAP_DAYS, now()),
       p_end_date: endDate,
@@ -100,12 +121,26 @@ export async function repairCoinGeckoDailyGaps(
       p_end_date: endDate,
       p_metric_ids: OTHER_METRICS,
     }),
+    // Covers through "today" (not just completed days): an intraday gap can still be
+    // closing out right now, unlike the whole-day checks above which only look at
+    // fully completed UTC days.
+    client.rpc("get_coingecko_intraday_gaps", {
+      p_start_date: utcDateDaysAgo(PRICE_GAP_DAYS, now()),
+      p_end_date: utcDateDaysAgo(0, now()),
+      p_min_gap_hours: INTRADAY_GAP_HOURS,
+      p_metric_ids: INTRADAY_METRICS,
+    }),
   ]);
   if (priceGapsResult.error) throw new Error(`Supabase CoinGecko price_usd daily gap audit failed: ${priceGapsResult.error.message}`);
   if (otherGapsResult.error) throw new Error(`Supabase CoinGecko daily gap audit failed: ${otherGapsResult.error.message}`);
+  if (intradayGapsResult.error) throw new Error(`Supabase CoinGecko intraday gap audit failed: ${intradayGapsResult.error.message}`);
 
   const allGaps = [...(priceGapsResult.data ?? []), ...(otherGapsResult.data ?? [])] as Gap[];
-  const tokenIds = [...new Set(allGaps.map((gap) => gap.token_id))].slice(0, MAX_GAP_REPAIR_TOKENS);
+  const allIntradayGaps = (intradayGapsResult.data ?? []) as IntradayGap[];
+  const tokenIds = [...new Set([
+    ...allGaps.map((gap) => gap.token_id),
+    ...allIntradayGaps.map((gap) => gap.token_id),
+  ])].slice(0, MAX_GAP_REPAIR_TOKENS);
   if (tokenIds.length === 0) {
     return { checkedDays: PRICE_GAP_DAYS, affectedTokens: 0, requests: 0, observations: 0, remainingTokens: 0 };
   }
@@ -136,7 +171,8 @@ export async function repairCoinGeckoDailyGaps(
         .filter((gap) => gap.token_id === tokenId)
         .map((gap) => `${gap.metric_id}|${gap.missing_date}`),
     );
-    const rows = toObservationRows(token.id, token.chainId, externalAssetId, missing, payload, now().toISOString());
+    const intradayGaps = allIntradayGaps.filter((gap) => gap.token_id === tokenId);
+    const rows = toObservationRows(token.id, token.chainId, externalAssetId, missing, intradayGaps, payload, now().toISOString());
     if (rows.length === 0) continue;
 
     const { data: mapping } = await client.from("provider_token_mappings")
@@ -152,11 +188,16 @@ export async function repairCoinGeckoDailyGaps(
     observations += rows.length;
   }
 
+  const allAffectedTokens = new Set([
+    ...allGaps.map((gap) => gap.token_id),
+    ...allIntradayGaps.map((gap) => gap.token_id),
+  ]);
   return {
     checkedDays: PRICE_GAP_DAYS,
+    intradayGapHours: INTRADAY_GAP_HOURS,
     affectedTokens: tokenIds.length,
     requests,
     observations,
-    remainingTokens: Math.max(0, new Set(allGaps.map((gap) => gap.token_id)).size - tokenIds.length),
+    remainingTokens: Math.max(0, allAffectedTokens.size - tokenIds.length),
   };
 }
