@@ -13,12 +13,19 @@ function loadLocalEnvironment() {
   }
 }
 
-// Usage: pnpm backfill:coingecko [--tokens=bitcoin-btc,uniswap-uni] [--dry-run]
+// Usage: pnpm backfill:coingecko [--tokens=bitcoin-btc,uniswap-uni] [--days=30] [--metrics=price_usd,market_cap_usd,volume_24h_usd] [--dry-run]
 // Manual and bounded: 2 CoinGecko requests per token, paced like the live collector.
 const args = process.argv.slice(2);
 const tokensArg = args.find((arg) => arg.startsWith("--tokens="));
 const tokenIds = tokensArg ? tokensArg.slice("--tokens=".length).split(",").map((value) => value.trim()).filter(Boolean) : undefined;
 const dryRun = args.includes("--dry-run");
+const daysArg = args.find((arg) => arg.startsWith("--days="));
+const days = daysArg ? Number(daysArg.slice("--days=".length)) : 30;
+const metricsArg = args.find((arg) => arg.startsWith("--metrics="));
+const metrics = metricsArg ? metricsArg.slice("--metrics=".length).split(",").map((value) => value.trim()).filter(Boolean) : undefined;
+if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error("--days must be an integer from 1 to 90.");
+const allowedMetrics = new Set(["price_usd", "market_cap_usd", "volume_24h_usd"]);
+if (metrics && (metrics.length === 0 || metrics.some((metric) => !allowedMetrics.has(metric)))) throw new Error("--metrics contains an unsupported metric.");
 
 loadLocalEnvironment();
 
@@ -50,7 +57,7 @@ try {
     allIds = allIds.filter((id) => productionIds.has(id));
 
     console.log("Production token universe: " + allIds.length + " token(s).");
-    console.log("Backfill mode: fill missing genuine CoinGecko observations in the rolling 30-day granular window; existing timestamps are skipped.");
+    console.log(`Backfill mode: fill missing genuine CoinGecko observations in the rolling ${days}-day granular window; existing timestamps are skipped.`);
   }
 
   const batches = [];
@@ -64,7 +71,7 @@ try {
     // two requests less than MIN_REQUEST_INTERVAL_MS apart at the boundary.
     if (index > 0) await sleep(MIN_REQUEST_INTERVAL_MS);
     if (batches.length > 1) console.log(`-- Batch ${index + 1}/${batches.length} (${batch.length} tokens) --`);
-    const summary = await runCoinGeckoBackfill(client, { tokenIds: batch, dryRun, log: (line) => console.log(line) });
+    const summary = await runCoinGeckoBackfill(client, { tokenIds: batch, dryRun, days, metrics, log: (line) => console.log(line) });
     allResults.push(...summary.results);
     totalRequests += summary.requests;
     if (summary.stoppedEarly) {
