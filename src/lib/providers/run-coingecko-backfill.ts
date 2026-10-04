@@ -114,14 +114,18 @@ export async function runCoinGeckoBackfill(
         existing,
         granularDays: backfillDays,
       });
-      const filteredSnapshot = snapshot
+      // normalizeMarketChartHistory's rawPayload shape (see coingecko-history.ts) isn't carried
+      // in ProviderSnapshot's own type (rawPayload: unknown there), so it's cast here to what
+      // that function actually returns.
+      const rawPayload = snapshot?.rawPayload as { request: unknown; daily: Record<string, unknown>; retentionNote: string } | undefined;
+      const filteredSnapshot = snapshot && rawPayload
         ? {
             ...snapshot,
             observations: snapshot.observations.filter((observation) => metrics.includes(observation.metricId)),
             rawPayload: {
-              ...snapshot.rawPayload,
+              ...rawPayload,
               daily: Object.fromEntries(
-                Object.entries(snapshot.rawPayload.daily as Record<string, unknown>).filter(([field]) =>
+                Object.entries(rawPayload.daily).filter(([field]) =>
                   (field === "prices" && metrics.includes("price_usd")) ||
                   (field === "market_caps" && metrics.includes("market_cap_usd")) ||
                   (field === "total_volumes" && metrics.includes("volume_24h_usd")),

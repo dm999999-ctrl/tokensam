@@ -74,8 +74,8 @@ function card(id: string, label: string, value: string | null, extra: Partial<Ca
   return value === null ? null : { id, label, value, tone: "neutral", ...extra };
 }
 
-/** A horizon-pinned % change (e.g. "Market cap change · 24h"); null input hides the card. */
-function changeCard(id: string, label: string, value: number | null): Card | null {
+/** A horizon-pinned % change (e.g. "Market cap change · 24h"); null/undefined input hides the card. */
+function changeCard(id: string, label: string, value: number | null | undefined): Card | null {
   const change = formatChange(value);
   return change ? { id, label, value: change.text, tone: change.tone } : null;
 }
