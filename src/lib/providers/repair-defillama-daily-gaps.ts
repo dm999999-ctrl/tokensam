@@ -2,7 +2,14 @@ import { getDefiLlamaConfig } from "./defillama.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
-const LOOKBACK_DAYS = 14;
+// tvl_usd's own 30D chart display window (see HISTORICAL_PERIODS in
+// src/lib/data/historical-series.ts); a day missed between 15-30 days ago previously
+// stayed permanently unrepaired despite being inside that chart's own window.
+const PROTOCOL_LOOKBACK_DAYS = 30;
+// defillama_coins price_usd is not chart-required (only the latest value is ever
+// read -- see src/lib/data/live-data.ts's tokenLevelPrice), so its repair window
+// is unchanged.
+const COINS_LOOKBACK_DAYS = 14;
 const MAX_PROTOCOL_TOKENS = 1;
 const MAX_COIN_PRICE_TOKENS = 50;
 const PROTOCOL_METRICS = ["tvl_usd"];
@@ -20,10 +27,10 @@ function dayEndExclusive(date: string): number {
   return dayStart(date) + 24 * 60 * 60 * 1000;
 }
 
-function completedWindow(now = new Date()): { start: string; end: string } {
+function completedWindow(now: Date, lookbackDays: number): { start: string; end: string } {
   const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
   const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - LOOKBACK_DAYS + 1);
+  start.setUTCDate(start.getUTCDate() - lookbackDays + 1);
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
@@ -120,20 +127,21 @@ export async function repairDefiLlamaDailyGaps(
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? (() => new Date());
-  const { start, end } = completedWindow(now());
+  const protocolWindow = completedWindow(now(), PROTOCOL_LOOKBACK_DAYS);
+  const coinWindow = completedWindow(now(), COINS_LOOKBACK_DAYS);
   const scope = options.scope ?? "all";
 
   const [protocolResult, coinResult] = await Promise.all([
     scope === "coins" ? Promise.resolve({ data: [], error: null }) : client.rpc("get_provider_daily_gaps", {
       p_provider_id: "defillama",
-      p_start_date: start,
-      p_end_date: end,
+      p_start_date: protocolWindow.start,
+      p_end_date: protocolWindow.end,
       p_metric_ids: PROTOCOL_METRICS,
     }),
     scope === "protocol" ? Promise.resolve({ data: [], error: null }) : client.rpc("get_provider_daily_gaps", {
       p_provider_id: "defillama_coins",
-      p_start_date: start,
-      p_end_date: end,
+      p_start_date: coinWindow.start,
+      p_end_date: coinWindow.end,
       p_metric_ids: COIN_METRICS,
     }),
   ]);
@@ -205,8 +213,8 @@ export async function repairDefiLlamaDailyGaps(
     const keys = coinTokenIds.map((tokenId) => mappingByToken.get(tokenId)?.external_asset_id).filter((value): value is string => Boolean(value));
     if (keys.length > 0) {
       const params = new URLSearchParams({
-        start: String(Math.floor(dayStart(start) / 1000)),
-        end: String(Math.floor(dayEndExclusive(end) / 1000)),
+        start: String(Math.floor(dayStart(coinWindow.start) / 1000)),
+        end: String(Math.floor(dayEndExclusive(coinWindow.end) / 1000)),
         period: "1d",
       });
       const url = `${COINS_BASE_URL}/chart/${keys.map(encodeURIComponent).join(",")}?${params.toString()}`;
@@ -246,7 +254,8 @@ export async function repairDefiLlamaDailyGaps(
   }
 
   return {
-    checkedDays: LOOKBACK_DAYS,
+    checkedProtocolDays: PROTOCOL_LOOKBACK_DAYS,
+    checkedCoinDays: COINS_LOOKBACK_DAYS,
     protocolAffectedTokens: [...new Set(protocolGaps.map((gap) => gap.token_id))].length,
     coinPriceAffectedTokens: [...new Set(coinGaps.map((gap) => gap.token_id))].length,
     protocolRequests,

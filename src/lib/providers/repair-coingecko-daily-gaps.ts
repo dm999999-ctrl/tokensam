@@ -6,9 +6,17 @@ import { getCoinGeckoConfig, MIN_REQUEST_INTERVAL_MS } from "./coingecko.ts";
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
 export const COINGECKO_GAP_DAYS = 30;
+// price_usd alone stays granular through day 37, not 30 (see
+// 20261004140000_extend_price_usd_granular_window_for_risk_profile.sql): the risk
+// profile's volatility is a rolling 7-day window of hourly returns, so a correct 30D
+// volatility curve needs price data a further 7 days before the window it displays.
+// market_cap_usd/volume_24h_usd need no such extension -- neither is read with any
+// lookback beyond its own 30-day display window.
+export const PRICE_GAP_DAYS = 37;
 export const MAX_GAP_REPAIR_TOKENS = 10;
 
-const METRICS = ["price_usd", "market_cap_usd", "volume_24h_usd"];
+const PRICE_METRIC = "price_usd";
+const OTHER_METRICS = ["market_cap_usd", "volume_24h_usd"];
 
 type Gap = { token_id: string; metric_id: string; missing_date: string };
 
@@ -60,9 +68,11 @@ function toObservationRows(
 }
 
 /**
- * Repairs only missing daily CoinGecko observations in the last 30 completed UTC days.
- * It deliberately does not write raw market_chart payloads and does not run a 90-day
- * backfill, keeping automatic recovery bounded in both storage and API usage.
+ * Repairs only missing daily CoinGecko observations: price_usd over the last 37
+ * completed UTC days, market_cap_usd/volume_24h_usd over the last 30 -- each metric's
+ * own granular retention window (see PRICE_GAP_DAYS above). It deliberately does not
+ * write raw market_chart payloads and does not run a 90-day backfill, keeping
+ * automatic recovery bounded in both storage and API usage.
  */
 export async function repairCoinGeckoDailyGaps(
   client: SupabaseAdminClient,
@@ -78,19 +88,26 @@ export async function repairCoinGeckoDailyGaps(
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const config = getCoinGeckoConfig(options.env);
   const endDate = utcDateDaysAgo(1, now());
-  const startDate = utcDateDaysAgo(COINGECKO_GAP_DAYS, now());
 
-  const { data: gaps, error: gapError } = await client.rpc("get_coingecko_daily_gaps", {
-    p_start_date: startDate,
-    p_end_date: endDate,
-    p_metric_ids: METRICS,
-  });
-  if (gapError) throw new Error(`Supabase CoinGecko daily gap audit failed: ${gapError.message}`);
+  const [priceGapsResult, otherGapsResult] = await Promise.all([
+    client.rpc("get_coingecko_daily_gaps", {
+      p_start_date: utcDateDaysAgo(PRICE_GAP_DAYS, now()),
+      p_end_date: endDate,
+      p_metric_ids: [PRICE_METRIC],
+    }),
+    client.rpc("get_coingecko_daily_gaps", {
+      p_start_date: utcDateDaysAgo(COINGECKO_GAP_DAYS, now()),
+      p_end_date: endDate,
+      p_metric_ids: OTHER_METRICS,
+    }),
+  ]);
+  if (priceGapsResult.error) throw new Error(`Supabase CoinGecko price_usd daily gap audit failed: ${priceGapsResult.error.message}`);
+  if (otherGapsResult.error) throw new Error(`Supabase CoinGecko daily gap audit failed: ${otherGapsResult.error.message}`);
 
-  const allGaps = (gaps ?? []) as Gap[];
+  const allGaps = [...(priceGapsResult.data ?? []), ...(otherGapsResult.data ?? [])] as Gap[];
   const tokenIds = [...new Set(allGaps.map((gap) => gap.token_id))].slice(0, MAX_GAP_REPAIR_TOKENS);
   if (tokenIds.length === 0) {
-    return { checkedDays: COINGECKO_GAP_DAYS, affectedTokens: 0, requests: 0, observations: 0, remainingTokens: 0 };
+    return { checkedDays: PRICE_GAP_DAYS, affectedTokens: 0, requests: 0, observations: 0, remainingTokens: 0 };
   }
 
   const sleepBetweenRequests = async () => {
@@ -106,7 +123,9 @@ export async function repairCoinGeckoDailyGaps(
 
     if (requests > 0) await sleepBetweenRequests();
     requests += 1;
-    const payload = await fetchMarketChart(externalAssetId, { days: COINGECKO_GAP_DAYS + 1 }, {
+    // One request covers both windows: days must span the wider of the two
+    // (price_usd's 37) so a price_usd gap near day 37 is still in range.
+    const payload = await fetchMarketChart(externalAssetId, { days: PRICE_GAP_DAYS + 1 }, {
       ...config,
       fetchImpl,
       sleep,
@@ -134,7 +153,7 @@ export async function repairCoinGeckoDailyGaps(
   }
 
   return {
-    checkedDays: COINGECKO_GAP_DAYS,
+    checkedDays: PRICE_GAP_DAYS,
     affectedTokens: tokenIds.length,
     requests,
     observations,
