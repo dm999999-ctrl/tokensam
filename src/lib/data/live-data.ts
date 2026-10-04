@@ -158,6 +158,78 @@ function thirtyDayTvlChange(rows: DbObservation[], tokenId: string): number | nu
   return Number.isFinite(change) ? change : null;
 }
 
+const CHANGE_TOLERANCE_HOURS = 3;
+const HOUR_MS = 60 * 60 * 1000;
+const MARKET_CAP_CHANGE_HOURS = 24;
+/** The latest volume_24h_usd reading is already "the past 24 hours"; comparing it against the
+ *  closest reading ~24h earlier (that tick's own trailing 24h window) gives "the preceding 24
+ *  hours" -- together a 48-hour span, hence the "48h" label on the displayed card. */
+const VOLUME_CHANGE_TARGET_HOURS = 24;
+const VOLUME_TO_MARKET_CAP_CHANGE_HOURS = 24;
+
+/** % change in a single metric's value vs the closest stored observation `hoursAgo` before the latest one. */
+function changeOverHorizon(
+  rows: DbObservation[],
+  tokenId: string,
+  providerId: DbObservation["provider_id"],
+  metricId: string,
+  hoursAgo: number,
+  toleranceHours = CHANGE_TOLERANCE_HOURS,
+): number | null {
+  const series = latestFirst(rows.filter((row) => row.token_id === tokenId && row.provider_id === providerId && row.metric_id === metricId && row.status === "available"))
+    .map((row) => ({ value: numberValue(row.value), time: Date.parse(row.observed_at) }))
+    .filter((point): point is { value: number; time: number } => point.value !== null)
+    .sort((a, b) => a.time - b.time);
+  if (series.length < 2) return null;
+  const latest = series.at(-1)!;
+  const target = latest.time - hoursAgo * HOUR_MS;
+  const tolerance = toleranceHours * HOUR_MS;
+  const baseline = series.filter((point) => point.time <= target && target - point.time <= tolerance).at(-1);
+  if (!baseline || baseline.value <= 0) return null;
+  const change = ((latest.value / baseline.value) - 1) * 100;
+  return Number.isFinite(change) ? change : null;
+}
+
+/**
+ * % change in the volume_24h_usd / market_cap_usd ratio vs its value ~hoursAgo earlier.
+ * CoinGecko writes price_usd/market_cap_usd/volume_24h_usd from the same /coins/markets
+ * response row with one shared observed_at per tick (see coingecko.ts), so matching by exact
+ * observed_at pairs each volume reading with its same-tick market cap without a separate join tolerance.
+ */
+function volumeToMarketCapChangeOverHorizon(
+  rows: DbObservation[],
+  tokenId: string,
+  hoursAgo: number,
+  toleranceHours = CHANGE_TOLERANCE_HOURS,
+): number | null {
+  const volumeByTime = new Map<number, number>();
+  const marketCapByTime = new Map<number, number>();
+  for (const row of rows) {
+    if (row.token_id !== tokenId || row.provider_id !== "coingecko" || row.status !== "available") continue;
+    const value = numberValue(row.value);
+    if (value === null) continue;
+    const time = Date.parse(row.observed_at);
+    if (row.metric_id === "volume_24h_usd") volumeByTime.set(time, value);
+    else if (row.metric_id === "market_cap_usd") marketCapByTime.set(time, value);
+  }
+  const series = [...volumeByTime.entries()]
+    .filter(([time]) => marketCapByTime.has(time))
+    .map(([time, volume]) => {
+      const marketCap = marketCapByTime.get(time)!;
+      return { time, ratio: marketCap > 0 ? volume / marketCap : null };
+    })
+    .filter((point): point is { time: number; ratio: number } => point.ratio !== null)
+    .sort((a, b) => a.time - b.time);
+  if (series.length < 2) return null;
+  const latest = series.at(-1)!;
+  const target = latest.time - hoursAgo * HOUR_MS;
+  const tolerance = toleranceHours * HOUR_MS;
+  const baseline = series.filter((point) => point.time <= target && target - point.time <= tolerance).at(-1);
+  if (!baseline || baseline.ratio <= 0) return null;
+  const change = ((latest.ratio / baseline.ratio) - 1) * 100;
+  return Number.isFinite(change) ? change : null;
+}
+
 export function buildDashboardTokens(tokens: DbToken[], chains: DbChain[], observations: DbObservation[]): DashboardToken[] {
   const chainNames = new Map(chains.map((chain) => [chain.id, chain.name]));
   return tokens.map((token) => {
@@ -174,6 +246,26 @@ export function buildDashboardTokens(tokens: DbToken[], chains: DbChain[], obser
       providerId: "calculated",
       collectedAt: latestTvl.collected_at,
       note: "Calculated server-side from DeFiLlama TVL observations approximately 30 days apart.",
+    };
+    const marketCapChange24hPct = changeOverHorizon(observations, token.id, "coingecko", "market_cap_usd", MARKET_CAP_CHANGE_HOURS);
+    const volumeChange48hPct = changeOverHorizon(observations, token.id, "coingecko", "volume_24h_usd", VOLUME_CHANGE_TARGET_HOURS);
+    const volumeToMarketCapChange24hPct = volumeToMarketCapChangeOverHorizon(observations, token.id, VOLUME_TO_MARKET_CAP_CHANGE_HOURS);
+    const latestMarketCap = observationFor(observations, token.id, "coingecko", "market_cap_usd");
+    if (latestMarketCap) metricSources.marketCapChange24hPct = {
+      providerId: "calculated",
+      collectedAt: latestMarketCap.collected_at,
+      note: "Calculated server-side from CoinGecko market cap observations approximately 24 hours apart.",
+    };
+    const latestVolume = observationFor(observations, token.id, "coingecko", "volume_24h_usd");
+    if (latestVolume) metricSources.volumeChange48hPct = {
+      providerId: "calculated",
+      collectedAt: latestVolume.collected_at,
+      note: "The latest stored 24h volume (itself already a trailing 24-hour figure) vs. the closest stored 24h volume observation approximately 24 hours before that -- i.e. the past 24 hours' volume vs. the preceding 24 hours'.",
+    };
+    if (latestVolume) metricSources.volumeToMarketCapChange24hPct = {
+      providerId: "calculated",
+      collectedAt: latestVolume.collected_at,
+      note: "Calculated server-side from the volume_24h_usd / market_cap_usd ratio at matching CoinGecko collection timestamps approximately 24 hours apart.",
     };
     const tokenRows = observations.filter((row) => row.token_id === token.id);
     const observedAt = tokenRows.map((row) => row.collected_at).sort().at(-1) ?? "";
@@ -193,6 +285,9 @@ export function buildDashboardTokens(tokens: DbToken[], chains: DbChain[], obser
       maximumSupply: valueFor("maximum_supply", "coingecko", "maximumSupply"),
       tvlUsd: valueFor("tvl_usd", "defillama", "tvlUsd"),
       tvlChange30dPct,
+      marketCapChange24hPct,
+      volumeChange48hPct,
+      volumeToMarketCapChange24hPct,
       fees24hUsd: valueFor("fees_24h_usd", "defillama", "fees24hUsd"),
       revenue24hUsd: valueFor("revenue_24h_usd", "defillama", "revenue24hUsd"),
       observedAt,

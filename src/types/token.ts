@@ -17,6 +17,9 @@ export type DashboardMetricKey =
   | "maximumSupply"
   | "tvlUsd"
   | "tvlChange30dPct"
+  | "marketCapChange24hPct"
+  | "volumeChange48hPct"
+  | "volumeToMarketCapChange24hPct"
   | "fees24hUsd"
   | "revenue24hUsd";
 
@@ -43,6 +46,14 @@ export type DashboardToken = {
   maximumSupply?: number | null;
   tvlUsd: number | null;
   tvlChange30dPct: number | null;
+  /** % change in market_cap_usd vs the closest stored observation ~24h earlier. Null = unavailable. */
+  marketCapChange24hPct: number | null;
+  /** % change between the latest stored 24h volume (volume_24h_usd, itself already a trailing 24h figure) and the
+   *  closest stored volume_24h_usd observation ~24h before that -- i.e. "today's 24h volume" vs "the preceding 24h
+   *  volume". Null = unavailable. */
+  volumeChange48hPct: number | null;
+  /** % change in the volume_24h_usd / market_cap_usd ratio vs its closest matched-timestamp value ~24h earlier. Null = unavailable. */
+  volumeToMarketCapChange24hPct: number | null;
   fees24hUsd: number | null;
   revenue24hUsd: number | null;
   observedAt: string;

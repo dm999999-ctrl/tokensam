@@ -16,6 +16,13 @@ const MAX_BATCHES_PER_FUNCTION = 1000;
 //   value" read (dashboard, Tokenomics, Market Structure, on-chain markets)
 //   uses only the single latest observation, which the same-day exclusion
 //   below never touches.
+//   Exception: coingecko market_cap_usd stays granular through 48 hours, not
+//   just "before today" -- the Market Snapshot's "Market cap change · 24h"
+//   and "Volume / market cap change · 24h" cards (live-data.ts:
+//   changeOverHorizon, volumeToMarketCapChangeOverHorizon) need a market_cap_usd
+//   observation within 3 hours of exactly 24 hours ago, which a same-day-only
+//   collapse (leaving "yesterday" as a single near-midnight point) usually
+//   can't satisfy. 48 hours is just enough margin for that lookback.
 // - >30–<90 days: retain exactly one daily historical observation per
 //   token/metric/provider/UTC calendar day: the observation closest to 00:00 UTC;
 //   delete every other granular observation immediately after it crosses 30 days.
