@@ -26,7 +26,9 @@ async function existingKeys(client: SupabaseAdminClient, tokenId: string, since:
     const { data, error } = await client.from("token_metric_observations")
       .select("metric_id,observed_at").eq("token_id", tokenId).eq("provider_id", "coingecko")
       .in("metric_id", BACKFILL_METRICS).gte("observed_at", since.toISOString())
-      .order("id").range(offset, offset + 999);
+      .order("observed_at", { ascending: true })
+      .order("metric_id", { ascending: true })
+      .range(offset, offset + 999);
     if (error) throw new Error(`Supabase read existing CoinGecko history failed: ${error.message}`);
     for (const row of (data ?? []) as { metric_id: string; observed_at: string }[]) keys.add(`${row.metric_id}|${new Date(row.observed_at).toISOString()}`);
     if (!data || data.length < 1000) return keys;
