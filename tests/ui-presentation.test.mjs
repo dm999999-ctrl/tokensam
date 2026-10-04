@@ -82,11 +82,11 @@ test("1b. formatChange reports a direction (tone) for every non-zero value, posi
   assert.deepEqual(formatChange(-0.53), { text: "-0.53%", tone: "negative" });
 });
 
-test("1c. Token Profile page: explicit changes (tone-positive, tone-negative) both render in the brand crimson; zero/unchanged (tone-flat) and plain magnitudes (tone-neutral) keep their existing color, and only the Token Profile page is affected", () => {
+test("1c. Token Profile page: explicit changes read green (positive) or red (negative) by direction, same as everywhere else in the app; zero/unchanged (tone-flat) and plain magnitudes (tone-neutral) keep their existing color", () => {
   const css = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
-  assert.match(css, /\.profile-page \.tone-positive,\s*\.profile-page \.tone-negative\s*\{\s*color:\s*var\(--crimson-bright\);\s*\}/, "positive and negative changes share one rule, scoped to the profile page, using the existing crimson token (not a new color)");
-  assert.doesNotMatch(css, /--crimson-red|--red-accent|#[0-9a-f]{3,8}[^;]*\/\*\s*new red/i, "no new red color is introduced");
-  // Unscoped defaults (used outside the Token Profile page, e.g. sidebar movers) are unchanged.
+  // No profile-page-specific override exists: tone-positive/negative use the same direction-by-color
+  // rule everywhere, including the Token Profile page.
+  assert.doesNotMatch(css, /\.profile-page \.tone-positive/, "no profile-page override forces positive/negative to share one color");
   assert.match(css, /\.tone-positive \{ color: var\(--positive\); \}/);
   assert.match(css, /\.tone-negative \{ color: var\(--negative\); \}/);
   assert.match(css, /\.tone-flat \{ color: var\(--flat\); \}/);

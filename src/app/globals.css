@@ -65,8 +65,6 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .tone-negative { color: var(--negative); }
 .tone-flat { color: var(--flat); }
 .tone-neutral { color: inherit; }
-/* Token Profile: every explicit change/delta (up or down) reads in the brand crimson, not green/red-by-direction; zero/unchanged (tone-flat) and plain magnitudes (tone-neutral) are untouched. */
-.profile-page .tone-positive, .profile-page .tone-negative { color: var(--crimson-bright); }
 .chip { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 2px; color: var(--muted); font-size: 11px; line-height: 1; white-space: nowrap; }
 .chip-quiet { min-height: 17px; padding: 0 5px; border-color: var(--line); color: var(--subtle); font-size: 10px; }
 .text-button { padding: 0; border: 0; background: none; color: var(--gold); font-size: 13px; text-decoration: underline; text-decoration-color: rgb(205 172 104 / 35%); text-underline-offset: 3px; }
