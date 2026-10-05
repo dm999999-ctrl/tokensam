@@ -388,6 +388,12 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .indicator-readings div:last-child { border-bottom: 0; }
 .indicator-readings dt { min-width: 0; color: var(--muted); font-size: 12.5px; }
 .indicator-readings dd { display: grid; justify-items: end; margin: 0; color: var(--ink-strong); font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+/* Same cascade issue as .tile-value: .indicator-readings dd's own color declaration
+   outranks .tone-positive/.tone-negative on specificity alone, so the correctly
+   computed tone never showed. These beat it the same way. */
+.indicator-readings dd.tone-positive { color: var(--positive); }
+.indicator-readings dd.tone-negative { color: var(--negative); }
+.indicator-readings dd.tone-flat { color: var(--flat); }
 .indicator-readings dd small { color: var(--subtle); font-size: 11px; font-weight: 400; }
 .indicator-state { padding: 5px 9px; border-left: 2px solid var(--bronze); background: var(--gold-soft); color: var(--ink); font-size: 12.5px; }
 .indicator-desc { color: var(--muted); font-size: 12px; line-height: 1.5; }
