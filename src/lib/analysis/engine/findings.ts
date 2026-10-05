@@ -271,7 +271,7 @@ const growthFinding = (key: "tvl" | "fees" | "revenue", field: PayloadField | nu
   return {
     category: "fundamentalPerformance", findingType: `${key}_growth_${field.raw >= 0 ? "increase" : "decrease"}`,
     severity: severityForMomentum[band], evidenceIds: [field.id], observationPeriods: [field.period],
-    data: { value: field.value, raw: field.raw, period: field.period },
+    data: { value: field.value, raw: field.raw, period: field.period, intervalHours: field.intervalHours },
   };
 };
 

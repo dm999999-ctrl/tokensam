@@ -24,7 +24,7 @@ import type { Finding, FindingCategory } from "./findings.ts";
 import { findingId, type Relationship, type RelationshipType, type SynthesisResult, type ThesisDriver } from "./synthesis.ts";
 import { magnitudeWord, type MomentumPeriodKey } from "./thresholds.ts";
 import type { EngineParagraph } from "./report-schema.ts";
-import { formatCount, formatUsd } from "../../ui/format.ts";
+import { formatCount, formatDuration, formatUsd } from "../../ui/format.ts";
 
 // ---- Shared text helpers ----
 
@@ -467,7 +467,9 @@ function fundamentalAnalysisSection(findings: Finding[], mapped: boolean): Engin
     const parts = growth.map((finding) => {
       const key = finding.findingType.startsWith("tvl") ? "tvl" : finding.findingType.startsWith("fees") ? "fees" : "revenue";
       const raw = finding.data.raw as number;
-      return `${GROWTH_LABEL[key]} recorded ${magnitudePhrase("30d", raw, directionWord(raw))} of ${pct(raw)}`;
+      const intervalHours = finding.data.intervalHours as number | null;
+      const windowClause = typeof intervalHours === "number" ? ` over approximately ${formatDuration(intervalHours)}` : "";
+      return `${GROWTH_LABEL[key]} recorded ${magnitudePhrase("30d", raw, directionWord(raw))} of ${pct(raw)}${windowClause}`;
     });
     paragraphs.push(para(`${joinList(parts)}.`, growth));
   }
@@ -483,12 +485,29 @@ function fundamentalAnalysisSection(findings: Finding[], mapped: boolean): Engin
   const synthesisFinding = byType(fundamentals, "fundamentals_improving") ?? byType(fundamentals, "fundamentals_deteriorating") ?? byType(fundamentals, "fundamentals_mixed");
   if (synthesisFinding) {
     const word = synthesisFinding.findingType === "fundamentals_improving" ? "the same, positive" : synthesisFinding.findingType === "fundamentals_deteriorating" ? "the same, negative" : "different";
-    paragraphs.push(para(`The available protocol activity metrics moved in ${word} direction${word === "different" ? "s" : ""} over their respective observed periods, ${word === "different" ? "a mixed fundamental picture" : `indicating broadly ${synthesisFinding.findingType === "fundamentals_improving" ? "improving" : "deteriorating"} fundamental activity`}.`, synthesisFinding));
+    // The individual growth measures above are each over their own observed interval (TVL is
+    // typically compared ~30 days apart; fees/revenue are frequently compared over a much shorter
+    // window since DeFiLlama reports them more often) -- when those intervals differ materially,
+    // the direction-of-change conclusion is stated, but it is NOT presented as a single aligned
+    // comparison, and no claim is made about whether fundamentals have "kept pace" with price.
+    const intervals = growth.map((finding) => finding.data.intervalHours as number | null).filter((hours): hours is number => typeof hours === "number");
+    const mismatchedWindows = intervals.length >= 2 && Math.max(...intervals) / Math.min(...intervals) >= 3;
+    const windowCaveat = mismatchedWindows
+      ? " These measures were observed over materially different windows (see the figures above), so this is a statement about the direction of each metric individually, not a single aligned comparison across one common period."
+      : "";
+    paragraphs.push(para(`The available protocol activity metrics moved in ${word} direction${word === "different" ? "s" : ""} over their respective observed periods, ${word === "different" ? "a mixed fundamental picture" : `indicating broadly ${synthesisFinding.findingType === "fundamentals_improving" ? "improving" : "deteriorating"} fundamental activity`}.${windowCaveat}`, synthesisFinding));
   }
   return paragraphs;
 }
 
 // ---- 5. Valuation Analysis ----
+
+const VALUATION_RATIO_RELATION: Record<string, string> = {
+  ratio_market_cap_to_tvl: "relates current market value to the associated protocol's total value locked",
+  ratio_fdv_to_tvl: "relates fully diluted valuation (incorporating supply not yet in circulation) to the associated protocol's total value locked",
+  ratio_market_cap_to_revenue_24h: "relates current market value to reported protocol revenue",
+  ratio_fdv_to_revenue_24h: "relates fully diluted valuation (incorporating supply not yet in circulation) to reported protocol revenue",
+};
 
 function valuationAnalysisSection(findings: Finding[]): EngineParagraph[] {
   const valuation = byCategory(findings, "valuation");
@@ -496,12 +515,15 @@ function valuationAnalysisSection(findings: Finding[]): EngineParagraph[] {
   const paragraphs: EngineParagraph[] = [];
   const ratios = byTypePrefix(valuation, "ratio_");
   if (ratios.length > 0) {
-    const parts = ratios.map((finding) => `${str(finding.data.label)} stood at ${str(finding.data.value)}`);
-    paragraphs.push(para(`${joinList(parts)} — measures of how the market values this token relative to its underlying fundamental activity, without an inherent high/low reading.`, ratios));
+    const parts = ratios.map((finding) => `${str(finding.data.label)} stood at ${str(finding.data.value)}, which ${VALUATION_RATIO_RELATION[finding.findingType] ?? "relates market value to a fundamental measure"}`);
+    // "Cheap"/"expensive"/"undervalued"/"overvalued" are never used without a real comparative
+    // benchmark in the evidence -- none is currently part of this engine's evidence set, so
+    // attractiveness is explicitly left unestablished rather than implied by the multiple alone.
+    paragraphs.push(para(`${joinList(parts)}. Attractiveness cannot be established from these multiples alone without an appropriate comparative benchmark, which is not present in the currently available evidence.`, ratios));
   }
   const fdvGap = byType(valuation, "fdv_market_cap_gap");
   if (fdvGap) {
-    paragraphs.push(para(`Fully diluted valuation (${str(fdvGap.data.fdvValue)}) exceeds market capitalization (${str(fdvGap.data.marketCapValue)}); this gap reflects supply not yet in circulation rather than a claim about intrinsic value, and is considered further in Tokenomics & Supply.`, fdvGap));
+    paragraphs.push(para(`Fully diluted valuation (${str(fdvGap.data.fdvValue)}) exceeds market capitalization (${str(fdvGap.data.marketCapValue)}) according to the reported supply figures; this gap reflects the difference between current and fully diluted supply as reported, not a claim about intrinsic value, and is considered further in Tokenomics & Supply.`, fdvGap));
   }
   return paragraphs;
 }
@@ -519,8 +541,14 @@ function marketStructureSection(findings: Finding[], synthesis: SynthesisResult)
   }
   const turnover = byType(liquidity, "elevated_turnover") ?? byType(liquidity, "low_turnover") ?? byType(liquidity, "turnover_level");
   if (turnover) {
-    const level = turnover.findingType === "elevated_turnover" ? "elevated" : turnover.findingType === "low_turnover" ? "low" : "moderate";
-    paragraphs.push(para(`Trading volume represented ${str(turnover.data.value)} of market capitalization, a ${level} level of turnover relative to size. This reflects trading activity, not necessarily executable liquidity — volume alone does not establish depth or slippage.`, turnover));
+    // "elevated"/"low" are the engine's own deterministic thresholds (see ELEVATED_VOLUME_TO_MCAP_RATIO/
+    // LOW_VOLUME_TO_MCAP_RATIO in thresholds.ts) and are legitimate labels; the un-thresholded middle
+    // band ("turnover_level") has no such band and must never be labeled "moderate" -- that would be a
+    // benchmark-free classification the engine cannot actually support.
+    const levelClause = turnover.findingType === "elevated_turnover" ? "an elevated level of turnover relative to size, crossing this analysis's defined threshold"
+      : turnover.findingType === "low_turnover" ? "a low level of turnover relative to size, crossing this analysis's defined threshold"
+        : "turnover relative to size that falls between this analysis's defined elevated and low thresholds";
+    paragraphs.push(para(`Trading volume represented ${str(turnover.data.value)} of market capitalization, ${levelClause}. This describes turnover relative to market value, not executable liquidity — market depth, bid/ask spreads, and expected slippage are not established by this ratio.`, turnover));
   }
   const technicalLiquidity = relationshipsOfType(synthesis, "technical_liquidity_conditions")[0];
   if (technicalLiquidity) {
@@ -554,7 +582,10 @@ function tokenomicsSupplySection(findings: Finding[]): EngineParagraph[] {
     const collide = below.data.displaysCollide === "yes";
     const circulatingText = collide ? preciseSupply(below.data.circulatingRaw as number, str(below.data.circulatingValue)) : str(below.data.circulatingValue);
     const totalText = collide ? preciseSupply(below.data.totalRaw as number, str(below.data.totalValue)) : str(below.data.totalValue);
-    paragraphs.push(para(`Circulating supply (${circulatingText}) is below total supply (${totalText}), indicating a portion of already-issued tokens is not yet in circulation.`, below));
+    // Reported neutrally, as the two cited figures themselves -- "not yet in circulation" implies a
+    // specific issuance mechanism (tokens held back, pending unlock) the provider's two supply
+    // figures alone do not establish.
+    paragraphs.push(para(`Circulating supply (${circulatingText}) is below total supply (${totalText}), according to the reported supply figures.`, below));
   }
   const uncapped = byType(tokenomics, "supply_uncapped");
   const maxSupply = byType(tokenomics, "supply_maximum_supply");
@@ -765,24 +796,38 @@ function keyInvestmentRisks(findings: Finding[]): EngineParagraph[] {
   if (substantive.length === 0) {
     const fallback = risks.find((finding) => finding.findingType === "no_elevated_risk_indicated");
     return [fallback
-      ? para(`Of the risk dimensions evaluated from the currently available data, none crossed the thresholds this analysis treats as elevated. This does not evaluate dimensions for which no data is currently available (see Data Quality & Analytical Limitations).`, fallback)
+      // A threshold not being crossed is a fact about the engine's defined bands, never itself a
+      // "low risk" conclusion -- the assessment is bounded by whichever risk dimensions and
+      // thresholds the available data actually supports, stated explicitly rather than implied.
+      ? para(`No available risk metric crossed this analysis's defined elevated-risk threshold. This should not be interpreted as an absence of risk: the assessment is limited to the risk dimensions and thresholds the currently available data supports (see Data Quality & Analytical Limitations for what could not be evaluated).`, fallback)
       : para("No risk dimension could be evaluated from the currently available data.", ["token"])];
   }
-  return substantive.map((finding) => {
-    if (finding.findingType === "elevated_volatility" || finding.findingType === "sharp_drawdown") {
-      return para(`${finding.findingType === "elevated_volatility" ? "Elevated realized volatility" : "A sharp drawdown"}: the stored daily price history recorded ${str(finding.data.value)} over the ${finding.data.period ?? "available"} window — a technical-risk characteristic of the price series itself.`, finding);
-    }
+  const paragraphs: EngineParagraph[] = [];
+  // Volatility/drawdown findings are per-observation-window (7D/30D/90D can each independently
+  // cross the threshold) but describe the same underlying risk characteristic -- synthesized into
+  // one paragraph rather than one near-duplicate "elevated realized volatility" statement per window.
+  const volatilityRisks = substantive.filter((finding) => finding.findingType === "elevated_volatility" || finding.findingType === "sharp_drawdown");
+  if (volatilityRisks.length > 0) {
+    const elevatedVol = volatilityRisks.filter((finding) => finding.findingType === "elevated_volatility");
+    const drawdowns = volatilityRisks.filter((finding) => finding.findingType === "sharp_drawdown");
+    const clauses: string[] = [];
+    if (elevatedVol.length > 0) clauses.push(`realized volatility is elevated by this analysis's defined threshold over ${joinList(elevatedVol.map((finding) => `${str(finding.data.value)} (${finding.data.period ?? "available window"})`))}`);
+    if (drawdowns.length > 0) clauses.push(`a sharp drawdown by this analysis's defined threshold is recorded over ${joinList(drawdowns.map((finding) => `${str(finding.data.value)} (${finding.data.period ?? "available window"})`))}`);
+    paragraphs.push(para(`${joinList(clauses).replace(/^./, (character) => character.toUpperCase())} — a technical-risk characteristic of the price series itself, distinct from whether the current direction of price is positive or negative.`, volatilityRisks));
+  }
+  for (const finding of substantive) {
+    if (finding.findingType === "elevated_volatility" || finding.findingType === "sharp_drawdown") continue; // already synthesized above
     if (finding.findingType === "dilution_gap") {
-      return para(`Dilution exposure: fully diluted valuation (${str(finding.data.fdvValue)}) is materially above market capitalization (${str(finding.data.marketCapValue)}), so continued dilution as supply circulates is a valuation-relevant factor to weigh.`, finding);
+      paragraphs.push(para(`Dilution exposure: fully diluted valuation (${str(finding.data.fdvValue)}) is materially above market capitalization (${str(finding.data.marketCapValue)}), so continued dilution as supply circulates is a valuation-relevant factor to weigh.`, finding));
+    } else if (finding.findingType === "market_fundamental_divergence") {
+      paragraphs.push(para("Market/fundamental divergence: price appreciation was observed while tracked protocol TVL decreased over the same aligned interval — a risk-relevant divergence between market performance and underlying activity.", finding));
+    } else if (finding.findingType === "low_circulating_supply_share") {
+      paragraphs.push(para(`Supply-structure risk: circulating supply represents ${str(finding.data.value)} of maximum supply; the remaining supply entering circulation over time is a factor to weigh alongside current valuation.`, finding));
+    } else {
+      paragraphs.push(para(`${str(finding.data.label ?? finding.findingType.replace(/_/g, " "))} was observed.`, finding));
     }
-    if (finding.findingType === "market_fundamental_divergence") {
-      return para("Market/fundamental divergence: price appreciation was observed while tracked protocol TVL decreased over the same aligned interval — a risk-relevant divergence between market performance and underlying activity.", finding);
-    }
-    if (finding.findingType === "low_circulating_supply_share") {
-      return para(`Supply-structure risk: circulating supply represents ${str(finding.data.value)} of maximum supply; the remaining supply entering circulation over time is a factor to weigh alongside current valuation.`, finding);
-    }
-    return para(`${str(finding.data.label ?? finding.findingType.replace(/_/g, " "))} was observed.`, finding);
-  });
+  }
+  return paragraphs;
 }
 
 // ---- 10. Data Quality & Analytical Limitations ----
