@@ -162,7 +162,6 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
         </p>
         <button className="blade-button blade-button-art" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label={`Deep AI Analysis: ${deepAnalysisButtonHint(analysisState)}`}>
           <Image src={AI_BUTTON_ART.src} alt="Generate AI Research Report" width={AI_BUTTON_ART.width} height={AI_BUTTON_ART.height} className="blade-art" priority />
-          <small className="blade-hint">{deepAnalysisButtonHint(analysisState)}</small>
         </button>
       </div>
 
