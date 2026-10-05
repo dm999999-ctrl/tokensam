@@ -71,6 +71,23 @@ function preciseSupply(raw: number, compactDisplay: string): string {
 const HORIZON_WORD: Record<MomentumPeriodKey, string> = { "24h": "24-hour", "7d": "seven-day", "30d": "30-day", "90d": "90-day" };
 const HORIZON_LABEL: Record<MomentumPeriodKey, string> = { "24h": "24H", "7d": "7D", "30d": "30D", "90d": "90D" };
 
+const BOLLINGER_PHRASE: Record<string, (pct: string) => string> = {
+  price_above_upper_band: () => "the latest close sits above the upper Bollinger band (20, 2), a statistically extended position relative to the 20-day average",
+  price_below_lower_band: () => "the latest close sits below the lower Bollinger band (20, 2), a statistically extended position relative to the 20-day average",
+  price_upper_half_of_bands: (pct) => `Bollinger %B reads ${pct}, placing the latest close in the upper portion of its recent volatility envelope without reaching the upper band itself`,
+  price_lower_half_of_bands: (pct) => `Bollinger %B reads ${pct}, placing the latest close in the lower portion of its recent volatility envelope without reaching the lower band itself`,
+};
+
+/** The 30-day closing-range position's own number drives the wording, never a flat "upper/lower third" label regardless of how close to the edge the figure actually is. */
+function rangePositionPhrase(raw: number): string {
+  if (raw >= 99.5) return "is at the highest closing level of the 30-day window";
+  if (raw >= 90) return "is extremely close to the highest closing level of the 30-day window";
+  if (raw >= 200 / 3) return "sits in the upper third of its 30-day closing range";
+  if (raw <= 0.5) return "is at the lowest closing level of the 30-day window";
+  if (raw <= 10) return "is extremely close to the lowest closing level of the 30-day window";
+  return "sits in the lower third of its 30-day closing range";
+}
+
 type EvidenceGroup = Finding | Relationship | ThesisDriver | Finding[] | Relationship[] | ThesisDriver[] | string[];
 
 function evidence(...groups: EvidenceGroup[]): string[] {
@@ -122,7 +139,7 @@ type MultiHorizonPattern =
   | "reversal_to_down" | "reversal_to_up" | "mixed" | "single_up" | "single_down" | "flat";
 
 function momentumPattern(finding: Finding): MultiHorizonPattern {
-  return finding.findingType.replace("multi_horizon_", "") as MultiHorizonPattern;
+  return finding.findingType.replace("volume_multi_horizon_", "").replace("multi_horizon_", "") as MultiHorizonPattern;
 }
 
 /** The concrete figures a momentum finding cites, e.g. "+5.64% over 7D and +38.11% over 90D". */
@@ -131,28 +148,41 @@ function momentumFigures(finding: Finding): string {
   return joinList(horizons.map((horizon) => `${pct(horizon.raw)} over ${HORIZON_LABEL[horizon.key]}`));
 }
 
-/** One flowing sentence describing a multi-horizon momentum finding's pattern — direction, magnitude, pace, and reversal are each named only where the pattern actually establishes them. */
-function momentumClause(finding: Finding): string {
+/**
+ * The coarse up/down/mixed/flat direction a multi-horizon pattern establishes -- shared by price and
+ * volume findings so the narrative can compare them directly (see report.ts's classifyRegime, which
+ * applies the same mapping to the price finding for the report header's regime field).
+ */
+function patternDirection(pattern: MultiHorizonPattern): "up" | "down" | "mixed" | "flat" {
+  if (pattern === "flat") return "flat";
+  if (pattern.includes("_up") || pattern === "single_up" || pattern === "reversal_to_up") return "up";
+  if (pattern.includes("_down") || pattern === "single_down" || pattern === "reversal_to_down") return "down";
+  return "mixed";
+}
+
+/** One flowing sentence describing a multi-horizon momentum finding's pattern — direction, magnitude, pace, and reversal are each named only where the pattern actually establishes them. `subject` lets the identical pattern logic describe price or volume without a second, divergent implementation. */
+function momentumClause(finding: Finding, subject: "Price" | "Trading volume" = "Price"): string {
   const horizons = finding.horizons ?? [];
   const pattern = momentumPattern(finding);
   const shortest = horizons[0], longest = horizons[horizons.length - 1];
   const figures = momentumFigures(finding);
+  const verb = subject === "Price" ? "moved" : "changed";
   if (pattern === "single_up" || pattern === "single_down") {
     const horizon = horizons[0];
-    return `Price recorded ${magnitudePhrase(horizon.key, horizon.raw, directionWord(horizon.raw))} of ${pct(horizon.raw)} over the ${HORIZON_WORD[horizon.key]} window, the only horizon currently available.`;
+    return `${subject} recorded ${magnitudePhrase(horizon.key, horizon.raw, directionWord(horizon.raw))} of ${pct(horizon.raw)} over the ${HORIZON_WORD[horizon.key]} window, the only horizon currently available.`;
   }
-  if (pattern === "flat") return `Price has been essentially unchanged across the available observation windows (${figures}).`;
-  if (pattern === "mixed") return `Price moved ${figures}, without a single consistent direction across the available windows — a mixed short- and long-term picture rather than a clear regime.`;
+  if (pattern === "flat") return `${subject} has been essentially unchanged across the available observation windows (${figures}).`;
+  if (pattern === "mixed") return `${subject} ${verb} ${figures}, without a single consistent direction across the available windows — a mixed short- and long-term picture rather than a clear regime.`;
   if (pattern === "reversal_to_down" || pattern === "reversal_to_up") {
     const turn = pattern === "reversal_to_down" ? "turned negative" : "turned positive";
-    return `Price moved ${figures}. The longer-term ${HORIZON_WORD[longest.key]} trend has been ${pattern === "reversal_to_down" ? "positive" : "negative"}, but the most recent ${HORIZON_WORD[shortest.key]} movement has ${turn}, marking a reversal within the observed history rather than a continuation of the longer-term regime.`;
+    return `${subject} ${verb} ${figures}. The longer-term ${HORIZON_WORD[longest.key]} trend has been ${pattern === "reversal_to_down" ? "positive" : "negative"}, but the most recent ${HORIZON_WORD[shortest.key]} movement has ${turn}, marking a reversal within the observed history rather than a continuation of the longer-term regime.`;
   }
   const paceClause = shortest.key === longest.key ? "" : pattern.endsWith("decelerating")
     ? ` The ${HORIZON_WORD[longest.key]} figure is materially larger than the ${HORIZON_WORD[shortest.key]} figure, indicating a substantial share of the cumulative move occurred before the most recent window — a deceleration in pace, not a change in direction.`
     : pattern.endsWith("accelerating")
       ? ` The recent ${HORIZON_WORD[shortest.key]} pace of change is running faster than the pace implied by the remainder of the ${HORIZON_WORD[longest.key]} window, indicating the pace of change has picked up more recently.`
       : ` The pace of change has remained broadly consistent between the ${HORIZON_WORD[shortest.key]} and ${HORIZON_WORD[longest.key]} windows.`;
-  return `Price moved ${figures}, a persistent ${pattern.includes("_up_") ? "positive" : "negative"} regime across every available horizon.${paceClause}`;
+  return `${subject} ${verb} ${figures}, a persistent ${pattern.includes("_up_") ? "positive" : "negative"} regime across every available horizon.${paceClause}`;
 }
 
 // ---- 1. Executive Investment Assessment ----
@@ -223,6 +253,7 @@ function executiveAssessment(findings: Finding[], synthesis: SynthesisResult): E
 
 function marketPerformanceSection(findings: Finding[]): EngineParagraph[] {
   const momentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_"));
+  const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
   const turnover = byType(findings, "elevated_volume_during_decline") ?? byType(findings, "elevated_volume_during_advance");
   const volatility = byCategory(findings, "risk").filter((finding) => finding.findingType === "elevated_volatility" || finding.findingType === "sharp_drawdown");
   const paragraphs: EngineParagraph[] = [];
@@ -231,7 +262,21 @@ function marketPerformanceSection(findings: Finding[]): EngineParagraph[] {
   } else {
     paragraphs.push(para("No price-change observation window currently has enough stored history to establish a momentum pattern.", ["token"]));
   }
-  if (turnover) {
+  // The multi-horizon volume pattern (hist:volume_24h/7d/30d) is read against the price pattern
+  // above: whether trading activity moved the same direction across the same horizons, or whether
+  // it diverges -- never silently confirmed or ignored, since volume alone never confirms direction.
+  if (volumeMomentum) {
+    const volumeClause = momentumClause(volumeMomentum, "Trading volume");
+    const volDirection = patternDirection(momentumPattern(volumeMomentum));
+    const priceDirection = momentum ? patternDirection(momentumPattern(momentum)) : null;
+    let relation = "";
+    if (priceDirection && priceDirection !== "mixed" && priceDirection !== "flat" && volDirection !== "mixed" && volDirection !== "flat") {
+      relation = priceDirection === volDirection
+        ? " This is directionally consistent with the price regime described above, providing some confirmation from trading activity rather than price movement alone."
+        : " This diverges from the price regime described above: trading activity has not moved in the same direction as price across these horizons, which qualifies rather than confirms the price move.";
+    }
+    paragraphs.push(para(`${volumeClause}${relation}`, volumeMomentum));
+  } else if (turnover) {
     const direction = turnover.findingType === "elevated_volume_during_decline" ? "a price decrease" : "a price increase";
     paragraphs.push(para(`This move coincided with trading volume elevated relative to market capitalization (${str(turnover.data.volumeShareValue)}) alongside ${direction} of ${str(turnover.data.changeValue)} over the same 24-hour window — elevated turnover accompanying the move, not confirmation of its direction on its own.`, turnover));
   }
@@ -273,25 +318,28 @@ function technicalAnalysisSection(findings: Finding[], synthesis: SynthesisResul
     paragraphs.push(para(`Momentum: the 14-day RSI reads ${str(rsi.data.raw)}, ${level} — a momentum extreme by this indicator's own threshold, considered alongside the price pattern above rather than in isolation.`, rsi));
   }
 
-  const bollinger = byType(technical, "price_above_upper_band") ?? byType(technical, "price_below_lower_band");
-  if (bollinger) {
-    const position = bollinger.findingType === "price_above_upper_band" ? "above the upper" : "below the lower";
-    paragraphs.push(para(`Volatility structure: the latest close sits ${position} Bollinger band (20, 2), a statistically extended position relative to the 20-day average.`, bollinger));
-  }
-
+  const bollinger = byType(technical, "price_above_upper_band") ?? byType(technical, "price_below_lower_band")
+    ?? byType(technical, "price_upper_half_of_bands") ?? byType(technical, "price_lower_half_of_bands");
   const swing = byTypePrefix(technical, "swing_structure_")[0];
   const range = byType(technical, "closing_range_upper_third") ?? byType(technical, "closing_range_lower_third");
-  if (swing || range) {
+  if (bollinger) {
+    const pct = (bollinger.data.raw as number).toFixed(2);
+    const rangeClause = range ? ` The latest close ${rangePositionPhrase(range.data.raw as number)} (${str(range.data.raw)}%), so this volatility reading should be read together with that range position rather than on its own.` : "";
+    paragraphs.push(para(`Volatility structure: ${BOLLINGER_PHRASE[bollinger.findingType](pct)}.${rangeClause}`, range ? [bollinger, range] : bollinger));
+  }
+
+  if (swing || (range && !bollinger)) {
     const clauses: string[] = [];
     const structureMembers: Finding[] = [];
     if (swing) {
       structureMembers.push(swing);
       clauses.push(`the last two confirmed swing points form a ${swing.findingType.replace("swing_structure_", "").replace(/_/g, " ")} pattern`);
     }
-    if (range) {
+    if (range && !bollinger) {
+      // Only stated here when it wasn't already cross-referenced in the Bollinger clause above,
+      // so the same range-position fact is never stated twice in the same section.
       structureMembers.push(range);
-      const third = range.findingType === "closing_range_upper_third" ? "upper" : "lower";
-      clauses.push(`the latest close sits in the ${third} third of its 30-day closing range (${str(range.data.raw)}%)`);
+      clauses.push(`the latest close ${rangePositionPhrase(range.data.raw as number)} (${str(range.data.raw)}%)`);
     }
     paragraphs.push(para(`Market structure: ${joinList(clauses)} — support/resistance context derived from closing prices only.`, structureMembers));
 

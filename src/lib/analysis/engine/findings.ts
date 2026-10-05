@@ -138,10 +138,13 @@ function patternHorizons(horizons: Horizon[]): Horizon[] {
   return longer.length >= 2 ? longer : horizons;
 }
 
-/** One consolidated momentum finding covering every available horizon — never one finding per horizon. */
-function multiHorizonMomentumFinding(fields: Map<string, PayloadField>): Finding | null {
-  const horizons = availableHorizons(fields);
-  if (horizons.length === 0) return null;
+/**
+ * The direction/pace classification shared by price and volume multi-horizon findings: which of the
+ * twelve MultiHorizonPattern values the available horizons establish, and the severity band for it.
+ * Pulled out of multiHorizonMomentumFinding so the same, single classification logic drives both
+ * price momentum and the volume-horizon finding below — never a second, parallel implementation.
+ */
+function classifyMultiHorizonPattern(horizons: Horizon[]): { pattern: MultiHorizonPattern; severity: FindingSeverity; shortest: Horizon; longest: Horizon } {
   const forPattern = patternHorizons(horizons);
   const shortest = forPattern[0];
   const longest = forPattern[forPattern.length - 1];
@@ -174,9 +177,41 @@ function multiHorizonMomentumFinding(fields: Map<string, PayloadField>): Finding
     pattern = "mixed";
     severity = "low";
   }
+  return { pattern, severity, shortest, longest };
+}
 
+/** One consolidated momentum finding covering every available horizon — never one finding per horizon. */
+function multiHorizonMomentumFinding(fields: Map<string, PayloadField>): Finding | null {
+  const horizons = availableHorizons(fields);
+  if (horizons.length === 0) return null;
+  const { pattern, severity, shortest, longest } = classifyMultiHorizonPattern(horizons);
   return {
     category: "marketPerformance", findingType: `multi_horizon_${pattern}`, severity,
+    evidenceIds: horizons.map((horizon) => horizon.id), observationPeriods: horizons.map((horizon) => horizon.period),
+    data: { patternShortestKey: shortest.key, patternLongestKey: longest.key },
+    horizons,
+  };
+}
+
+/**
+ * The same multi-horizon pattern classification applied to the stored volume-history series
+ * (hist:volume_24h/7d/30d -- the same fields "Market history" already displays), so the narrative
+ * can compare the price regime above against how trading activity has moved across the identical
+ * set of horizons, rather than only the single 24h volume/market-cap snapshot used elsewhere.
+ */
+function volumeMultiHorizonFinding(fields: Map<string, PayloadField>): Finding | null {
+  const horizons = (["24h", "7d", "30d"] as const)
+    .map((key) => horizonFrom(key, shown(fields, `hist:volume_${key}`)))
+    .filter((horizon): horizon is Horizon => horizon !== null);
+  if (horizons.length < 2) return null; // a single volume-change figure is already shown elsewhere; this finding is for the multi-horizon comparison specifically
+  const { pattern, severity, shortest, longest } = classifyMultiHorizonPattern(horizons);
+  return {
+    // Deliberately NOT prefixed "multi_horizon_" -- several places in synthesis.ts/report.ts/
+    // narrative.ts match that exact prefix to mean "the price momentum finding" specifically
+    // (thesis-driver construction, the report header's regime classification, etc.); a volume
+    // finding that happened to collide with it would silently be picked up by those price-only
+    // lookups. "volume_multi_horizon_" shares the classification logic but never that prefix.
+    category: "marketPerformance", findingType: `volume_multi_horizon_${pattern}`, severity,
     evidenceIds: horizons.map((horizon) => horizon.id), observationPeriods: horizons.map((horizon) => horizon.period),
     data: { patternShortestKey: shortest.key, patternLongestKey: longest.key },
     horizons,
@@ -188,6 +223,8 @@ export function marketPerformanceFindings(payload: ProfilePayload): Finding[] {
   const findings: Finding[] = [];
   const momentum = multiHorizonMomentumFinding(fields);
   if (momentum) findings.push(momentum);
+  const volumeMomentum = volumeMultiHorizonFinding(fields);
+  if (volumeMomentum) findings.push(volumeMomentum);
 
   // Volume level relative to market cap is a market-structure characteristic (see liquidityFindings
   // for the ratio itself); here we only note the price/volume behavioral pattern it produces.
@@ -623,15 +660,19 @@ function rsiFinding(fields: Map<string, PayloadField>): Finding | null {
   };
 }
 
-/** Only a close outside the bands is notable — within the bands is the ordinary case, not a Finding. */
+/**
+ * A close outside the bands is the statistically extended case; a close within the bands is the
+ * ordinary case but its %B still says where price sits relative to the 20-day average -- upper or
+ * lower half of the band range -- which the narrative reads alongside range position and momentum
+ * rather than staying silent on it. Severity is only elevated for the two extended states.
+ */
 function bollingerFinding(fields: Map<string, PayloadField>): Finding | null {
   const indicatorField = shown(fields, "calc:ind_bollinger_20_2");
   const percentB = indicatorField?.technicalReadings?.["%B"];
   if (!indicatorField || typeof percentB !== "number") return null;
-  const findingType = percentB >= 1 ? "price_above_upper_band" : percentB <= 0 ? "price_below_lower_band" : null;
-  if (!findingType) return null;
+  const findingType = percentB >= 1 ? "price_above_upper_band" : percentB <= 0 ? "price_below_lower_band" : percentB >= 0.5 ? "price_upper_half_of_bands" : "price_lower_half_of_bands";
   return {
-    category: "technical", findingType, severity: "moderate",
+    category: "technical", findingType, severity: findingType === "price_above_upper_band" || findingType === "price_below_lower_band" ? "moderate" : "low",
     evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period], data: { raw: percentB },
   };
 }
