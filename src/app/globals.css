@@ -286,7 +286,11 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .crumbs a:hover { color: var(--ink-strong); }
 .crumbs span[aria-hidden] { color: var(--crimson); }
 .crumbs [aria-current] { color: var(--ink); }
-.profile-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px 32px; padding-bottom: 20px; }
+/* align-items: start, not center: the button makes .profile-quote much
+   taller than .profile-identity, and centering would vertically center the
+   shorter identity column within that taller row -- pushing it down and
+   opening a gap below the breadcrumb that isn't really there. */
+.profile-header { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 20px 32px; padding-bottom: 20px; }
 .profile-identity { display: flex; min-width: 0; align-items: center; gap: 18px; }
 .identity-copy { display: grid; gap: 8px; min-width: 0; }
 .profile-header h1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
