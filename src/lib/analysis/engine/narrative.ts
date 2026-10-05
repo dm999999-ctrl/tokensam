@@ -179,6 +179,26 @@ function volumeRelationClause(priceDirection: "up" | "down" | "mixed" | "flat", 
     : " This diverges from the price regime: trading activity has not moved in the same direction as price across these horizons, which qualifies rather than confirms the price move.";
 }
 
+/**
+ * How the dominant multi-horizon price pattern should be characterized at the regime level --
+ * shared by Executive Assessment and Final Conclusion so both state the identical characterization
+ * (never two separate judgments of the same pattern). "constructive"/"negative" is used only for a
+ * genuinely consistent pattern; a reversal is named explicitly as a reversal/divergence between
+ * short- and longer-term direction rather than forced into a flat constructive/negative label --
+ * the same distinction report.ts's classifyRegime applies for the report header's regime field.
+ */
+function regimeDescriptor(pattern: MultiHorizonPattern, momentumDirection: "up" | "down"): { label: string; closingLabel: string; isReversal: boolean } {
+  if (pattern === "reversal_to_up" || pattern === "reversal_to_down") {
+    return {
+      label: "a reversal between its short- and longer-term price direction rather than a single consistent market regime",
+      closingLabel: "reflects a reversal between short- and longer-term price direction rather than a single consistent market and technical assessment",
+      isReversal: true,
+    };
+  }
+  const regimeWord = momentumDirection === "up" ? "constructive" : "negative";
+  return { label: `a ${regimeWord} market regime`, closingLabel: `supports a ${regimeWord} market and technical assessment`, isReversal: false };
+}
+
 /** One flowing sentence describing a multi-horizon momentum finding's pattern — direction, magnitude, pace, and reversal are each named only where the pattern actually establishes them. `subject` lets the identical pattern logic describe price or volume without a second, divergent implementation. */
 function momentumClause(finding: Finding, subject: "Price" | "Trading volume" = "Price"): string {
   const horizons = finding.horizons ?? [];
@@ -330,16 +350,22 @@ function executiveAssessment(findings: Finding[], synthesis: SynthesisResult): E
   const momentumDirection: "up" | "down" = direction;
 
   const paragraphs: EngineParagraph[] = [];
-  const regimeWord = direction === "up" ? "constructive" : "negative";
+  const pattern = momentumPattern(momentum);
+  const regime = regimeDescriptor(pattern, momentumDirection);
   const confluence = technicalConfluenceMembers(findings, synthesis);
 
-  // 1. What is happening, stated immediately -- no generic lead-in.
-  const confluenceClause = confluence && confluence.agreeing.length > 0 && confluence.conflicting.length === 0
-    ? " with technical measures independently reinforcing that direction"
-    : confluence && confluence.conflicting.length > 0 && confluence.agreeing.length === 0
-      ? ", although the available technical indicators do not confirm it"
-      : "";
-  paragraphs.push(para(`This token is in a ${regimeWord} market regime${confluenceClause}: ${momentumClause(momentum)}`, confluence ? [momentum, ...confluence.agreeing, ...confluence.conflicting] : momentum));
+  // 1. What is happening, stated immediately -- derived from the actual dominant pattern, never a
+  // fixed opening sentence. A reversal is never folded into the constructive/negative confluence
+  // clause below, since "that direction" would be ambiguous when the short- and longer-term
+  // horizons themselves disagree -- momentumClause's own text already states the reversal plainly.
+  const confluenceClause = regime.isReversal
+    ? ""
+    : confluence && confluence.agreeing.length > 0 && confluence.conflicting.length === 0
+      ? " with technical measures independently reinforcing that direction"
+      : confluence && confluence.conflicting.length > 0 && confluence.agreeing.length === 0
+        ? ", although the available technical indicators do not confirm it"
+        : "";
+  paragraphs.push(para(`This token is in ${regime.label}${confluenceClause}: ${momentumClause(momentum)}`, confluence ? [momentum, ...confluence.agreeing, ...confluence.conflicting] : momentum));
 
   // 2. Why -- the specific technical measures, named.
   if (confluence && confluence.agreeing.length > 0) {
@@ -383,7 +409,7 @@ function executiveAssessment(findings: Finding[], synthesis: SynthesisResult): E
     : topDriver && (topDriver.persistence === "conflicting" || topDriver.completeness === "limited")
       ? "lower"
       : "moderate";
-  paragraphs.push(para(`Taken together, the evidence supports a ${regimeWord} market and technical assessment with ${confidenceWord} confidence, rather than a single unqualified directional conclusion.`, momentum));
+  paragraphs.push(para(`Taken together, the evidence ${regime.closingLabel} with ${confidenceWord} confidence, rather than a single unqualified directional conclusion.`, momentum));
   return paragraphs;
 }
 
@@ -994,6 +1020,10 @@ function dataQualityLimitations(findings: Finding[]): EngineParagraph[] {
     const parts = missing.map((finding) => str(finding.data.label));
     paragraphs.push(para(`${joinList(parts)} ${missing.length === 1 ? "is" : "are"} not available for this token from the mapped data providers.`, missing));
   }
+  const noTechnical = byType(gaps, "no_technical_indicators");
+  if (noTechnical) {
+    paragraphs.push(para("No technical indicator currently has enough stored daily-close history to compute, so Technical Analysis is omitted from this report rather than rendered without content.", noTechnical));
+  }
   return paragraphs;
 }
 
@@ -1022,21 +1052,26 @@ function finalConclusion(findings: Finding[], synthesis: SynthesisResult): Engin
   const momentumDirection: "up" | "down" = direction;
 
   const paragraphs: EngineParagraph[] = [];
-  const regimeWord = direction === "up" ? "constructive" : "negative";
+  const pattern = momentumPattern(momentum);
+  const regime = regimeDescriptor(pattern, momentumDirection);
   const confluence = technicalConfluenceMembers(findings, synthesis);
 
-  // 1. What the totality of evidence supports.
-  paragraphs.push(para(`The available evidence supports a ${regimeWord} market and technical regime: ${momentumClause(momentum)}`, momentum));
+  // 1. What the totality of evidence supports -- derived from the actual dominant pattern, not a
+  // fixed opening sentence forced into constructive/negative wording (see regimeDescriptor).
+  paragraphs.push(para(`The available evidence ${regime.closingLabel}: ${momentumClause(momentum)}`, momentum));
 
-  // 2. Strongest supporting evidence.
+  // 2. Strongest supporting evidence. Confluence/volume are only read as reinforcing "that
+  // direction" when the price pattern itself is a genuinely consistent one -- during a reversal,
+  // the short- and longer-term horizons disagree, so there is no single direction for another
+  // signal to reinforce.
   const supportParts: string[] = [];
   const supportEvidence: Finding[] = [momentum];
-  if (confluence && confluence.agreeing.length > 0) {
+  if (!regime.isReversal && confluence && confluence.agreeing.length > 0) {
     supportParts.push(`the technical configuration independently reinforces that direction (${joinList(confluence.agreeing.map(technicalIndicatorClause))})`);
     supportEvidence.push(...confluence.agreeing);
   }
   const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
-  if (volumeMomentum && momentumPattern(volumeMomentum).startsWith("consistent_") && patternDirection(momentumPattern(volumeMomentum)) === momentumDirection) {
+  if (!regime.isReversal && volumeMomentum && momentumPattern(volumeMomentum).startsWith("consistent_") && patternDirection(momentumPattern(volumeMomentum)) === momentumDirection) {
     supportParts.push("trading volume moves in the same direction across the same horizons");
     supportEvidence.push(volumeMomentum);
   }
@@ -1087,7 +1122,7 @@ function finalConclusion(findings: Finding[], synthesis: SynthesisResult): Engin
   const futureEvidenceClause = unavailable.length > 0
     ? ` whether subsequent observations confirm the current regime, and ${joinList(unavailable)} becomes establishable as further evidence is collected`
     : " whether subsequent observations confirm the current regime";
-  paragraphs.push(para(`Overall, the evidence supports a ${regimeWord} market and technical assessment with ${confidenceWord} confidence. This conclusion would strengthen or weaken depending on${futureEvidenceClause}.`, momentum));
+  paragraphs.push(para(`Overall, the evidence ${regime.closingLabel} with ${confidenceWord} confidence. This conclusion would strengthen or weaken depending on${futureEvidenceClause}.`, momentum));
   return paragraphs;
 }
 

@@ -54,12 +54,12 @@ test("6. a section can only be hidden when it is empty of real evidence (every p
   assert.doesNotMatch(isEmptySectionFn, /===\s*"BTC"|===\s*"ORCA"|===\s*"ILV"|===\s*"VIRTUAL"/i, "no token-name conditional in the visibility check");
 });
 
-test("7. only Fundamental Analysis, Valuation Analysis, Market Structure & Liquidity, and Tokenomics & Supply are ever hidden when empty -- Market Performance, Technical Analysis, Cross-Domain Analysis, Key Investment Risks, Executive Assessment, Data Quality & Analytical Limitations, Final Analytical Conclusion, and Further Research Questions always render", () => {
+test("7. Fundamental Analysis, Valuation Analysis, Market Structure & Liquidity, Tokenomics & Supply, Technical Analysis, and Data Quality & Analytical Limitations are all hidden when empty -- Market Performance, Cross-Domain Analysis, Key Investment Risks, and Executive Assessment always render", () => {
   const hidableSet = source.slice(source.indexOf("const HIDABLE_WHEN_EMPTY"), source.indexOf("]);", source.indexOf("const HIDABLE_WHEN_EMPTY")) + 3);
-  for (const key of ["fundamentalAnalysis", "valuationAnalysis", "marketStructureLiquidity", "tokenomicsSupply"]) {
+  for (const key of ["fundamentalAnalysis", "valuationAnalysis", "marketStructureLiquidity", "tokenomicsSupply", "technicalAnalysis", "dataQualityLimitations"]) {
     assert.match(hidableSet, new RegExp(`"${key}"`), `${key} must be hidable when it has no evidence`);
   }
-  for (const key of ["marketPerformance", "technicalAnalysis", "crossDomainAnalysis", "keyRisks", "executiveAssessment"]) {
+  for (const key of ["marketPerformance", "crossDomainAnalysis", "keyRisks", "executiveAssessment"]) {
     assert.doesNotMatch(hidableSet, new RegExp(`"${key}"`), `${key} must always render`);
   }
   assert.match(source, /key === "executiveAssessment" \|\| !HIDABLE_WHEN_EMPTY\.has\(key\)/, "executiveAssessment is explicitly always visible regardless of the hidable set");

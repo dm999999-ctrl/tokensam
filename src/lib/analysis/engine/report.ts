@@ -34,8 +34,13 @@ function classifyRegime(findings: Finding[]): MarketRegime {
   if (!momentum) return "insufficient";
   const pattern = momentum.findingType.replace("multi_horizon_", "");
   if (pattern === "flat") return "flat";
-  if (pattern.includes("_up") || pattern === "single_up" || pattern === "reversal_to_up") return "positive";
-  if (pattern.includes("_down") || pattern === "single_down" || pattern === "reversal_to_down") return "negative";
+  // A reversal is itself a disagreement between the short- and longer-term horizons -- the same
+  // "mixed short-term/longer-term regime" the narrative must name explicitly rather than collapsing
+  // into a flat positive/negative label (see narrative.ts's regimeDescriptor, which applies the
+  // identical distinction to the Executive Assessment and Final Conclusion prose).
+  if (pattern === "reversal_to_up" || pattern === "reversal_to_down") return "mixed";
+  if (pattern.includes("_up") || pattern === "single_up") return "positive";
+  if (pattern.includes("_down") || pattern === "single_down") return "negative";
   return "mixed"; // "mixed" itself
 }
 

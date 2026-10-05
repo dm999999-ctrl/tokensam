@@ -610,6 +610,16 @@ export function dataQualityFindings(payload: ProfilePayload): Finding[] {
       }
     }
   }
+  // No technical indicator cleared the minimum stored daily-close history to compute at all --
+  // a coverage gap distinct from the per-series insufficient_history_ findings above (those cover
+  // the raw price/volume/market-cap/TVL history itself, not the derived indicators), and the reason
+  // Technical Analysis is omitted from the report entirely rather than rendered with no content.
+  if (technicalFindings(payload).length === 0) {
+    findings.push({
+      category: "dataQuality", findingType: "no_technical_indicators", severity: "low",
+      evidenceIds: ["token"], observationPeriods: [null], data: {},
+    });
+  }
   return findings;
 }
 

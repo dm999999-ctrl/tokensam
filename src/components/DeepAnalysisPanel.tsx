@@ -88,15 +88,18 @@ function Paragraph({ paragraph, index, footnoteIndex }: { paragraph: EngineParag
  * bare "token" identity marker (never a real evidence ID; see e.g. fundamentalAnalysisSection's
  * "no associated protocol is mapped" fallback in narrative.ts), so the report doesn't render an
  * empty-looking section for a domain this token genuinely has nothing to say about. The limitation
- * itself is not lost: it's still cited in Data Quality & Analytical Limitations and, when material,
- * in the Executive Assessment / Final Conclusion's own domain-synthesis clauses (see narrative.ts's
- * fundamentalsSynthesisClause and siblings) -- this only controls whether the standalone section
- * with nothing to analyze gets a heading of its own. Market Performance, Technical Analysis,
+ * itself is not lost: when material, it's still cited in the Executive Assessment / Final
+ * Conclusion's own domain-synthesis clauses (see narrative.ts's fundamentalsSynthesisClause and
+ * siblings) and, if it affects analytical coverage/interpretation/confidence, in Data Quality &
+ * Analytical Limitations (also hidable when empty -- see below) -- this only controls whether the
+ * standalone section with nothing to analyze gets a heading of its own. Market Performance,
  * Cross-Domain Analysis, and Key Investment Risks always render: every token has price evidence,
- * and the other three already degrade gracefully to a substantive "could not be established"
- * reading rather than a bare placeholder.
+ * and the other two already degrade gracefully to a substantive "could not be established" reading
+ * rather than a bare placeholder. Technical Analysis is hidable too: when the Token Profile has no
+ * technical-indicator data at all, there is nothing to render, and narrative.ts folds that gap into
+ * Data Quality instead (see findings.ts's "no_technical_indicators").
  */
-const HIDABLE_WHEN_EMPTY = new Set<EngineSectionKey>(["fundamentalAnalysis", "valuationAnalysis", "marketStructureLiquidity", "tokenomicsSupply"]);
+const HIDABLE_WHEN_EMPTY = new Set<EngineSectionKey>(["fundamentalAnalysis", "valuationAnalysis", "marketStructureLiquidity", "tokenomicsSupply", "technicalAnalysis", "dataQualityLimitations"]);
 
 /** True when a section's only content is the engine's own no-evidence placeholder (sourceIds === ["token"], the same signal report.ts's classifyParagraphs already uses to mark a paragraph as an ungrounded placeholder). */
 export function isEmptySection(section: { paragraphs: EngineParagraph[] }): boolean {
