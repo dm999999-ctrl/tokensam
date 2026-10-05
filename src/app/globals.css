@@ -286,7 +286,7 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
    quote, grid's 1fr middle column centers it in the remaining space
    regardless of how wide the other two columns are -- justify-content:
    space-between with 3 flex items wouldn't actually center the middle one. */
-.profile-header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 20px 32px; padding-bottom: 20px; }
+.profile-header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 20px 32px; padding-bottom: 10px; }
 .profile-header .blade-button-art-sm { justify-self: center; }
 .profile-identity { display: flex; min-width: 0; align-items: center; gap: 18px; }
 .identity-copy { display: grid; gap: 8px; min-width: 0; }
