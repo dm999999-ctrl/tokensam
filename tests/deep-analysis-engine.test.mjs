@@ -429,6 +429,70 @@ test("G4. cooldown blocks an immediate second regeneration; it clears after the 
   assert.equal(later.ok, true);
 });
 
+// ---- H. Research-report redesign: confidence/analyticalType classification, regime, versioning ----
+
+test("H1. every paragraph in every section of every fixture carries a valid confidence and analyticalType", () => {
+  const VALID_CONFIDENCE = new Set(["high", "moderate", "low"]);
+  const VALID_TYPE = new Set(["observation", "interpretation", "inference", "limitation"]);
+  for (const payload of [BTC_LIKE, ETH_LIKE, UNI_LIKE, SUI_LIKE, HYPE_LIKE]) {
+    const { analysis } = buildEngineReport(payload);
+    for (const key of ENGINE_SECTION_KEYS) {
+      for (const paragraph of analysis[key].paragraphs) {
+        assert.ok(VALID_CONFIDENCE.has(paragraph.confidence), `${payload.token.symbol} ${key}: confidence "${paragraph.confidence}" must be high/moderate/low`);
+        assert.ok(VALID_TYPE.has(paragraph.analyticalType), `${payload.token.symbol} ${key}: analyticalType "${paragraph.analyticalType}" must be one of the four research-report types`);
+      }
+    }
+  }
+});
+
+test("H2. dataQualityLimitations paragraphs are always classified as limitation/high — a data gap is a directly observed fact, not an uncertain one", () => {
+  for (const payload of [BTC_LIKE, ETH_LIKE, UNI_LIKE, SUI_LIKE, HYPE_LIKE]) {
+    const { analysis } = buildEngineReport(payload);
+    for (const paragraph of analysis.dataQualityLimitations.paragraphs) {
+      assert.equal(paragraph.analyticalType, "limitation");
+      assert.equal(paragraph.confidence, "high");
+    }
+  }
+});
+
+test("H3. a paragraph grounded only by the bare 'token' placeholder (no real evidence) is always classified as limitation/low, regardless of its section", () => {
+  for (const payload of [BTC_LIKE, ETH_LIKE, UNI_LIKE, SUI_LIKE, HYPE_LIKE]) {
+    const { analysis } = buildEngineReport(payload);
+    for (const key of ENGINE_SECTION_KEYS) {
+      if (key === "dataQualityLimitations") continue; // H2 governs this section instead
+      for (const paragraph of analysis[key].paragraphs) {
+        if (paragraph.sourceIds.length === 1 && paragraph.sourceIds[0] === "token") {
+          assert.equal(paragraph.analyticalType, "limitation", `${key}: a 'token'-only paragraph must read as a limitation`);
+          assert.equal(paragraph.confidence, "low", `${key}: a 'token'-only paragraph must read as low confidence`);
+        }
+      }
+    }
+  }
+});
+
+test("H4. the report's regime is read directly off the same multi-horizon momentum finding Market Performance cites — never a separate judgment — and is always one of the five defined labels", () => {
+  const VALID_REGIME = new Set(["positive", "negative", "mixed", "flat", "insufficient"]);
+  for (const payload of [BTC_LIKE, ETH_LIKE, UNI_LIKE, SUI_LIKE, HYPE_LIKE]) {
+    const built = buildEngineReport(payload);
+    assert.ok(VALID_REGIME.has(built.regime), `regime "${built.regime}" must be one of the five defined labels`);
+    assert.ok(["high", "moderate", "low"].includes(built.regimeConfidence));
+  }
+});
+
+test("H5. confidence/analyticalType survive a stored-row round-trip unchanged (parseStoredEngineAnalysis does not silently strip the new fields)", async () => {
+  const db = createFakeSupabase({ seed: seed("op-roundtrip", "optimism", [["coingecko", "price_usd", 2.5], ["coingecko", "market_cap_usd", 900_000_000]], [], true) });
+  const generated = await generateDeterministicAnalysis(db.client, "op-roundtrip", { now: () => MIDNIGHT });
+  assert.equal(generated.ok, true);
+  const state = await getDeterministicAnalysisState(db.client, "op-roundtrip");
+  assert.equal(state.status, "ready");
+  for (const key of ENGINE_SECTION_KEYS) {
+    for (const paragraph of state.latest[key].paragraphs) {
+      assert.ok(paragraph.confidence, `${key}: confidence must survive the store/reload round-trip`);
+      assert.ok(paragraph.analyticalType, `${key}: analyticalType must survive the store/reload round-trip`);
+    }
+  }
+});
+
 // =====================================================================================
 
 let failures = 0;

@@ -102,6 +102,9 @@ export type AnalysisMetadata = {
   engineVersion?: string;
   analysisVersion?: string;
   dataSnapshotAt?: string | null;
+  /** The report header's regime label and its confidence — see engine/report.ts's classifyRegime/driverConfidence. Present only on engine reports carrying this field (post-redesign). */
+  regime?: string;
+  regimeConfidence?: "high" | "moderate" | "low";
 };
 
 export type TokenAnalysis = ModelAnalysis & { metadata: AnalysisMetadata };

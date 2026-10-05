@@ -306,7 +306,7 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
             </button>
           </div>
         )}
-        <DeepAnalysisPanel tokenId={token.id} initialState={analysisState} hidden={!showAnalysis} />
+        <DeepAnalysisPanel tokenId={token.id} initialState={analysisState} hidden={!showAnalysis} payload={payload} />
       </section>
 
       <SourcesMethodology
