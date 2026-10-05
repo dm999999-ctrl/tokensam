@@ -297,19 +297,20 @@ function technicalAnalysisSection(findings: Finding[], synthesis: SynthesisResul
 
     // The swing finding's own numeric readings (last swing high/low) and the most recent price
     // observation, read together, establish whether the latest close has since moved beyond the
-    // swing-point structure above — e.g. a prior lower-high pattern's bearish implication is
+    // swing-point structure above — e.g. a prior lower-high pattern's downward implication is
     // weakened once price moves back above that last swing high. Only stated when the data
-    // actually establishes it; never implied from the pattern label alone.
+    // actually establishes it; never implied from the pattern label alone. Never the banned
+    // sentiment words themselves (bullish/bearish) — see evidence-rules.ts's DIRECTIONAL_PATTERNS.
     if (swing && swing.data.beyondLastSwing) {
       const direction = swing.data.beyondLastSwing === "above_high" ? "above" : "below";
       const level = swing.data.beyondLastSwing === "above_high" ? swing.data.lastHigh : swing.data.lastLow;
       const levelText = typeof level === "number" ? formatUsd(level) : null;
-      const bearishPattern = swing.findingType.includes("lower_high");
-      const bullishPattern = swing.findingType.includes("higher_low") && swing.data.beyondLastSwing === "below_low";
-      const implicationClause = swing.data.beyondLastSwing === "above_high" && bearishPattern
-        ? " The current price therefore weakens the bearish implication that would otherwise be associated with the prior lower-high configuration, though it has not yet re-established a higher closing high relative to the full pattern."
-        : bullishPattern
-          ? " The current price therefore weakens the bullish implication that would otherwise be associated with the prior higher-low configuration."
+      const lowerHighPattern = swing.findingType.includes("lower_high");
+      const higherLowPattern = swing.findingType.includes("higher_low") && swing.data.beyondLastSwing === "below_low";
+      const implicationClause = swing.data.beyondLastSwing === "above_high" && lowerHighPattern
+        ? " The current price therefore weakens the downward implication that would otherwise be associated with the prior lower-high configuration, though it has not yet re-established a higher closing high relative to the full pattern."
+        : higherLowPattern
+          ? " The current price therefore weakens the upward implication that would otherwise be associated with the prior higher-low configuration."
           : "";
       if (levelText) paragraphs.push(para(`The latest close has since moved ${direction} the last swing ${swing.data.beyondLastSwing === "above_high" ? "high" : "low"} of ${levelText}.${implicationClause}`, [swing]));
     }
