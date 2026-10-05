@@ -120,14 +120,9 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
 
   return (
     <div className="page profile-page">
-      <div className="crumbs-row">
-        <nav className="crumbs" aria-label="Breadcrumb">
-          <Link href="/">Research Universe</Link><span aria-hidden="true">/</span><span aria-current="page">{token.name}</span>
-        </nav>
-        <button className="blade-button blade-button-art blade-button-art-sm" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label={`Deep AI Analysis: ${deepAnalysisButtonHint(analysisState)}`}>
-          <Image src={AI_BUTTON_ART.src} alt="Generate AI Research Report" width={AI_BUTTON_ART.width} height={AI_BUTTON_ART.height} className="blade-art" priority />
-        </button>
-      </div>
+      <nav className="crumbs" aria-label="Breadcrumb">
+        <Link href="/">Research Universe</Link><span aria-hidden="true">/</span><span aria-current="page">{token.name}</span>
+      </nav>
 
       <header className="profile-header" id="overview">
         <div className="profile-identity">
@@ -146,6 +141,9 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
           </div>
         </div>
         <div className="profile-quote">
+          <button className="blade-button blade-button-art blade-button-art-sm" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label={`Deep AI Analysis: ${deepAnalysisButtonHint(analysisState)}`}>
+            <Image src={AI_BUTTON_ART.src} alt="Generate AI Research Report" width={AI_BUTTON_ART.width} height={AI_BUTTON_ART.height} className="blade-art" priority />
+          </button>
           {price ? <strong className="quote-price">{price}</strong> : <strong className="quote-price muted">Price not reported</strong>}
           <div className="quote-changes">
             <Change value={token.change24hPct} label="24h" />
