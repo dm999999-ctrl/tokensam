@@ -83,15 +83,10 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .blade-copy small { color: #c49a93; font-size: 11px; }
 .blade-edge { position: absolute; right: 13px; bottom: -1px; left: -1px; height: 2px; background: linear-gradient(90deg, var(--crimson-bright), rgb(205 172 104 / 60%) 70%, transparent); }
 .blade-button-art { display: grid; justify-items: center; padding: 0; border: 0; clip-path: none; background: none; }
-/* The AI button is much taller than a section title; since it's the tallest
-   child it already sets the row's height and stays put regardless of
-   alignment, so only the shorter title needs pulling up to read as sitting
-   beside the button instead of below it. */
-.section-head:has(#market-title) { align-items: stretch; margin-bottom: 6px; }
-.section-head:has(#market-title) > div:first-child { display: flex; flex-direction: column; justify-content: flex-start; }
 .blade-button-art:hover { border-color: transparent; background-color: transparent; filter: brightness(1.08); }
 .blade-button-art::after { content: none; }
 .blade-art { display: block; width: 320px; height: auto; }
+.blade-button-art-sm .blade-art { width: 240px; }
 .blade-button::after { position: absolute; top: 6px; right: 1px; width: 1px; height: 17px; background: var(--gold); transform: rotate(-45deg); transform-origin: top; content: ""; }
 
 .segmented { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-inset); }
@@ -287,7 +282,12 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .crumbs a:hover { color: var(--ink-strong); }
 .crumbs span[aria-hidden] { color: var(--crimson); }
 .crumbs [aria-current] { color: var(--ink); }
-.profile-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px 32px; padding-bottom: 20px; }
+/* Grid, not flex: with the AI button as a third item between identity and
+   quote, grid's 1fr middle column centers it in the remaining space
+   regardless of how wide the other two columns are -- justify-content:
+   space-between with 3 flex items wouldn't actually center the middle one. */
+.profile-header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 20px 32px; padding-bottom: 20px; }
+.profile-header .blade-button-art-sm { justify-self: center; }
 .profile-identity { display: flex; min-width: 0; align-items: center; gap: 18px; }
 .identity-copy { display: grid; gap: 8px; min-width: 0; }
 .profile-header h1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
@@ -311,7 +311,6 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 /* The AI button makes this section-head much taller than a normal one, so the
    section's usual top padding reads as extra dead space above the title and
    button rather than a gap between sections. */
-.profile-section:has(#market-title) { padding-top: 4px; }
 .section-head { position: relative; display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; }
 .section-head::after { position: absolute; right: 0; bottom: 0; left: 0; height: 1px; background: linear-gradient(90deg, var(--gold) 0%, rgb(205 172 104 / 35%) 18%, var(--line) 50%, transparent); content: ""; }
 .section-head::before { position: absolute; bottom: -1px; left: 0; width: 16px; height: 3px; background: var(--crimson); content: ""; }
@@ -624,7 +623,8 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
   .token-table tbody tr:hover td { background: transparent; }
   .empty-state { grid-column: 1 / -1; }
   .table-meta { border: 0; background: transparent; padding: 6px 0; }
-  .profile-header { align-items: flex-start; flex-direction: column; }
+  .profile-header { grid-template-columns: 1fr; justify-items: start; align-items: flex-start; }
+  .profile-header .blade-button-art-sm { justify-self: start; }
   .profile-identity { align-items: flex-start; }
   .profile-quote { justify-items: start; }
   .quote-changes { justify-content: flex-start; }

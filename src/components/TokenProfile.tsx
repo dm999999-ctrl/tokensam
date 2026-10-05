@@ -140,6 +140,9 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
             </div>
           </div>
         </div>
+        <button className="blade-button blade-button-art blade-button-art-sm" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label={`Deep AI Analysis: ${deepAnalysisButtonHint(analysisState)}`}>
+          <Image src={AI_BUTTON_ART.src} alt="Generate AI Research Report" width={AI_BUTTON_ART.width} height={AI_BUTTON_ART.height} className="blade-art" priority />
+        </button>
         <div className="profile-quote">
           {price ? <strong className="quote-price">{price}</strong> : <strong className="quote-price muted">Price not reported</strong>}
           <div className="quote-changes">
@@ -155,11 +158,7 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
       </nav>
 
       <section className="profile-section" id="market" aria-labelledby="market-title">
-        <SectionHead eyebrow="Token" title="Market snapshot" id="market-title">
-          <button className="blade-button blade-button-art" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label={`Deep AI Analysis: ${deepAnalysisButtonHint(analysisState)}`}>
-            <Image src={AI_BUTTON_ART.src} alt="Generate AI Research Report" width={AI_BUTTON_ART.width} height={AI_BUTTON_ART.height} className="blade-art" priority />
-          </button>
-        </SectionHead>
+        <SectionHead eyebrow="Token" title="Market snapshot" id="market-title" />
         {model.snapshot.pairs.length > 0 ? (
           <div className="snapshot-pairs">
             {model.snapshot.pairs.map((pair) => (
