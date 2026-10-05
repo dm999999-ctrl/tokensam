@@ -309,6 +309,13 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .tile-emphasis::before { position: absolute; top: -1px; left: 14px; width: 22px; height: 1px; background: var(--gold); content: ""; }
 .tile-label { color: var(--muted); font-size: 12px; font-weight: 550; }
 .tile-value { overflow: hidden; color: var(--ink-strong); font-size: 21px; font-weight: 600; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
+/* Same specificity as .tile-value's own color declaration (one class each) means source
+   order alone decides the winner; .tone-positive/.tone-negative are declared earlier in
+   this file, so without this, .tile-value's ink-strong color always won and every tile
+   value rendered the same neutral color regardless of its actual tone. */
+.tile-value.tone-positive { color: var(--positive); }
+.tile-value.tone-negative { color: var(--negative); }
+.tile-value.tone-flat { color: var(--flat); }
 .tile:not(.tile-emphasis) .tile-value { font-size: 18px; }
 .tile-note { color: var(--subtle); font-size: 12px; line-height: 1.4; }
 .snapshot-changes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 10px; }
