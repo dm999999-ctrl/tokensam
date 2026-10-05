@@ -1126,32 +1126,203 @@ function finalConclusion(findings: Finding[], synthesis: SynthesisResult): Engin
   return paragraphs;
 }
 
-// ---- Further research questions (driver-gated — see synthesis.ts's ThesisDriver) ----
+// ---- Further research questions ----
+//
+// Each generator below inspects the actual findings for one specific, named analytical condition
+// (a real cross-domain or cross-horizon divergence, a genuine confirmation gap, a dilution exposure
+// actually present in the data, ...) and returns a question that names the condition, grounded in
+// the finding(s) that establish it -- never a fixed template question asked of every token
+// regardless of what its evidence shows. A generator that finds nothing to ask about returns null
+// and is simply skipped, so two tokens with different evidence configurations surface materially
+// different questions. No generic "would more history help" or "would more mapping help" question
+// is asked unless the specific gap it names is itself material to the thesis (see
+// missingHistoryQuestion/mappingLimitationQuestion below) -- a token with a complete, well-supported
+// snapshot should not have its research-questions section padded with boilerplate.
 
-const RESEARCH_QUESTIONS: { when: (categories: Set<string>) => boolean; question: string; rationale: string }[] = [
-  { when: (c) => c.has("positive_momentum"), question: "Does the positive momentum persist over subsequent observation periods?", rationale: "A material positive-momentum driver was identified across the currently available observation windows." },
-  { when: (c) => c.has("negative_momentum"), question: "Does the negative momentum persist over subsequent observation periods, or does it represent a shorter-term move within a longer-term trend?", rationale: "A material negative-momentum driver was identified across the currently available observation windows." },
-  { when: (c) => c.has("missing_history"), question: "Would a longer stored price, TVL, or technical-indicator history change the picture presented here?", rationale: "One or more series in this snapshot lack enough stored points to establish a trend over their full window." },
-  { when: (c) => c.has("mapping_limitation"), question: "Would additional protocol or market mapping materially expand the available fundamental or technical evidence?", rationale: "One or more data providers do not have a curated mapping for this token, so some sections are not available." },
-  { when: (c) => c.has("divergence"), question: "Does the observed divergence between market performance and tracked fundamental or technical activity persist over a longer window?", rationale: "A material divergence between price and tracked activity was identified in the currently available data." },
-  { when: (c) => c.has("valuation_expansion"), question: "Does the valuation/activity relationship continue to widen, or does it revert as fundamentals catch up?", rationale: "A material valuation or dilution-relevant relationship was identified in the currently available data." },
-];
+type ResearchQuestionEntry = { question: string; rationale: string; sourceIds: string[] };
 
-export function furtherResearchQuestions(findings: Finding[], thesisDrivers: ThesisDriver[]): { question: string; rationale: string; sourceIds: string[] }[] {
-  const categories = new Set<string>();
-  for (const finding of findings) {
-    if (finding.findingType.startsWith("insufficient_history_")) categories.add("missing_history");
-    if (finding.findingType.startsWith("unmapped_")) categories.add("mapping_limitation");
+function priceMomentum(findings: Finding[]): Finding | undefined {
+  return byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_") && !finding.findingType.startsWith("volume_multi_horizon_"));
+}
+
+/** A genuine cross-domain divergence: price direction moved opposite to tracked protocol activity over the metrics engine's own timestamp-aligned interval -- never invented from independently-periods findings. */
+function crossDomainDivergenceQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const divergence = byCategory(findings, "marketFundamentalRelationships").find((finding) => finding.findingType === "divergence_price_up_tvl_down" || finding.findingType === "divergence_price_down_tvl_up");
+  if (!divergence) return null;
+  const direction = divergence.findingType === "divergence_price_up_tvl_down" ? "price appreciated while tracked TVL declined" : "price declined while tracked TVL grew";
+  return {
+    question: "Does the divergence between price and tracked protocol activity persist over a longer window, or does it close?",
+    rationale: `Over the aligned interval currently available, ${direction} -- a cross-domain divergence between market performance and underlying protocol activity rather than the two moving together.`,
+    sourceIds: divergence.evidenceIds,
+  };
+}
+
+/** A genuine cross-horizon divergence: the short-term horizon has turned opposite to the established longer-term price trend (a reversal), or a horizon outside the pattern-eligible set disagrees with an otherwise-consistent trend. */
+function crossHorizonDivergenceQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const momentum = priceMomentum(findings);
+  if (!momentum) return null;
+  const pattern = momentumPattern(momentum);
+  if (pattern === "reversal_to_up" || pattern === "reversal_to_down") {
+    return {
+      question: "Does the recent short-term reversal continue, or does price return to the longer-term trend it broke from?",
+      rationale: "The shortest pattern-eligible horizon has turned opposite to the longer-term trend the remaining horizons establish -- a reversal within the observed history rather than a single consistent regime.",
+      sourceIds: momentum.evidenceIds,
+    };
   }
-  const hasDriver = (test: (driver: ThesisDriver) => boolean) => thesisDrivers.some(test);
-  if (hasDriver((driver) => driver.findingIds.some((id) => id.includes(":multi_horizon_consistent_up")))) categories.add("positive_momentum");
-  if (hasDriver((driver) => driver.findingIds.some((id) => id.includes(":multi_horizon_consistent_down")))) categories.add("negative_momentum");
-  if (hasDriver((driver) => driver.relationshipType === "price_fundamental_divergence" || driver.findingIds.some((id) => id.includes(":technical_price_tvl_divergence:") || id.includes(":technical_price_volume_divergence:")))) categories.add("divergence");
-  if (hasDriver((driver) =>
-    driver.relationshipType === "valuation_activity_relationship" || driver.relationshipType === "market_momentum_valuation" || driver.relationshipType === "supply_valuation_exposure"
-    || driver.findingIds.some((id) => id.includes(":fdv_market_cap_gap:") || id.includes(":dilution_gap:") || id.includes(":ratio_")),
-  )) categories.add("valuation_expansion");
-  return RESEARCH_QUESTIONS.filter((entry) => entry.when(categories)).map((entry) => ({ question: entry.question, rationale: entry.rationale, sourceIds: [] }));
+  if ((pattern.startsWith("consistent_up") || pattern.startsWith("consistent_down")) && momentum.data.excludedDisagreementKey) {
+    return {
+      question: "Is the shorter-term pullback against the established trend an isolated move, or the start of a broader reversal?",
+      rationale: "One observation window disagrees in direction with the otherwise-consistent trend the remaining horizons establish.",
+      sourceIds: momentum.evidenceIds,
+    };
+  }
+  return null;
+}
+
+/** Trading volume does not cleanly confirm the price direction across the same horizons -- the specific confirmation gap the Cross-Domain volume reasoning already establishes, surfaced as an open question rather than restated. */
+function volumeConfirmationQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const momentum = priceMomentum(findings);
+  const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
+  if (!momentum || !volumeMomentum) return null;
+  const priceDirection = patternDirection(momentumPattern(momentum));
+  if (priceDirection !== "up" && priceDirection !== "down") return null;
+  const volumePattern = momentumPattern(volumeMomentum);
+  const volumeConfirms = volumePattern.startsWith("consistent_") && patternDirection(volumePattern) === priceDirection;
+  if (volumeConfirms) return null;
+  return {
+    question: "Does trading volume begin moving consistently with the price direction across the same horizons, or does the current gap between them persist?",
+    rationale: "Trading volume does not move consistently with the price direction across the same set of observation horizons currently available.",
+    sourceIds: [...momentum.evidenceIds, ...volumeMomentum.evidenceIds],
+  };
+}
+
+/** Price is materially outpacing or trailing a tracked fundamental metric over the metrics engine's own aligned interval -- the specific pace relationship, not a generic "does valuation matter" question. */
+function fundamentalPaceQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const direction = fundamentalPaceDirection(findings);
+  if (!direction) return null;
+  const points = byCategory(findings, "marketFundamentalRelationships").filter((finding) => finding.findingType.startsWith("points_price_change_vs_"));
+  const phrase = direction === "mixed"
+    ? "price is outpacing one tracked fundamental metric while trailing another over their respective aligned intervals"
+    : direction === "outpacing"
+      ? "price has materially outpaced the tracked fundamental metric over the aligned interval"
+      : "price has materially trailed the tracked fundamental metric over the aligned interval";
+  return {
+    question: direction === "mixed"
+      ? "Does fundamental activity converge toward a single direction, resolving the current mixed pace relationship with price?"
+      : "Does the gap between price and tracked fundamental activity continue to widen, or does it close as fundamentals catch up?",
+    rationale: `Currently, ${phrase}.`,
+    sourceIds: points.flatMap((finding) => finding.evidenceIds),
+  };
+}
+
+/** A valuation multiple and tracked fundamental activity are both available -- whether the multiple compresses or expands as fundamentals evolve is open precisely because no comparative benchmark is available to judge it against today. */
+function valuationActivityQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const ratio = byCategory(findings, "valuation").find((finding) => finding.findingType.startsWith("ratio_"));
+  const fundamentals = byCategory(findings, "fundamentalPerformance").filter((finding) => finding.findingType.endsWith("_increase") || finding.findingType.endsWith("_decrease"));
+  if (!ratio || fundamentals.length === 0) return null;
+  return {
+    question: "Would a comparative valuation benchmark change how the current multiples should be read as tracked fundamental activity evolves?",
+    rationale: "A valuation multiple and tracked fundamental-activity measures are both currently available, but no comparative benchmark exists to establish whether the multiple is itself high, low, or in line with it.",
+    sourceIds: [...ratio.evidenceIds, ...fundamentals.flatMap((finding) => finding.evidenceIds)],
+  };
+}
+
+/** The swing-structure indicator's own pattern label (e.g. "lower high, lower low") may already be stale if the latest close has since moved beyond the swing point the label itself was built from. */
+function technicalPersistenceQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const swing = byTypePrefix(byCategory(findings, "technical"), "swing_structure_").find((finding) => finding.data.beyondLastSwing);
+  if (!swing) return null;
+  const direction = swing.data.beyondLastSwing === "above_high" ? "above the last swing high" : "below the last swing low";
+  return {
+    question: "Does the latest close moving beyond the prior swing point mark the start of a new structural pattern, or a temporary excursion from the recorded one?",
+    rationale: `The latest close currently sits ${direction} that the recorded swing-structure pattern was itself built from.`,
+    sourceIds: swing.evidenceIds,
+  };
+}
+
+/** A directional price regime and an elevated-risk reading (volatility or drawdown) both currently exist -- the tension between return and risk that neither Market Performance nor Key Investment Risks resolves on its own. */
+function riskReturnTensionQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const momentum = priceMomentum(findings);
+  if (!momentum) return null;
+  const direction = patternDirection(momentumPattern(momentum));
+  if (direction !== "up" && direction !== "down") return null;
+  const riskFindings = byCategory(findings, "risk").filter((finding) => finding.findingType === "elevated_volatility" || finding.findingType === "sharp_drawdown");
+  if (riskFindings.length === 0) return null;
+  return {
+    question: "Does the current risk profile (realized volatility and/or drawdown) moderate alongside the price regime, or does it remain structurally elevated regardless of direction?",
+    rationale: "A directional price regime and an elevated realized-volatility or drawdown reading are both present in the currently available evidence.",
+    sourceIds: [...momentum.evidenceIds, ...riskFindings.flatMap((finding) => finding.evidenceIds)],
+  };
+}
+
+/** Trading volume relative to market capitalization is available, but that ratio alone never establishes executable liquidity, depth, or slippage -- the open question the Market Structure & Liquidity section's own disclaimer leaves unanswered. */
+function liquidityUncertaintyQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const turnover = byType(findings, "elevated_turnover") ?? byType(findings, "low_turnover") ?? byType(findings, "turnover_level");
+  if (!turnover) return null;
+  return {
+    question: "Would order-book depth or spread data change the read on executable liquidity that the volume/market-cap ratio alone cannot establish?",
+    rationale: "Trading volume relative to market capitalization is currently available, but this ratio does not by itself establish executable liquidity, market depth, bid/ask spreads, or expected slippage.",
+    sourceIds: turnover.evidenceIds,
+  };
+}
+
+/** A material dilution or low-circulating-supply exposure is actually present in the tokenomics evidence -- not asked of every token, only one where the supply structure itself establishes the exposure. */
+function tokenomicsSupplyQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const dilution = byType(findings, "dilution_gap");
+  const lowShare = byType(findings, "low_circulating_share");
+  const exposure = dilution ?? lowShare;
+  if (!exposure) return null;
+  const phrase = exposure === dilution
+    ? "fully diluted valuation is materially above market capitalization"
+    : "circulating supply represents a comparatively low share of maximum supply";
+  return {
+    question: "As additional supply circulates, does continued dilution materially change the current valuation picture?",
+    rationale: `Currently, ${phrase}, so the pace at which remaining supply enters circulation is a material unresolved factor.`,
+    sourceIds: exposure.evidenceIds,
+  };
+}
+
+/** A longer stored history would materially change the picture only when the central price-momentum thesis itself is limited by it (a single-horizon pattern alongside a genuine insufficient-history gap on a longer window) -- never asked merely because some unrelated series happens to be short. */
+function missingHistoryQuestion(findings: Finding[]): ResearchQuestionEntry | null {
+  const momentum = priceMomentum(findings);
+  if (!momentum || !(momentumPattern(momentum) === "single_up" || momentumPattern(momentum) === "single_down")) return null;
+  const gaps = byTypePrefix(byCategory(findings, "dataQuality"), "insufficient_history_price_");
+  if (gaps.length === 0) return null;
+  return {
+    question: "Would a longer stored price history change the currently single-horizon momentum picture?",
+    rationale: "The price-momentum pattern currently rests on only one observation window because a longer window does not yet have enough stored history to establish a trend.",
+    sourceIds: [...momentum.evidenceIds, ...gaps.flatMap((finding) => finding.evidenceIds)],
+  };
+}
+
+/** A provider-mapping gap is asked about only when it leaves the report without any material thesis at all -- never merely because one provider among several is unmapped while a substantive picture is still available from the rest. */
+function mappingLimitationQuestion(findings: Finding[], thesisDrivers: ThesisDriver[]): ResearchQuestionEntry | null {
+  if (thesisDrivers.length > 0) return null;
+  const unmapped = byTypePrefix(byCategory(findings, "dataQuality"), "unmapped_");
+  if (unmapped.length === 0) return null;
+  return {
+    question: "Would additional protocol or market mapping materially expand the available fundamental, valuation, or market-structure evidence for this token?",
+    rationale: "One or more data providers do not have a curated mapping for this token, and no other currently available evidence establishes a material analytical thesis in its place.",
+    sourceIds: unmapped.flatMap((finding) => finding.evidenceIds),
+  };
+}
+
+export function furtherResearchQuestions(findings: Finding[], thesisDrivers: ThesisDriver[]): ResearchQuestionEntry[] {
+  const generators: ((findings: Finding[]) => ResearchQuestionEntry | null)[] = [
+    crossDomainDivergenceQuestion,
+    crossHorizonDivergenceQuestion,
+    volumeConfirmationQuestion,
+    fundamentalPaceQuestion,
+    valuationActivityQuestion,
+    technicalPersistenceQuestion,
+    riskReturnTensionQuestion,
+    liquidityUncertaintyQuestion,
+    tokenomicsSupplyQuestion,
+    missingHistoryQuestion,
+  ];
+  const questions = generators.map((generator) => generator(findings)).filter((entry): entry is ResearchQuestionEntry => entry !== null);
+  const mappingQuestion = mappingLimitationQuestion(findings, thesisDrivers);
+  if (mappingQuestion) questions.push(mappingQuestion);
+  return questions;
 }
 
 // ---- Entry point ----
