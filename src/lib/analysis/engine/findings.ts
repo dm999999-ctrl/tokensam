@@ -636,14 +636,33 @@ function bollingerFinding(fields: Map<string, PayloadField>): Finding | null {
   };
 }
 
+/**
+ * The swing-structure indicator's own numeric readings (see catalog.ts) already carry the last/
+ * previous swing high and low; comparing them against the most recent price observation (its own,
+ * separately cited field — never invented) establishes whether the latest close has since moved
+ * beyond the swing-point structure the pattern itself was built from. This is the "has the market
+ * since moved past the resistance/support implied by the prior swing" reading the narrative needs
+ * to say a lower-high (or higher-low) pattern's implication is weakened or not yet weakened.
+ */
 function swingStructureFinding(fields: Map<string, PayloadField>): Finding | null {
   const indicatorField = shown(fields, "calc:ind_swing_structure");
   if (!indicatorField || !indicatorField.technicalState) return null;
   const slug = indicatorField.technicalState.toLowerCase().replace(/,\s*/g, "_").replace(/\s+/g, "_");
+  const readings = indicatorField.technicalReadings;
+  const lastHigh = readings?.["Last swing high"];
+  const lastLow = readings?.["Last swing low"];
+  const priceField = shown(fields, "obs:price");
+  const latestClose = priceField?.raw;
+  const evidenceIds = [indicatorField.id];
+  let beyondLastSwing: "above_high" | "below_low" | null = null;
+  if (typeof latestClose === "number" && typeof lastHigh === "number" && latestClose > lastHigh) beyondLastSwing = "above_high";
+  else if (typeof latestClose === "number" && typeof lastLow === "number" && latestClose < lastLow) beyondLastSwing = "below_low";
+  if (beyondLastSwing && priceField) evidenceIds.push(priceField.id);
   return {
     category: "technical", findingType: `swing_structure_${slug}`,
     severity: indicatorField.technicalState === "Higher high, higher low" || indicatorField.technicalState === "Lower high, lower low" ? "moderate" : "low",
-    evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period], data: {},
+    evidenceIds, observationPeriods: [indicatorField.period],
+    data: { lastHigh: lastHigh ?? null, lastLow: lastLow ?? null, latestClose: latestClose ?? null, beyondLastSwing },
   };
 }
 
