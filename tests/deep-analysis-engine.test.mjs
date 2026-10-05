@@ -574,6 +574,138 @@ test("I3. 24H/7D/30D all positive (the BTC/ORCA production case) is still descri
 });
 
 // =====================================================================================
+// J. Global post-production audit: unsupported turnover labels, fundamental pace reasoning,
+// cross-domain qualification, dynamic Final Conclusion availability, FDV inference, ILV-shaped
+// mixed-horizon volume. Every fixture is evidence-driven (no token-name conditionals in the
+// engine); ORCA/ILV/BTC shapes below are regression fixtures, not special-cased inputs.
+// =====================================================================================
+
+function directField(id, section, label, value, raw, period = null, intervalHours = null) {
+  return { id, section, label, value, raw, status: "shown", scope: "token", period, periodRequired: period !== null, note: null, asOf: MIDNIGHT.toISOString(), intervalHours, technicalState: null, technicalReadings: null };
+}
+
+/** An ORCA-shaped payload: available fundamentals (TVL ~30D-aligned, fees/revenue ~6h-aligned) and
+ * available valuation multiples, plus the metrics engine's own aligned price-vs-fundamental spread
+ * (mixed sign: outpacing TVL, trailing revenue) and a volume/market-cap ratio in the un-thresholded
+ * middle band. */
+const ORCA_LIKE = {
+  version: "test",
+  token: { id: "orca-j", name: "Orca", symbol: "ORCA", chain: "Solana", category: "DEX", isNative: false, contractAddress: "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE" },
+  dataAsOf: MIDNIGHT.toISOString(),
+  scope: [
+    { id: "scope:defillama", provider: "DeFiLlama", mapped: true, statement: "DeFiLlama protocol mapping available." },
+    { id: "scope:dexscreener", provider: "DEX Screener", mapped: true, statement: "DEX Screener mapping available." },
+  ],
+  fields: [
+    directField("obs:price", "Overview", "Price", "$3.20", 3.20),
+    directField("obs:change_24h", "Overview", "24H change", "+2.00%", 2.00, "24H (rolling 24 hours, as reported by the provider)"),
+    directField("obs:change_7d", "Overview", "7D change", "+15.00%", 15.00, "7D (rolling 7 days, as reported by the provider)"),
+    directField("hist:price_30d", "Market history", "Price history · 30D", "latest $3.20 · +55.32% over 30 days", 55.32, "30D window: 30 observations spanning 29 days"),
+    directField("obs:market_cap", "Overview", "Market cap", "$400.00M", 400_000_000),
+    directField("obs:volume_24h", "Overview", "24H volume", "$285.60M", 285_600_000),
+    directField("obs:circulating_supply", "Tokenomics", "Circulating supply", "100.00M ORCA", 100_000_000),
+    directField("obs:total_supply", "Tokenomics", "Total supply", "100.00M ORCA", 100_000_000),
+    directField("obs:maximum_supply", "Tokenomics", "Maximum supply", "100.00M ORCA", 100_000_000),
+    directField("obs:tvl", "Fundamentals", "TVL", "$120.00M", 120_000_000),
+    directField("obs:fees_24h", "Fundamentals", "Fees · 24h", "$50.00K", 50_000),
+    directField("obs:revenue_24h", "Fundamentals", "Revenue · 24h", "$25.00K", 25_000),
+    directField("calc:tvl_growth_pct", "Fundamentals", "TVL change", "+25.45%", 25.45, "30D window", 30 * 24),
+    directField("calc:fees_growth_pct", "Fundamentals", "Fees change", "+11.99%", 11.99, "~6h window", 6),
+    directField("calc:revenue_growth_pct", "Fundamentals", "Revenue change", "+11.99%", 11.99, "~6h window", 6),
+    directField("calc:market_cap_to_tvl", "Valuation", "Market Cap / TVL", "3.33×", 3.33),
+    directField("calc:fdv_to_tvl", "Valuation", "FDV / TVL", "3.33×", 3.33),
+    directField("calc:market_cap_to_revenue_24h", "Valuation", "Market Cap / 24h Revenue", "16000×", 16000),
+    directField("calc:fdv_to_revenue_24h", "Valuation", "FDV / 24h Revenue", "16000×", 16000),
+    directField("calc:price_change_vs_tvl_growth_pct_points", "Cross-metric analysis", "Price change vs TVL growth", "+9.45 pts", 9.45, "Aligned interval", 30 * 24),
+    directField("calc:price_change_vs_revenue_growth_pct_points", "Cross-metric analysis", "Price change vs revenue growth", "-30.59 pts", -30.59, "Aligned interval", 6),
+    directField("calc:dex_aggregate_liquidity_usd", "Market structure", "DEX liquidity", "$15.00M", 15_000_000),
+    directField("calc:dex_aggregate_volume_24h_usd", "Market structure", "DEX volume", "$285.60M", 285_600_000),
+    directField("calc:volume_to_market_cap", "Market structure", "Volume / Market cap", "0.714×", 0.714),
+  ],
+};
+
+/** An ILV-shaped payload: 24H pullback within a positive 7D/30D regime, and volume whose own
+ * 24H/7D/30D directions do not all agree with each other (reversal_to_up), let alone with price. */
+const ILV_LIKE = {
+  version: "test",
+  token: { id: "ilv-j", name: "Illuvium", symbol: "ILV", chain: "Ethereum", category: "Gaming", isNative: false, contractAddress: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984" },
+  dataAsOf: MIDNIGHT.toISOString(),
+  scope: [
+    { id: "scope:defillama", provider: "DeFiLlama", mapped: false, statement: "No DeFiLlama protocol mapping." },
+    { id: "scope:dexscreener", provider: "DEX Screener", mapped: false, statement: "No DEX Screener mapping." },
+  ],
+  fields: [
+    directField("obs:price", "Overview", "Price", "$45.00", 45),
+    directField("obs:change_24h", "Overview", "24H change", "-3.76%", -3.76, "24H (rolling 24 hours, as reported by the provider)"),
+    directField("obs:change_7d", "Overview", "7D change", "+7.72%", 7.72, "7D (rolling 7 days, as reported by the provider)"),
+    directField("hist:price_30d", "Market history", "Price history · 30D", "latest $45.00 · +26.91% over 30 days", 26.91, "30D window: 30 observations spanning 29 days"),
+    directField("hist:volume_24h", "Market history", "Volume history · 24H", "latest $10.00M · +0.30% over 24 hours", 0.30, "24H window: 2 observations"),
+    directField("hist:volume_7d", "Market history", "Volume history · 7D", "latest $10.00M · +21.55% over 7 days", 21.55, "7D window: 7 observations"),
+    directField("hist:volume_30d", "Market history", "Volume history · 30D", "latest $10.00M · -68.72% over 30 days", -68.72, "30D window: 30 observations"),
+    directField("obs:market_cap", "Overview", "Market cap", "$400.00M", 400_000_000),
+    directField("obs:volume_24h", "Overview", "24H volume", "$10.00M", 10_000_000),
+    directField("obs:circulating_supply", "Tokenomics", "Circulating supply", "9.00M ILV", 9_000_000),
+    directField("obs:total_supply", "Tokenomics", "Total supply", "10.00M ILV", 10_000_000),
+    directField("obs:maximum_supply", "Tokenomics", "Maximum supply", "10.00M ILV", 10_000_000),
+  ],
+};
+
+test("J-A. a volume/market-cap ratio with no documented threshold never produces an elevated/moderate/low/threshold-crossing classification", () => {
+  const report = buildEngineReport(ORCA_LIKE);
+  const text = report.analysis.marketStructureLiquidity.paragraphs.map((p) => p.text).join(" ");
+  assert.doesNotMatch(text, /\belevated\b|\bmoderate\b|\blow level\b|crossing.*threshold|between.*threshold/i);
+  assert.match(text, /0\.714×/, "the ratio itself is still cited");
+  assert.match(text, /does not establish executable liquidity/i);
+});
+
+test("J-B. ORCA-shaped fundamentals: positive TVL/fees/revenue never collapse into an unqualified 'fundamentals confirm the price move' — differing observation periods are stated explicitly", () => {
+  const report = buildEngineReport(ORCA_LIKE);
+  const text = report.analysis.fundamentalAnalysis.paragraphs.map((p) => p.text).join(" ");
+  assert.match(text, /materially different windows/i, "the 30D TVL window vs ~6h fees/revenue window mismatch is stated");
+  assert.doesNotMatch(text, /fundamentals confirm the (size|magnitude) of the price move/i);
+  assert.match(text, /outpaced TVL growth/i);
+  assert.match(text, /trailed revenue growth/i);
+});
+
+test("J-C. ORCA-shaped Cross-Domain: price materially outpacing/trailing tracked fundamentals (mixed across metrics) is acknowledged directionally but the magnitude is qualified, not presented as plain confirmation", () => {
+  const report = buildEngineReport(ORCA_LIKE);
+  const text = report.analysis.crossDomainAnalysis.paragraphs.map((p) => p.text).join(" ");
+  assert.doesNotMatch(text, /providing cross-domain confirmation that market performance is occurring alongside a comparable move/i);
+  assert.match(text, /supports the direction of the move/i);
+  assert.match(text, /mixed|outpaced/i);
+});
+
+test("J-D. ORCA-shaped Final Conclusion: fundamentals and valuation evidence exist, so the conclusion never claims them 'currently unavailable'", () => {
+  const report = buildEngineReport(ORCA_LIKE);
+  const text = report.analysis.finalConclusion.paragraphs.map((p) => p.text).join(" ");
+  assert.doesNotMatch(text, /currently unavailable fundamental/i);
+  assert.doesNotMatch(text, /fundamental evidence becomes available/i);
+  assert.doesNotMatch(text, /unavailable.*valuation evidence/i);
+});
+
+test("J-E. ILV-shaped volume: 24H/7D/30D directions that do not all agree produce horizon-specific reasoning, never a generic 'volume confirms price' statement", () => {
+  const report = buildEngineReport(ILV_LIKE);
+  const crossText = report.analysis.crossDomainAnalysis.paragraphs.map((p) => p.text).join(" ");
+  assert.doesNotMatch(crossText, /providing some confirmation from market participation/i, "the 30D volume contradicts price, so this must not claim confirmation");
+  assert.match(crossText, /mixed rather than uniform/i);
+  assert.match(crossText, /24H volume \+0\.30%/);
+  assert.match(crossText, /7D volume \+21\.55%/);
+  assert.match(crossText, /30D volume -68\.72%/);
+});
+
+test("J-F. no FDV/tokenomics narrative claims tokens are 'already issued but not yet circulating' without that fact being established by the evidence", () => {
+  for (const payload of [ORCA_LIKE, ILV_LIKE]) {
+    const report = buildEngineReport(payload);
+    const text = [...report.analysis.valuationAnalysis.paragraphs, ...report.analysis.tokenomicsSupply.paragraphs].map((p) => p.text).join(" ");
+    // "no already-issued tokens remain outside circulation" (the circulating===total case) is a
+    // legitimate, trivially-true statement; the removed, unsupported claim was specifically that a
+    // circulating-below-total gap "indicates" tokens are issued-but-not-yet-circulating.
+    assert.doesNotMatch(text, /indicating a portion of already-issued tokens is not yet in circulation/i);
+    assert.doesNotMatch(text, /incorporating supply not yet in circulation/i);
+  }
+});
+
+// =====================================================================================
 
 let failures = 0;
 for (const { name, run } of cases) {

@@ -22,7 +22,7 @@
 
 import type { Finding, FindingCategory } from "./findings.ts";
 import { findingId, type Relationship, type RelationshipType, type SynthesisResult, type ThesisDriver } from "./synthesis.ts";
-import { magnitudeWord, type MomentumPeriodKey } from "./thresholds.ts";
+import { magnitudeWord, momentumBand, type MomentumPeriodKey } from "./thresholds.ts";
 import type { EngineParagraph } from "./report-schema.ts";
 import { formatCount, formatDuration, formatUsd } from "../../ui/format.ts";
 
@@ -160,6 +160,25 @@ function patternDirection(pattern: MultiHorizonPattern): "up" | "down" | "mixed"
   return "mixed";
 }
 
+/**
+ * The trailing "this confirms/diverges from price" clause for a volume multi-horizon finding --
+ * shared by Market Performance, the Executive Assessment, and the Final Conclusion so the same
+ * guard lives in one place. Only a genuinely "consistent_up"/"consistent_down" volume pattern
+ * supports a clean confirmation-or-divergence claim; patternDirection alone is not enough, because
+ * it also reads "reversal_to_up" as plain "up", which would falsely claim confirmation for a volume
+ * series that is itself a reversal (its own horizons disagree). Any other pattern (reversal, mixed,
+ * single-horizon, flat) returns "" -- momentumClause's own text already states that nuance
+ * accurately, so no additional confirm/diverge claim is layered on top of it.
+ */
+function volumeRelationClause(priceDirection: "up" | "down" | "mixed" | "flat", volumeMomentum: Finding): string {
+  const volumePattern = momentumPattern(volumeMomentum);
+  if (!volumePattern.startsWith("consistent_") || (priceDirection !== "up" && priceDirection !== "down")) return "";
+  const volDirection = patternDirection(volumePattern);
+  return volDirection === priceDirection
+    ? " This is directionally consistent with the price regime, providing some confirmation from trading activity rather than price movement alone."
+    : " This diverges from the price regime: trading activity has not moved in the same direction as price across these horizons, which qualifies rather than confirms the price move.";
+}
+
 /** One flowing sentence describing a multi-horizon momentum finding's pattern — direction, magnitude, pace, and reversal are each named only where the pattern actually establishes them. `subject` lets the identical pattern logic describe price or volume without a second, divergent implementation. */
 function momentumClause(finding: Finding, subject: "Price" | "Trading volume" = "Price"): string {
   const horizons = finding.horizons ?? [];
@@ -277,12 +296,7 @@ function executiveAssessment(findings: Finding[], synthesis: SynthesisResult): E
   }
   const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
   if (volumeMomentum) {
-    const volDirection = patternDirection(momentumPattern(volumeMomentum));
-    if (volDirection === momentumDirection) {
-      paragraphs.push(para(`${momentumClause(volumeMomentum, "Trading volume")} This is directionally consistent with price, providing some confirmation from market participation.`, volumeMomentum));
-    } else if (volDirection !== "mixed" && volDirection !== "flat") {
-      paragraphs.push(para(`${momentumClause(volumeMomentum, "Trading volume")} This does not move in the same direction as price across these horizons, providing only partial confirmation of the current regime.`, volumeMomentum));
-    }
+    paragraphs.push(para(`${momentumClause(volumeMomentum, "Trading volume")}${volumeRelationClause(momentumDirection, volumeMomentum)}`, volumeMomentum));
   }
 
   // 4. What cannot currently be assessed.
@@ -326,14 +340,8 @@ function marketPerformanceSection(findings: Finding[]): EngineParagraph[] {
   // it diverges -- never silently confirmed or ignored, since volume alone never confirms direction.
   if (volumeMomentum) {
     const volumeClause = momentumClause(volumeMomentum, "Trading volume");
-    const volDirection = patternDirection(momentumPattern(volumeMomentum));
-    const priceDirection = momentum ? patternDirection(momentumPattern(momentum)) : null;
-    let relation = "";
-    if (priceDirection && priceDirection !== "mixed" && priceDirection !== "flat" && volDirection !== "mixed" && volDirection !== "flat") {
-      relation = priceDirection === volDirection
-        ? " This is directionally consistent with the price regime described above, providing some confirmation from trading activity rather than price movement alone."
-        : " This diverges from the price regime described above: trading activity has not moved in the same direction as price across these horizons, which qualifies rather than confirms the price move.";
-    }
+    const priceDirection = momentum ? patternDirection(momentumPattern(momentum)) : "mixed";
+    const relation = volumeRelationClause(priceDirection, volumeMomentum);
     paragraphs.push(para(`${volumeClause}${relation}`, volumeMomentum));
   } else if (turnover) {
     const direction = turnover.findingType === "elevated_volume_during_decline" ? "a price decrease" : "a price increase";
@@ -497,16 +505,53 @@ function fundamentalAnalysisSection(findings: Finding[], mapped: boolean): Engin
       : "";
     paragraphs.push(para(`The available protocol activity metrics moved in ${word} direction${word === "different" ? "s" : ""} over their respective observed periods, ${word === "different" ? "a mixed fundamental picture" : `indicating broadly ${synthesisFinding.findingType === "fundamentals_improving" ? "improving" : "deteriorating"} fundamental activity`}.${windowCaveat}`, synthesisFinding));
   }
+  const pace = fundamentalPaceClause(findings);
+  if (pace) paragraphs.push(pace);
   return paragraphs;
+}
+
+/**
+ * The metrics engine's own timestamp-aligned price-vs-fundamental spread (points_price_change_vs_*,
+ * see divergenceFindings in findings.ts -- already period-matched, unlike the raw growth figures
+ * above, and already filtered to a materially significant gap by DIVERGENCE_MIN_POINTS). States
+ * whether the market's repricing has outpaced or trailed the measured fundamental change, so
+ * "fundamentals positive" is never read as "fundamentals confirm the size of the price move."
+ * Shared by Fundamental Analysis and Cross-Domain Analysis (via fundamentalPaceDirection below) --
+ * one derivation, not two.
+ */
+function fundamentalPaceClause(findings: Finding[]): EngineParagraph | null {
+  const paceFindings = (["tvl", "revenue"] as const)
+    .map((key) => byType(findings, `points_price_change_vs_${key}_growth`))
+    .filter((finding): finding is Finding => finding !== undefined);
+  if (paceFindings.length === 0) return null;
+  const parts = paceFindings.map((finding) => {
+    const key = finding.findingType.includes("_tvl_") ? "TVL" : "revenue";
+    const raw = finding.data.raw as number;
+    return `price growth has ${raw > 0 ? "outpaced" : "trailed"} ${key} growth by ${Math.abs(raw).toFixed(1)} percentage points over the same aligned interval`;
+  });
+  return para(`${parts[0].charAt(0).toUpperCase()}${parts[0].slice(1)}${parts.length > 1 ? `; ${parts.slice(1).join("; ")}` : ""}. This evidence bears on the direction of fundamental activity described above; it does not establish that the magnitude of the recent market move is justified by the measured fundamental change.`, paceFindings);
+}
+
+/** Whether the available price-vs-fundamental spread findings show price/market-cap materially outpacing the fundamental, for Cross-Domain Analysis's confirmation-vs-qualification branch. null when no such evidence exists. */
+function fundamentalPaceDirection(findings: Finding[]): "outpacing" | "trailing" | "mixed" | null {
+  const paceFindings = (["tvl", "revenue"] as const)
+    .map((key) => byType(findings, `points_price_change_vs_${key}_growth`))
+    .filter((finding): finding is Finding => finding !== undefined);
+  if (paceFindings.length === 0) return null;
+  const outpacing = paceFindings.filter((finding) => (finding.data.raw as number) > 0);
+  const trailing = paceFindings.filter((finding) => (finding.data.raw as number) < 0);
+  if (outpacing.length > 0 && trailing.length === 0) return "outpacing";
+  if (trailing.length > 0 && outpacing.length === 0) return "trailing";
+  return "mixed"; // e.g. outpacing TVL growth while trailing revenue growth -- a genuinely mixed signal, stated as such rather than collapsed into one direction
 }
 
 // ---- 5. Valuation Analysis ----
 
 const VALUATION_RATIO_RELATION: Record<string, string> = {
   ratio_market_cap_to_tvl: "relates current market value to the associated protocol's total value locked",
-  ratio_fdv_to_tvl: "relates fully diluted valuation (incorporating supply not yet in circulation) to the associated protocol's total value locked",
+  ratio_fdv_to_tvl: "relates the implied valuation based on reported fully diluted supply to the associated protocol's total value locked",
   ratio_market_cap_to_revenue_24h: "relates current market value to reported protocol revenue",
-  ratio_fdv_to_revenue_24h: "relates fully diluted valuation (incorporating supply not yet in circulation) to reported protocol revenue",
+  ratio_fdv_to_revenue_24h: "relates the implied valuation based on reported fully diluted supply to reported protocol revenue",
 };
 
 function valuationAnalysisSection(findings: Finding[]): EngineParagraph[] {
@@ -541,14 +586,11 @@ function marketStructureSection(findings: Finding[], synthesis: SynthesisResult)
   }
   const turnover = byType(liquidity, "elevated_turnover") ?? byType(liquidity, "low_turnover") ?? byType(liquidity, "turnover_level");
   if (turnover) {
-    // "elevated"/"low" are the engine's own deterministic thresholds (see ELEVATED_VOLUME_TO_MCAP_RATIO/
-    // LOW_VOLUME_TO_MCAP_RATIO in thresholds.ts) and are legitimate labels; the un-thresholded middle
-    // band ("turnover_level") has no such band and must never be labeled "moderate" -- that would be a
-    // benchmark-free classification the engine cannot actually support.
-    const levelClause = turnover.findingType === "elevated_turnover" ? "an elevated level of turnover relative to size, crossing this analysis's defined threshold"
-      : turnover.findingType === "low_turnover" ? "a low level of turnover relative to size, crossing this analysis's defined threshold"
-        : "turnover relative to size that falls between this analysis's defined elevated and low thresholds";
-    paragraphs.push(para(`Trading volume represented ${str(turnover.data.value)} of market capitalization, ${levelClause}. This describes turnover relative to market value, not executable liquidity — market depth, bid/ask spreads, and expected slippage are not established by this ratio.`, turnover));
+    // The engine's volume/market-cap bands (ELEVATED_VOLUME_TO_MCAP_RATIO/LOW_VOLUME_TO_MCAP_RATIO
+    // in thresholds.ts) are internal classification cutoffs, not a documented, benchmarked turnover
+    // methodology -- so "elevated"/"low"/"moderate"/"crossing a threshold" are never stated as
+    // classifications here, for any of the three finding types. The ratio itself is still cited.
+    paragraphs.push(para(`Trading volume represented ${str(turnover.data.value)} of market capitalization. This measures turnover relative to reported market value, but it does not establish executable liquidity, market depth, bid/ask spreads, or expected slippage.`, turnover));
   }
   const technicalLiquidity = relationshipsOfType(synthesis, "technical_liquidity_conditions")[0];
   if (technicalLiquidity) {
@@ -673,16 +715,34 @@ function volumeConfirmationParagraph(findings: Finding[]): EngineParagraph | nul
   const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
   if (!momentum || !volumeMomentum) return null;
   const priceDirection = patternDirection(momentumPattern(momentum));
-  const volDirection = patternDirection(momentumPattern(volumeMomentum));
   if (priceDirection === "mixed" || priceDirection === "flat") return null;
   const regimeWord = priceDirection === "up" ? "constructive" : "negative";
-  if (volDirection === priceDirection) {
-    return para(`The ${regimeWord} price regime is accompanied by trading volume moving in the same direction across the same horizons, providing some confirmation from market participation rather than price movement alone.`, [momentum, volumeMomentum]);
-  }
-  if (volDirection !== "mixed" && volDirection !== "flat") {
+  const volumePattern = momentumPattern(volumeMomentum);
+  // "consistent_up"/"consistent_down" is the only volume pattern that genuinely agrees or disagrees
+  // with price as a single, clean directional comparison. Any other volume pattern (reversal, mixed,
+  // single-horizon, flat) means volume itself does not move the same way across its own horizons --
+  // collapsing that to a coarse up/down (patternDirection also reads "reversal_to_up" as "up") would
+  // claim confirmation or divergence the evidence does not actually establish; state the per-horizon
+  // picture instead, using the same figures momentumClause already cites.
+  if (volumePattern.startsWith("consistent_")) {
+    const volDirection = patternDirection(volumePattern);
+    if (volDirection === priceDirection) {
+      return para(`The ${regimeWord} price regime is accompanied by trading volume moving in the same direction across the same horizons, providing some confirmation from market participation rather than price movement alone.`, [momentum, volumeMomentum]);
+    }
     return para(`Price performance is ${regimeWord}, but the volume evidence does not move in the same direction across the same horizons, providing only partial confirmation of the price regime rather than evidence of sustained broad-based participation.`, [momentum, volumeMomentum]);
   }
-  return para(`Price performance is ${regimeWord}, but the volume evidence is less consistent across horizons than the price regime it is being compared against — recent and longer-horizon activity do not move together, which qualifies rather than confirms the price move.`, [momentum, volumeMomentum]);
+  const horizons = volumeMomentum.horizons ?? [];
+  const perHorizon = horizons.map((horizon) => {
+    const volHorizonDirection = horizonDirectionWord(horizon.raw);
+    const agrees = (volHorizonDirection === "up" && priceDirection === "up") || (volHorizonDirection === "down" && priceDirection === "down");
+    return `${HORIZON_LABEL[horizon.key]} volume ${pct(horizon.raw)} ${agrees ? "moves with" : volHorizonDirection === "flat" ? "is little changed relative to" : "diverges from"} the price direction`;
+  });
+  return para(`Volume evidence across horizons is mixed rather than uniform: ${joinList(perHorizon)}. This does not establish a single, consistent confirmation or divergence between trading activity and the price regime; each horizon should be read on its own terms rather than collapsed into one directional statement.`, [momentum, volumeMomentum]);
+}
+
+function horizonDirectionWord(raw: number): "up" | "down" | "flat" {
+  if (momentumBand(raw) === "flat") return "flat";
+  return raw >= 0 ? "up" : "down";
 }
 
 /** Price momentum read against realized volatility and/or the Bollinger position -- strong performance is never equated with low risk. */
@@ -734,6 +794,19 @@ function fundamentalsRelationshipParagraph(findings: Finding[]): EngineParagraph
       const sameDirection = growth.filter((finding) => (finding.findingType.endsWith("_increase") ? "up" : "down") === priceDirection);
       const opposite = growth.filter((finding) => !sameDirection.includes(finding));
       if (sameDirection.length > 0 && opposite.length === 0) {
+        // Same-direction growth alone only establishes directional agreement; whether the market's
+        // repricing is actually proportionate to that fundamental change is a separate question the
+        // metrics engine's own aligned price-vs-fundamental spread (points_price_change_vs_*)
+        // answers, when available -- "fundamentals positive" is never read as "fundamentals confirm
+        // the size of the price move" without checking it.
+        const pace = fundamentalPaceDirection(findings);
+        const paceEvidence = (["tvl", "revenue"] as const).map((key) => byType(findings, `points_price_change_vs_${key}_growth`)).filter((finding): finding is Finding => finding !== undefined);
+        if (pace === "outpacing" && priceDirection === "up") {
+          return para(`Market appreciation is directionally supported by ${joinList(sameDirection.map(fundamentalGrowthLabel))} moving in the same direction, but the available cross-metric evidence indicates that market repricing has outpaced the measured change in tracked fundamental activity over the same aligned interval. The evidence therefore supports the direction of the move more strongly than its magnitude.`, [momentum, ...sameDirection, ...paceEvidence]);
+        }
+        if (pace === "mixed" && priceDirection === "up") {
+          return para(`Market appreciation is directionally supported by ${joinList(sameDirection.map(fundamentalGrowthLabel))} moving in the same direction, but the available cross-metric evidence is itself mixed: market repricing has outpaced some tracked fundamental measures while trailing others over their respective aligned intervals (see Fundamental Analysis). The evidence therefore supports the direction of the move without establishing that its magnitude is uniformly confirmed by fundamental activity.`, [momentum, ...sameDirection, ...paceEvidence]);
+        }
         return para(`Market ${priceDirection === "up" ? "appreciation" : "decline"} is accompanied by ${joinList(sameDirection.map(fundamentalGrowthLabel))} moving in the same direction, providing cross-domain confirmation that market performance is occurring alongside a comparable move in tracked fundamental activity.`, [momentum, ...sameDirection]);
       }
       if (opposite.length > 0) {
@@ -892,7 +965,7 @@ function finalConclusion(findings: Finding[], synthesis: SynthesisResult): Engin
     supportEvidence.push(...confluence.agreeing);
   }
   const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
-  if (volumeMomentum && patternDirection(momentumPattern(volumeMomentum)) === momentumDirection) {
+  if (volumeMomentum && momentumPattern(volumeMomentum).startsWith("consistent_") && patternDirection(momentumPattern(volumeMomentum)) === momentumDirection) {
     supportParts.push("trading volume moves in the same direction across the same horizons");
     supportEvidence.push(volumeMomentum);
   }
@@ -930,7 +1003,13 @@ function finalConclusion(findings: Finding[], synthesis: SynthesisResult): Engin
     : topDriver && (topDriver.persistence === "conflicting" || topDriver.completeness === "limited")
       ? "lower"
       : "moderate";
-  paragraphs.push(para(`Overall, the evidence supports a ${regimeWord} market and technical assessment with ${confidenceWord} confidence. This conclusion would strengthen or weaken depending on whether subsequent observations confirm the current regime and whether the currently unavailable fundamental or valuation evidence becomes available to corroborate or challenge it.`, momentum));
+  // The closing sentence must never claim a category is unavailable when the corresponding
+  // evidence already exists -- paragraph 4 above already determined exactly which categories (if
+  // any) are actually missing; reuse that same determination rather than a static claim.
+  const futureEvidenceClause = unavailable.length > 0
+    ? ` whether subsequent observations confirm the current regime, and ${joinList(unavailable)} becomes establishable as further evidence is collected`
+    : " whether subsequent observations confirm the current regime";
+  paragraphs.push(para(`Overall, the evidence supports a ${regimeWord} market and technical assessment with ${confidenceWord} confidence. This conclusion would strengthen or weaken depending on${futureEvidenceClause}.`, momentum));
   return paragraphs;
 }
 
