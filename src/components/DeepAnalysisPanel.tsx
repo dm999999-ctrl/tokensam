@@ -5,104 +5,41 @@ import { requestTokenAnalysis } from "@/app/tokens/[id]/actions";
 import type { EngineAnalysisState } from "@/lib/analysis/deterministic-service";
 import { ENGINE_SECTION_KEYS, ENGINE_SECTION_TITLES, type EngineParagraph, type EngineSectionKey, type EngineTokenAnalysis } from "@/lib/analysis/engine/report-schema";
 import { buildFootnoteIndex, footnoteNumbersFor, type FootnoteIndex } from "@/lib/analysis/footnotes";
-import type { PayloadField, ProfilePayload } from "@/lib/analysis/profile-payload";
+import type { ProfilePayload } from "@/lib/analysis/profile-payload";
 
 function utc(value: string | null) {
   if (!value) return "unknown";
   return `${new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })} UTC`;
 }
-function utcDate(value: string | null) {
-  if (!value) return "unknown";
-  return new Date(value).toLocaleString("en-GB", { dateStyle: "long", timeZone: "UTC" });
-}
-
-const REGIME_LABEL: Record<string, string> = { positive: "Positive", negative: "Negative", mixed: "Mixed", flat: "Flat", insufficient: "Insufficient Data" };
-const CONFIDENCE_LABEL: Record<string, string> = { high: "High analytical confidence", moderate: "Moderate analytical confidence", low: "Low analytical confidence" };
-
-function field(payload: ProfilePayload, id: string): PayloadField | undefined {
-  return payload.fields.find((candidate) => candidate.id === id && candidate.status === "shown");
-}
-
-/** Compact, report-header-style identity + headline figures, reusing the exact fields the rest of the page (and the report body below) already cite -- never a separately computed number. */
+/**
+ * Plain identity header, matching the same "TOKEN SAMURAI — NAME / Token / Chain / Category /
+ * Contract / Data as of" block the page's own "Copy data" export uses (formatProfilePayloadText in
+ * profile-payload.ts) -- one canonical header format for this token's data, not a separate one
+ * invented for the panel.
+ */
 function ReportHeader({ payload, analysis }: { payload: ProfilePayload; analysis: EngineTokenAnalysis }) {
-  const price = field(payload, "obs:price");
-  const change24h = field(payload, "obs:change_24h");
-  const change7d = field(payload, "obs:change_7d");
-  const marketCap = field(payload, "obs:market_cap");
-  const tvl = field(payload, "obs:tvl");
-  const regime = analysis.metadata.regime;
-  const confidence = analysis.metadata.regimeConfidence;
-
+  const { token } = payload;
   return (
     <div className="report-header">
-      <div className="report-header-top">
-        <div>
-          <p className="report-kicker">{payload.token.name} ({payload.token.symbol}) · Investment Research Report</p>
-          <p className="report-meta-line">{payload.token.chain} · {utcDate(analysis.metadata.generatedAt)} · Data as of {utc(analysis.metadata.contextAsOf)}</p>
-        </div>
-        {regime && (
-          <div className="report-verdict">
-            <span className={`report-regime report-regime-${regime}`}>{REGIME_LABEL[regime] ?? regime}</span>
-            {confidence && <span className="report-confidence">{CONFIDENCE_LABEL[confidence]}</span>}
-          </div>
-        )}
-      </div>
-      <div className="report-figures">
-        {price && <div className="report-figure"><strong>{price.value}</strong><span>Price</span></div>}
-        {change24h && <div className="report-figure"><strong className={`tone-${change24h.raw !== null && change24h.raw > 0 ? "positive" : change24h.raw !== null && change24h.raw < 0 ? "negative" : "flat"}`}>{change24h.value}</strong><span>24H</span></div>}
-        {change7d && <div className="report-figure"><strong className={`tone-${change7d.raw !== null && change7d.raw > 0 ? "positive" : change7d.raw !== null && change7d.raw < 0 ? "negative" : "flat"}`}>{change7d.value}</strong><span>7D</span></div>}
-        {marketCap && <div className="report-figure"><strong>{marketCap.value}</strong><span>Market Cap</span></div>}
-        {tvl && <div className="report-figure"><strong>{tvl.value}</strong><span>TVL</span></div>}
-      </div>
+      <p className="report-kicker">Token Samurai — {token.name.toUpperCase()}</p>
+      <p className="report-subtitle">Deep AI Research Report</p>
+      <dl className="report-identity">
+        <div><dt>Token</dt><dd>{token.name} ({token.symbol})</dd></div>
+        <div><dt>Chain</dt><dd>{token.chain}</dd></div>
+        <div><dt>Category</dt><dd>{token.category}</dd></div>
+        <div><dt>Contract</dt><dd>{token.isNative ? "Native asset — no contract" : token.contractAddress ?? "Not recorded"}</dd></div>
+        <div><dt>Data as of</dt><dd>{utc(analysis.metadata.contextAsOf)}</dd></div>
+      </dl>
     </div>
   );
 }
 
-type KeyFinding = { heading: string; value: string };
-
-const KEY_FINDING_SECTIONS: { key: EngineSectionKey; heading: string }[] = [
-  { key: "marketPerformance", heading: "Market" },
-  { key: "fundamentalAnalysis", heading: "Fundamentals" },
-  { key: "valuationAnalysis", heading: "Valuation" },
-  { key: "technicalAnalysis", heading: "Technical" },
-  { key: "marketStructureLiquidity", heading: "Liquidity" },
-  { key: "tokenomicsSupply", heading: "Tokenomics" },
-];
-
-/** A compact label/value parsed from an evidence label already shown in Evidence & Methodology (format: "Section · Label: Value · Period") -- not a new calculation, just a terser rendering of the same cited figure. */
+/** A compact label/value parsed from an evidence label (format: "Section · Label: Value · Period") -- not a new calculation, just a terser rendering of the same cited figure. */
 function parseEvidenceLabel(label: string): { heading: string; value: string } | null {
   const afterDot = label.split(" · ").slice(1).join(" · "); // drop the leading payload-section name
   const colon = afterDot.indexOf(": ");
   if (colon === -1) return null;
   return { heading: afterDot.slice(0, colon), value: afterDot.slice(colon + 2) };
-}
-
-/** The first real (non-placeholder) citation across a section's paragraphs, rendered as one compact tile -- reuses whatever evidence the section below already cites, never a separate figure. */
-function buildKeyFindings(analysis: EngineTokenAnalysis): KeyFinding[] {
-  const { sources } = analysis.metadata;
-  const findings: KeyFinding[] = [];
-  for (const { key, heading } of KEY_FINDING_SECTIONS) {
-    const id = analysis[key].paragraphs.flatMap((paragraph) => paragraph.sourceIds).find((candidate) => candidate !== "token" && sources[candidate]);
-    if (!id) continue;
-    const parsed = parseEvidenceLabel(sources[id]);
-    findings.push({ heading, value: parsed?.value ?? sources[id] });
-  }
-  return findings.slice(0, 8);
-}
-
-function KeyFindingsStrip({ analysis }: { analysis: EngineTokenAnalysis }) {
-  const findings = buildKeyFindings(analysis);
-  if (findings.length === 0) return null;
-  return (
-    <div className="key-findings">
-      {findings.map((finding) => (
-        <div key={finding.heading} className="key-finding">
-          <span className="key-finding-heading">{finding.heading}</span>
-          <strong className="key-finding-value">{finding.value}</strong>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 const VALUATION_LABELS = ["Market Cap / TVL", "FDV / TVL", "Market Cap / 24h Revenue", "FDV / 24h Revenue", "Market Cap / 24h Fees"];
@@ -136,22 +73,23 @@ function FootnoteMarks({ sourceIds, index }: { sourceIds: string[]; index: Footn
   );
 }
 
-const ANALYTICAL_TYPE_LABEL: Record<string, string> = { observation: "Observation", interpretation: "Interpretation", inference: "Inference", limitation: "Limitation" };
-
 function Paragraph({ paragraph, index, footnoteIndex }: { paragraph: EngineParagraph; index: number; footnoteIndex: FootnoteIndex }) {
   return (
     <p key={index} className="report-paragraph">
-      {paragraph.analyticalType && <span className={`paragraph-tag paragraph-tag-${paragraph.analyticalType}`}>{ANALYTICAL_TYPE_LABEL[paragraph.analyticalType]}</span>}
       {paragraph.text}
       <FootnoteMarks sourceIds={paragraph.sourceIds} index={footnoteIndex} />
     </p>
   );
 }
 
+/** Sections after Executive Assessment are numbered 1-10 in report order, matching the reference report layout; Executive Assessment, Further Research Questions, Footnotes, and Evidence & Methodology stay unnumbered. */
+const NUMBERED_SECTIONS: EngineSectionKey[] = ENGINE_SECTION_KEYS.filter((key) => key !== "executiveAssessment");
+
 function Section({ sectionKey, section, footnoteIndex, sources }: { sectionKey: EngineSectionKey; section: { paragraphs: EngineParagraph[] }; footnoteIndex: FootnoteIndex; sources: Record<string, string> }) {
+  const number = NUMBERED_SECTIONS.indexOf(sectionKey);
   return (
     <section className="report-section" id={`section-${sectionKey}`}>
-      <h3>{ENGINE_SECTION_TITLES[sectionKey]}</h3>
+      <h3>{number >= 0 ? `${number + 1}. ` : ""}{ENGINE_SECTION_TITLES[sectionKey]}</h3>
       {sectionKey === "valuationAnalysis" && <ValuationTable paragraphs={section.paragraphs} sources={sources} />}
       {section.paragraphs.length === 0 ? <p className="report-empty">No content was generated for this section from the current data snapshot.</p> : (
         <div className="report-paragraphs">
@@ -165,7 +103,7 @@ function Section({ sectionKey, section, footnoteIndex, sources }: { sectionKey: 
 function FurtherResearchQuestions({ analysis, footnoteIndex }: { analysis: EngineTokenAnalysis; footnoteIndex: FootnoteIndex }) {
   return (
     <section className="report-section" id="section-furtherResearch">
-      <h3>Further Research Questions</h3>
+      <h3>{NUMBERED_SECTIONS.length + 1}. Further Research Questions</h3>
       {analysis.furtherResearchQuestions.length === 0 ? <p className="report-empty">No research questions arise from a materially significant, currently unresolved relationship in this snapshot.</p> : (
         <ol className="report-questions">
           {analysis.furtherResearchQuestions.map((item, index) => (
@@ -228,7 +166,6 @@ function AnalysisBody({ analysis, payload }: { analysis: EngineTokenAnalysis; pa
   return (
     <div className="report-body">
       <ReportHeader payload={payload} analysis={analysis} />
-      <KeyFindingsStrip analysis={analysis} />
       {ENGINE_SECTION_KEYS.map((key) => (
         <Section key={key} sectionKey={key} section={analysis[key]} footnoteIndex={footnoteIndex} sources={analysis.metadata.sources} />
       ))}
@@ -271,25 +208,13 @@ export function DeepAnalysisPanel({ tokenId, initialState, hidden, payload }: { 
       <header className="section-head ai-head">
         <div><p className="eyebrow">Research report · institutional-style analysis</p><h2 id="deep-ai-title">Deep AI Analysis</h2></div>
       </header>
-      <p className="ai-disclaimer">
-        A deterministic reading of this profile&apos;s stored evidence only — no AI provider is called, and every figure and named period in the text is copied from the same evidence cited beside it.
-        It is not investment advice and makes no price predictions or forecasts.
-      </p>
 
       {state.status !== "ready" ? (
         <div className="ai-state" role="status"><strong>AI analysis unavailable</strong><p>{state.message}</p></div>
       ) : (
         <>
           <div className="ai-toolbar">
-            {latest ? (
-              <dl className="ai-meta">
-                <div><dt>Generated</dt><dd>{utc(latest.metadata.generatedAt)}</dd></div>
-                <div><dt>Data as of</dt><dd>{utc(latest.metadata.contextAsOf)}</dd></div>
-                <div><dt>Model</dt><dd>{latest.metadata.provider}</dd></div>
-                {latest.metadata.engineVersion && <div><dt>Engine</dt><dd>v{latest.metadata.engineVersion} · analysis v{latest.metadata.analysisVersion}</dd></div>}
-                <div><dt>Prompt / schema</dt><dd>v{latest.metadata.promptVersion} / v{latest.metadata.schemaVersion}</dd></div>
-              </dl>
-            ) : <p className="ai-empty">No analysis has been generated for this token yet. Generation uses the current stored evidence and runs only when requested.</p>}
+            {!latest && <p className="ai-empty">No analysis has been generated for this token yet. Generation uses the current stored evidence and runs only when requested.</p>}
             <button className="ai-generate-button" type="button" onClick={generate} disabled={pending || coolingDown}>
               {pending ? "Generating…" : latest ? "Regenerate analysis" : "Generate analysis"}
             </button>
