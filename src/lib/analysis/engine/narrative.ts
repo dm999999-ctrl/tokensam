@@ -21,7 +21,7 @@
  */
 
 import type { Finding, FindingCategory } from "./findings.ts";
-import { findingId, type HorizonClass, type Relationship, type RelationshipType, type SynthesisResult, type ThesisDriver } from "./synthesis.ts";
+import { findingId, type Relationship, type RelationshipType, type SynthesisResult, type ThesisDriver } from "./synthesis.ts";
 import { magnitudeWord, type MomentumPeriodKey } from "./thresholds.ts";
 import type { EngineParagraph } from "./report-schema.ts";
 import { formatCount, formatUsd } from "../../ui/format.ts";
@@ -187,8 +187,6 @@ function momentumClause(finding: Finding, subject: "Price" | "Trading volume" = 
 
 // ---- 1. Executive Investment Assessment ----
 
-const REGIME_WORD: Record<HorizonClass, string> = { structural: "structural horizon", medium_term: "medium-term horizon", short_term: "short-term horizon", snapshot: "current-snapshot" };
-
 function domainWord(categories: FindingCategory[]): string {
   const labels: Partial<Record<FindingCategory, string>> = {
     marketPerformance: "market performance", technical: "technical configuration", fundamentalPerformance: "fundamental activity",
@@ -198,54 +196,98 @@ function domainWord(categories: FindingCategory[]): string {
   return joinList([...new Set(categories.map((category) => labels[category] ?? category))]);
 }
 
+/**
+ * A short, token-specific qualification clause combining whichever of (a) the 30-day closing-range
+ * position and (b) elevated realized volatility actually apply to the current momentum direction --
+ * shared by the Executive Assessment and Final Conclusion so the same underlying evidence produces
+ * one derivation, worded differently in each place. Returns null when neither qualification applies.
+ */
+function momentumQualification(findings: Finding[], direction: "up" | "down"): { text: string; evidence: Finding[] } | null {
+  const range = byType(findings, "closing_range_upper_third") ?? byType(findings, "closing_range_lower_third");
+  const atEdge = range && ((direction === "up" && range.findingType === "closing_range_upper_third") || (direction === "down" && range.findingType === "closing_range_lower_third"));
+  const volatility = byCategory(findings, "risk").find((finding) => finding.findingType === "elevated_volatility");
+  const clauses: string[] = [];
+  const evidence: Finding[] = [];
+  if (atEdge && range) {
+    clauses.push(`the latest close ${rangePositionPhrase(range.data.raw as number)} (${str(range.data.raw)}%)`);
+    evidence.push(range);
+  }
+  if (volatility) {
+    clauses.push(`realized volatility remains elevated (${str(volatility.data.value)} over ${volatility.data.period ?? "the available window"})`);
+    evidence.push(volatility);
+  }
+  if (clauses.length === 0) return null;
+  return { text: joinList(clauses), evidence };
+}
+
 function executiveAssessment(findings: Finding[], synthesis: SynthesisResult): EngineParagraph[] {
-  const drivers = synthesis.thesisDrivers;
-  if (drivers.length === 0) {
-    return [para("The currently available data snapshot does not support a substantive analytical thesis for this token beyond individual data points; see Data Quality & Analytical Limitations for what is missing.", ["token"])];
+  const momentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_") && !finding.findingType.startsWith("volume_multi_horizon_"));
+  const direction = momentum ? patternDirection(momentumPattern(momentum)) : null;
+  if (!momentum || direction === null || direction === "mixed" || direction === "flat") {
+    const drivers = synthesis.thesisDrivers;
+    if (drivers.length === 0) {
+      return [para("The currently available data snapshot does not support a substantive analytical thesis for this token beyond individual data points; see Data Quality & Analytical Limitations for what is missing.", ["token"])];
+    }
+    // A momentum-driven thesis cannot be stated (no clear price direction), but other material
+    // drivers exist -- name the strongest one plainly rather than defaulting to momentum language.
+    const top = drivers[0];
+    return [para(`The currently available evidence does not establish a single, consistent price direction across the measured horizons, so no momentum-based thesis is stated here. The most material signal currently available concerns ${domainWord(top.categories)}; see Cross-Domain Analysis for how it relates to the rest of the available evidence.`, top)];
   }
-  const [top, ...rest] = drivers;
+  const momentumDirection: "up" | "down" = direction;
+
   const paragraphs: EngineParagraph[] = [];
-  const domainsCovered = new Set(drivers.flatMap((driver) => driver.categories));
-  // A driver/domain count is not itself a value any cited finding reports, so it is described
-  // qualitatively (breadth/depth words) rather than as a literal digit — the same pattern the
-  // engine's earlier executive-overview composer used, never an invented or ungrounded number.
-  const breadth = domainsCovered.size >= 5 ? "broad" : domainsCovered.size >= 3 ? "moderate" : "limited";
-  const depth = drivers.length >= 4 ? "an extensive" : drivers.length >= 2 ? "a moderate" : "a single";
-  paragraphs.push(para(
-    `This assessment draws on ${depth} set of material analytical drivers across ${breadth} coverage of the token's market, technical, fundamental, and structural data. The most material of these concerns ${domainWord(top.categories)}, a ${REGIME_WORD[top.horizon]} signal; the analysis below sets it against the rest of the available evidence.`,
-    drivers,
-  ));
-  const conflicting = drivers.filter((driver) => driver.persistence === "conflicting");
-  const corroborated = drivers.filter((driver) => driver.materiality.corroboration > 0);
-  if (corroborated.length > 0) {
-    const strongest = corroborated[0];
-    paragraphs.push(para(
-      `The strongest supporting evidence is the relationship spanning ${domainWord(strongest.categories)}, where multiple independent data categories agree — the kind of cross-domain corroboration that carries more analytical weight than any single-category reading.`,
-      strongest,
-    ));
+  const regimeWord = direction === "up" ? "constructive" : "negative";
+  const confluence = technicalConfluenceMembers(findings, synthesis);
+
+  // 1. What is happening, stated immediately -- no generic lead-in.
+  const confluenceClause = confluence && confluence.agreeing.length > 0 && confluence.conflicting.length === 0
+    ? " with technical measures independently reinforcing that direction"
+    : confluence && confluence.conflicting.length > 0 && confluence.agreeing.length === 0
+      ? ", although the available technical indicators do not confirm it"
+      : "";
+  paragraphs.push(para(`This token is in a ${regimeWord} market regime${confluenceClause}: ${momentumClause(momentum)}`, confluence ? [momentum, ...confluence.agreeing, ...confluence.conflicting] : momentum));
+
+  // 2. Why -- the specific technical measures, named.
+  if (confluence && confluence.agreeing.length > 0) {
+    const clause = joinList(confluence.agreeing.map(technicalIndicatorClause));
+    paragraphs.push(para(`${clause.charAt(0).toUpperCase()}${clause.slice(1)}. These measures reinforce the price trend rather than providing an isolated signal.`, confluence.agreeing));
   }
-  if (conflicting.length > 0) {
-    const contradiction = conflicting[0];
-    paragraphs.push(para(
-      `The strongest contradictory evidence is a conflicting signal in ${domainWord(contradiction.categories)}, where the available horizons do not agree with one another — a limitation on how far the central thesis can be extended.`,
-      contradiction,
-    ));
-  } else if (rest.length > 0 && rest.some((driver) => !driver.categories.some((category) => top.categories.includes(category)))) {
-    const distinct = rest.find((driver) => !driver.categories.some((category) => top.categories.includes(category)))!;
-    paragraphs.push(para(
-      `A separate material signal in ${domainWord(distinct.categories)} should be weighed alongside the dominant driver rather than read in isolation — see Cross-Domain Analysis for how the two interact.`,
-      distinct,
-    ));
+
+  // 3. Qualification.
+  const qualification = momentumQualification(findings, momentumDirection);
+  if (qualification) {
+    paragraphs.push(para(`The principal qualification is that ${qualification.text}. The current strength should be read alongside this qualification rather than in isolation.`, qualification.evidence));
   }
-  const risks = byCategory(findings, "risk").filter((finding) => finding.findingType !== "no_elevated_risk_indicated");
-  const gaps = byCategory(findings, "dataQuality");
-  const riskClause = risks.length > 0
-    ? para(`The principal risk currently supported by the evidence is ${str(risks[0].data.label ?? risks[0].findingType.replace(/_/g, " "))}; see Key Investment Risks for the full evidence-supported set.`, risks[0])
-    : para("No elevated risk indicator crossed this analysis's thresholds in the currently available data.", ["token"]);
-  paragraphs.push(riskClause);
-  if (gaps.length > 0) {
-    paragraphs.push(para(`The principal uncertainty is data coverage: one or more gaps in the currently available evidence bound how far this assessment can be extended; see Data Quality & Analytical Limitations.`, gaps));
+  const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
+  if (volumeMomentum) {
+    const volDirection = patternDirection(momentumPattern(volumeMomentum));
+    if (volDirection === momentumDirection) {
+      paragraphs.push(para(`${momentumClause(volumeMomentum, "Trading volume")} This is directionally consistent with price, providing some confirmation from market participation.`, volumeMomentum));
+    } else if (volDirection !== "mixed" && volDirection !== "flat") {
+      paragraphs.push(para(`${momentumClause(volumeMomentum, "Trading volume")} This does not move in the same direction as price across these horizons, providing only partial confirmation of the current regime.`, volumeMomentum));
+    }
   }
+
+  // 4. What cannot currently be assessed.
+  const unavailable: string[] = [];
+  const unavailableEvidence: Finding[] = [];
+  if (byCategory(findings, "fundamentalPerformance").length === 0) unavailable.push("protocol-level fundamentals");
+  if (byCategory(findings, "valuation").length === 0) unavailable.push("a comparative valuation benchmark");
+  if (byCategory(findings, "liquidityMarketStructure").length === 0) unavailable.push("DEX market-structure data");
+  const unmapped = byTypePrefix(byCategory(findings, "dataQuality"), "unmapped_");
+  if (unmapped.length > 0) unavailableEvidence.push(...unmapped);
+  if (unavailable.length > 0) {
+    paragraphs.push(para(`${joinList(unavailable).replace(/^./, (character) => character.toUpperCase())} cannot currently be assessed because the relevant provider mapping or benchmark is unavailable. These are data-coverage limitations rather than negative evidence.`, unavailableEvidence.length > 0 ? unavailableEvidence : ["token"]));
+  }
+
+  // 5. Confidence, derived from the same materiality/persistence/completeness signals report.ts uses for the header's regime confidence -- never a separate judgment.
+  const topDriver = synthesis.thesisDrivers[0];
+  const confidenceWord = topDriver && topDriver.persistence === "persistent" && topDriver.completeness === "complete" && topDriver.materiality.total >= 10
+    ? "higher"
+    : topDriver && (topDriver.persistence === "conflicting" || topDriver.completeness === "limited")
+      ? "lower"
+      : "moderate";
+  paragraphs.push(para(`Taken together, the evidence supports a ${regimeWord} market and technical assessment with ${confidenceWord} confidence, rather than a single unqualified directional conclusion.`, momentum));
   return paragraphs;
 }
 
@@ -540,8 +582,15 @@ function technicalIndicatorClause(finding: Finding): string {
   }
 }
 
-/** Price momentum read against its technical configuration: which indicators reinforce the price direction, which (if any) do not. Reuses synthesis.ts's own technical_price_confluence relationship for membership rather than re-deriving agreement. */
-function technicalConfluenceParagraph(findings: Finding[], synthesis: SynthesisResult): EngineParagraph | null {
+type ConfluenceMembers = { momentum: Finding; direction: "up" | "down"; agreeing: Finding[]; conflicting: Finding[] };
+
+/**
+ * Which technical indicators agree or disagree with price direction -- the single shared
+ * derivation Cross-Domain Analysis, the Executive Assessment, and the Final Conclusion all read
+ * from, so "does the technical configuration confirm price" is computed once, never three times.
+ * Reuses synthesis.ts's own technical_price_confluence relationship for membership.
+ */
+function technicalConfluenceMembers(findings: Finding[], synthesis: SynthesisResult): ConfluenceMembers | null {
   const relationship = relationshipsOfType(synthesis, "technical_price_confluence")[0];
   if (!relationship) return null;
   const members = membersOf(relationship, findings);
@@ -552,6 +601,14 @@ function technicalConfluenceParagraph(findings: Finding[], synthesis: SynthesisR
   if (direction === "mixed" || direction === "flat") return null;
   const agreeing = others.filter((finding) => direction === "up" ? finding.findingType.includes("above") || finding.findingType === "rsi_at_or_above_70" : finding.findingType.includes("below") || finding.findingType === "rsi_at_or_below_30");
   const conflicting = others.filter((finding) => !agreeing.includes(finding));
+  return { momentum, direction, agreeing, conflicting };
+}
+
+/** Price momentum read against its technical configuration: which indicators reinforce the price direction, which (if any) do not. */
+function technicalConfluenceParagraph(findings: Finding[], synthesis: SynthesisResult): EngineParagraph | null {
+  const confluence = technicalConfluenceMembers(findings, synthesis);
+  if (!confluence) return null;
+  const { momentum, direction, agreeing, conflicting } = confluence;
   const regimeWord = direction === "up" ? "appreciation" : "decline";
   if (agreeing.length > 0 && conflicting.length === 0) {
     return para(`Price ${regimeWord} is reinforced by the technical configuration: ${joinList(agreeing.map(technicalIndicatorClause))}. These independent technical measures therefore support rather than contradict the prevailing price regime.`, [momentum, ...agreeing]);
@@ -736,30 +793,82 @@ function dataQualityLimitations(findings: Finding[]): EngineParagraph[] {
 
 // ---- 11. Final Analytical Conclusion ----
 
+/**
+ * The final weighing of the evidence -- deliberately NOT the same prose as the Executive Assessment
+ * (which states the current thesis). This section states what the TOTALITY of the evidence supports
+ * after weighing support against qualification against what remains unknown, in the five-paragraph
+ * structure (supports / strongest support / strongest qualification / limitations / confidence) an
+ * institutional conclusion follows. Reuses the identical momentum/confluence/qualification/coverage
+ * derivations the Executive Assessment and Cross-Domain Analysis already compute -- never a new
+ * calculation -- but composes them into a distinct final-weighing sentence shape each time.
+ */
 function finalConclusion(findings: Finding[], synthesis: SynthesisResult): EngineParagraph[] {
-  const drivers = synthesis.thesisDrivers;
-  if (drivers.length === 0) {
-    return [para("The currently available evidence does not support a central analytical thesis beyond the individual observations above; a materially richer data snapshot would be needed before one could be formed.", ["token"])];
+  const momentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_") && !finding.findingType.startsWith("volume_multi_horizon_"));
+  const direction = momentum ? patternDirection(momentumPattern(momentum)) : null;
+  if (!momentum || direction === null || direction === "mixed" || direction === "flat") {
+    const drivers = synthesis.thesisDrivers;
+    if (drivers.length === 0) {
+      return [para("The currently available evidence does not support a central analytical conclusion beyond the individual observations above; a materially richer data snapshot would be needed before one could be formed.", ["token"])];
+    }
+    const top = drivers[0];
+    return [para(`Without a single, consistent price direction across the measured horizons, the available evidence does not support a central market-regime conclusion. The most material signal available instead concerns ${domainWord(top.categories)}; see Cross-Domain Analysis and the section above for how it is supported and qualified.`, top)];
   }
+  const momentumDirection: "up" | "down" = direction;
+
   const paragraphs: EngineParagraph[] = [];
-  const top = drivers[0];
-  paragraphs.push(para(`The central assessment rests most heavily on ${domainWord(top.categories)}, the most material driver identified in the currently available evidence.`, top));
-  const conflicting = drivers.filter((driver) => driver.persistence === "conflicting");
-  const corroborated = drivers.filter((driver) => driver.materiality.corroboration > 0);
-  if (corroborated.length > 0 || conflicting.length > 0) {
-    const clauses: string[] = [];
-    if (corroborated.length > 0) clauses.push(`corroborating evidence in ${domainWord(corroborated[0].categories)}`);
-    if (conflicting.length > 0) clauses.push(`a conflicting signal in ${domainWord(conflicting[0].categories)}`);
-    paragraphs.push(para(`This is weighed against ${joinList(clauses)}.`, [...corroborated.slice(0, 1), ...conflicting.slice(0, 1)]));
+  const regimeWord = direction === "up" ? "constructive" : "negative";
+  const confluence = technicalConfluenceMembers(findings, synthesis);
+
+  // 1. What the totality of evidence supports.
+  paragraphs.push(para(`The available evidence supports a ${regimeWord} market and technical regime: ${momentumClause(momentum)}`, momentum));
+
+  // 2. Strongest supporting evidence.
+  const supportParts: string[] = [];
+  const supportEvidence: Finding[] = [momentum];
+  if (confluence && confluence.agreeing.length > 0) {
+    supportParts.push(`the technical configuration independently reinforces that direction (${joinList(confluence.agreeing.map(technicalIndicatorClause))})`);
+    supportEvidence.push(...confluence.agreeing);
   }
-  const technicalDriver = drivers.find((driver) => driver.relationshipType?.startsWith("technical_"));
-  if (technicalDriver) paragraphs.push(para("The available technical indicators contribute confirmation or divergence context alongside the price pattern itself — see Technical Analysis and Cross-Domain Analysis for the specific reading.", technicalDriver));
-  const fundamentalsDriver = drivers.find((driver) => driver.categories.includes("fundamentalPerformance"));
-  if (fundamentalsDriver) paragraphs.push(para("Fundamental activity contributes independent corroboration or contradiction of the market-performance regime described above, distinct from price action alone.", fundamentalsDriver));
-  const gaps = byCategory(findings, "dataQuality");
-  if (gaps.length > 0) {
-    paragraphs.push(para(`What remains uncertain is bounded by data coverage: one or more identified gaps in the currently available evidence (see Data Quality & Analytical Limitations). Materially closing those gaps — a curated protocol or market mapping, or a longer stored history — is the evidence most likely to change this assessment.`, gaps));
+  const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
+  if (volumeMomentum && patternDirection(momentumPattern(volumeMomentum)) === momentumDirection) {
+    supportParts.push("trading volume moves in the same direction across the same horizons");
+    supportEvidence.push(volumeMomentum);
   }
+  if (supportParts.length > 0) {
+    paragraphs.push(para(`The strongest support for this reading is that ${joinList(supportParts)}, reinforcing rather than merely coinciding with the price pattern.`, supportEvidence));
+  }
+
+  // 3. Strongest qualification or contradiction.
+  const qualification = momentumQualification(findings, momentumDirection);
+  const conflictingSupport = confluence && confluence.conflicting.length > 0 && confluence.agreeing.length === 0;
+  if (qualification && conflictingSupport && confluence) {
+    paragraphs.push(para(`The principal qualification is twofold: ${qualification.text}, and the available technical indicators do not confirm the price direction (${joinList(confluence.conflicting.map(technicalIndicatorClause))}). Together these mean the current reading should not be treated as unconditional.`, [...qualification.evidence, ...confluence.conflicting]));
+  } else if (qualification) {
+    paragraphs.push(para(`The principal qualification is that ${qualification.text}. This does not invalidate the direction of the current regime, but it materially qualifies the risk and confidence associated with it.`, qualification.evidence));
+  } else if (conflictingSupport && confluence) {
+    paragraphs.push(para(`The principal qualification is that the available technical indicators do not confirm the price direction (${joinList(confluence.conflicting.map(technicalIndicatorClause))}), which limits how far this reading can be extended.`, confluence.conflicting));
+  }
+
+  // 4. What cannot currently be established, and how that bounds confidence.
+  const unavailable: string[] = [];
+  const unavailableEvidence: Finding[] = [];
+  if (byCategory(findings, "fundamentalPerformance").length === 0) unavailable.push("whether market performance is accompanied by corresponding protocol-level activity");
+  if (byCategory(findings, "valuation").length === 0) unavailable.push("whether the current market pricing is attractive relative to any comparative benchmark");
+  if (byCategory(findings, "liquidityMarketStructure").length === 0) unavailable.push("whether DEX-level trading and liquidity conditions corroborate the market and technical regime");
+  const unmapped = byTypePrefix(byCategory(findings, "dataQuality"), "unmapped_");
+  unavailableEvidence.push(...unmapped);
+  if (unavailable.length > 0) {
+    paragraphs.push(para(`${joinList(unavailable).replace(/^./, (character) => character.toUpperCase())} cannot currently be established because the relevant provider mapping is unavailable. This bounds confidence in the conclusion below without itself being negative evidence.`, unavailableEvidence.length > 0 ? unavailableEvidence : ["token"]));
+  }
+
+  // 5. Final assessment and confidence.
+  const topDriver = synthesis.thesisDrivers[0];
+  const confidenceWord = topDriver && topDriver.persistence === "persistent" && topDriver.completeness === "complete" && topDriver.materiality.total >= 10
+    ? "higher"
+    : topDriver && (topDriver.persistence === "conflicting" || topDriver.completeness === "limited")
+      ? "lower"
+      : "moderate";
+  paragraphs.push(para(`Overall, the evidence supports a ${regimeWord} market and technical assessment with ${confidenceWord} confidence. This conclusion would strengthen or weaken depending on whether subsequent observations confirm the current regime and whether the currently unavailable fundamental or valuation evidence becomes available to corroborate or challenge it.`, momentum));
   return paragraphs;
 }
 
