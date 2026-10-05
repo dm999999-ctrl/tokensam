@@ -82,11 +82,32 @@ function Paragraph({ paragraph, index, footnoteIndex }: { paragraph: EngineParag
   );
 }
 
-/** Sections after Executive Assessment are numbered 1-10 in report order, matching the reference report layout; Executive Assessment, Further Research Questions, Footnotes, and Evidence & Methodology stay unnumbered. */
-const NUMBERED_SECTIONS: EngineSectionKey[] = ENGINE_SECTION_KEYS.filter((key) => key !== "executiveAssessment");
+/**
+ * Sections that only ever have substantive content when the token actually has evidence for that
+ * domain -- when none exists, the engine still returns one placeholder paragraph citing only the
+ * bare "token" identity marker (never a real evidence ID; see e.g. fundamentalAnalysisSection's
+ * "no associated protocol is mapped" fallback in narrative.ts), so the report doesn't render an
+ * empty-looking section for a domain this token genuinely has nothing to say about. The limitation
+ * itself is not lost: it's still cited in Data Quality & Analytical Limitations and, when material,
+ * in the Executive Assessment / Final Conclusion's own domain-synthesis clauses (see narrative.ts's
+ * fundamentalsSynthesisClause and siblings) -- this only controls whether the standalone section
+ * with nothing to analyze gets a heading of its own. Market Performance, Technical Analysis,
+ * Cross-Domain Analysis, and Key Investment Risks always render: every token has price evidence,
+ * and the other three already degrade gracefully to a substantive "could not be established"
+ * reading rather than a bare placeholder.
+ */
+const HIDABLE_WHEN_EMPTY = new Set<EngineSectionKey>(["fundamentalAnalysis", "valuationAnalysis", "marketStructureLiquidity", "tokenomicsSupply"]);
 
-function Section({ sectionKey, section, footnoteIndex, sources }: { sectionKey: EngineSectionKey; section: { paragraphs: EngineParagraph[] }; footnoteIndex: FootnoteIndex; sources: Record<string, string> }) {
-  const number = NUMBERED_SECTIONS.indexOf(sectionKey);
+/** True when a section's only content is the engine's own no-evidence placeholder (sourceIds === ["token"], the same signal report.ts's classifyParagraphs already uses to mark a paragraph as an ungrounded placeholder). */
+export function isEmptySection(section: { paragraphs: EngineParagraph[] }): boolean {
+  return section.paragraphs.every((paragraph) => paragraph.sourceIds.length === 1 && paragraph.sourceIds[0] === "token");
+}
+
+export function visibleSectionKeys(analysis: EngineTokenAnalysis): EngineSectionKey[] {
+  return ENGINE_SECTION_KEYS.filter((key) => key === "executiveAssessment" || !HIDABLE_WHEN_EMPTY.has(key) || !isEmptySection(analysis[key]));
+}
+
+function Section({ sectionKey, section, number, footnoteIndex, sources }: { sectionKey: EngineSectionKey; section: { paragraphs: EngineParagraph[] }; number: number; footnoteIndex: FootnoteIndex; sources: Record<string, string> }) {
   return (
     <section className="report-section" id={`section-${sectionKey}`}>
       <h3>{number >= 0 ? `${number + 1}. ` : ""}{ENGINE_SECTION_TITLES[sectionKey]}</h3>
@@ -100,10 +121,10 @@ function Section({ sectionKey, section, footnoteIndex, sources }: { sectionKey: 
   );
 }
 
-function FurtherResearchQuestions({ analysis, footnoteIndex }: { analysis: EngineTokenAnalysis; footnoteIndex: FootnoteIndex }) {
+function FurtherResearchQuestions({ analysis, footnoteIndex, number }: { analysis: EngineTokenAnalysis; footnoteIndex: FootnoteIndex; number: number }) {
   return (
     <section className="report-section" id="section-furtherResearch">
-      <h3>{NUMBERED_SECTIONS.length + 1}. Further Research Questions</h3>
+      <h3>{number}. Further Research Questions</h3>
       {analysis.furtherResearchQuestions.length === 0 ? <p className="report-empty">No research questions arise from a materially significant, currently unresolved relationship in this snapshot.</p> : (
         <ol className="report-questions">
           {analysis.furtherResearchQuestions.map((item, index) => (
@@ -163,13 +184,17 @@ function EvidenceMethodology({ analysis, payload }: { analysis: EngineTokenAnaly
 
 function AnalysisBody({ analysis, payload }: { analysis: EngineTokenAnalysis; payload: ProfilePayload }) {
   const footnoteIndex = buildFootnoteIndex(analysis);
+  // Numbered sequentially over only the sections that actually render (see visibleSectionKeys),
+  // so hiding an empty domain never leaves a gap like "3. Technical Analysis" jumping to "5. ...".
+  const visibleKeys = visibleSectionKeys(analysis);
+  const numberedKeys: EngineSectionKey[] = visibleKeys.filter((key) => key !== "executiveAssessment");
   return (
     <div className="report-body">
       <ReportHeader payload={payload} analysis={analysis} />
-      {ENGINE_SECTION_KEYS.map((key) => (
-        <Section key={key} sectionKey={key} section={analysis[key]} footnoteIndex={footnoteIndex} sources={analysis.metadata.sources} />
+      {visibleKeys.map((key) => (
+        <Section key={key} sectionKey={key} section={analysis[key]} number={numberedKeys.indexOf(key)} footnoteIndex={footnoteIndex} sources={analysis.metadata.sources} />
       ))}
-      <FurtherResearchQuestions analysis={analysis} footnoteIndex={footnoteIndex} />
+      <FurtherResearchQuestions analysis={analysis} footnoteIndex={footnoteIndex} number={numberedKeys.length + 1} />
       <Footnotes footnoteIndex={footnoteIndex} />
       <EvidenceMethodology analysis={analysis} payload={payload} />
     </div>

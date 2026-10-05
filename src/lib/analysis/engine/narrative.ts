@@ -245,7 +245,7 @@ function momentumQualification(findings: Finding[], direction: "up" | "down"): {
   const clauses: string[] = [];
   const evidence: Finding[] = [];
   if (atEdge && range) {
-    clauses.push(`the latest close ${rangePositionPhrase(range.data.raw as number)} (${str(range.data.raw)}%)`);
+    clauses.push(`the latest close ${rangePositionPhrase(range.data.raw as number)} (${(range.data.raw as number).toFixed(2)}%)`);
     evidence.push(range);
   }
   if (volatility) {
@@ -439,7 +439,10 @@ function technicalAnalysisSection(findings: Finding[], synthesis: SynthesisResul
     if (macd) {
       trendMembers.push(macd);
       const state = macd.findingType === "macd_above_signal" ? "above" : macd.findingType === "macd_below_signal" ? "below" : "at";
-      clauses.push(`the MACD line sits ${state} its signal line (histogram ${str(macd.data.raw)})`);
+      // Histogram is USD-denominated (catalog.ts), so the same currency formatter the rest of the
+      // report uses for price levels keeps it at a sensible, non-machine-precision display.
+      const histogram = macd.data.raw as number | null;
+      clauses.push(`the MACD line sits ${state} its signal line (histogram ${typeof histogram === "number" ? formatUsd(histogram) : str(macd.data.raw)})`);
     }
     paragraphs.push(para(`Trend structure: ${joinList(clauses)}.`, trendMembers));
   }
@@ -447,7 +450,10 @@ function technicalAnalysisSection(findings: Finding[], synthesis: SynthesisResul
   const rsi = byType(technical, "rsi_at_or_above_70") ?? byType(technical, "rsi_at_or_below_30");
   if (rsi) {
     const level = rsi.findingType === "rsi_at_or_above_70" ? "at or above the 70 level" : "at or below the 30 level";
-    paragraphs.push(para(`Momentum: the 14-day RSI reads ${str(rsi.data.raw)}, ${level} — a momentum extreme by this indicator's own threshold, considered alongside the price pattern above rather than in isolation.`, rsi));
+    // RSI's own unit is "index" (catalog.ts), one decimal place -- the same precision the page's
+    // own indicator display already uses for this unit, never the raw unrounded float.
+    const rsiRaw = rsi.data.raw as number | null;
+    paragraphs.push(para(`Momentum: the 14-day RSI reads ${typeof rsiRaw === "number" ? rsiRaw.toFixed(1) : str(rsi.data.raw)}, ${level} — a momentum extreme by this indicator's own threshold, considered alongside the price pattern above rather than in isolation.`, rsi));
   }
 
   const bollinger = byType(technical, "price_above_upper_band") ?? byType(technical, "price_below_lower_band")
@@ -456,7 +462,7 @@ function technicalAnalysisSection(findings: Finding[], synthesis: SynthesisResul
   const range = byType(technical, "closing_range_upper_third") ?? byType(technical, "closing_range_lower_third");
   if (bollinger) {
     const pct = (bollinger.data.raw as number).toFixed(2);
-    const rangeClause = range ? ` The latest close ${rangePositionPhrase(range.data.raw as number)} (${str(range.data.raw)}%), so this volatility reading should be read together with that range position rather than on its own.` : "";
+    const rangeClause = range ? ` The latest close ${rangePositionPhrase(range.data.raw as number)} (${(range.data.raw as number).toFixed(2)}%), so this volatility reading should be read together with that range position rather than on its own.` : "";
     paragraphs.push(para(`Volatility structure: ${BOLLINGER_PHRASE[bollinger.findingType](pct)}.${rangeClause}`, range ? [bollinger, range] : bollinger));
   }
 
@@ -471,7 +477,7 @@ function technicalAnalysisSection(findings: Finding[], synthesis: SynthesisResul
       // Only stated here when it wasn't already cross-referenced in the Bollinger clause above,
       // so the same range-position fact is never stated twice in the same section.
       structureMembers.push(range);
-      clauses.push(`the latest close ${rangePositionPhrase(range.data.raw as number)} (${str(range.data.raw)}%)`);
+      clauses.push(`the latest close ${rangePositionPhrase(range.data.raw as number)} (${(range.data.raw as number).toFixed(2)}%)`);
     }
     paragraphs.push(para(`Market structure: ${joinList(clauses)} — support/resistance context derived from closing prices only.`, structureMembers));
 
@@ -836,7 +842,7 @@ function rangePositionQualificationParagraph(findings: Finding[]): EngineParagra
   const atEdge = (direction === "up" && range.findingType === "closing_range_upper_third") || (direction === "down" && range.findingType === "closing_range_lower_third");
   if (!atEdge) return null;
   const edgeWord = direction === "up" ? "upper" : "lower";
-  return para(`The latest close ${rangePositionPhrase(range.data.raw as number)} (${str(range.data.raw)}%), reinforcing the strength of the current move while also increasing the importance of reversal risk if the ${direction === "up" ? "advance" : "decline"} does not persist near this ${edgeWord} boundary.`, [momentum, range]);
+  return para(`The latest close ${rangePositionPhrase(range.data.raw as number)} (${(range.data.raw as number).toFixed(2)}%), reinforcing the strength of the current move while also increasing the importance of reversal risk if the ${direction === "up" ? "advance" : "decline"} does not persist near this ${edgeWord} boundary.`, [momentum, range]);
 }
 
 const FUNDAMENTAL_GROWTH_LABEL: Record<"tvl" | "fees" | "revenue", string> = { tvl: "TVL", fees: "fees", revenue: "revenue" };

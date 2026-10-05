@@ -48,6 +48,28 @@ test("5. footnote numbering is resolved once per report, from a single shared in
   assert.doesNotMatch(source, /buildFootnoteIndex\(analysis\)[\s\S]*buildFootnoteIndex\(analysis\)/, "buildFootnoteIndex is called at most once per render");
 });
 
+test("6. a section can only be hidden when it is empty of real evidence (every paragraph cites only the bare 'token' placeholder) -- never based on a hardcoded token/section name", () => {
+  const isEmptySectionFn = source.slice(source.indexOf("export function isEmptySection("), source.indexOf("\n}\n", source.indexOf("export function isEmptySection(")) + 2);
+  assert.match(isEmptySectionFn, /sourceIds\.length === 1 && paragraph\.sourceIds\[0\] === "token"/, "emptiness is derived from the evidence placeholder signal, not a fixed rule");
+  assert.doesNotMatch(isEmptySectionFn, /===\s*"BTC"|===\s*"ORCA"|===\s*"ILV"|===\s*"VIRTUAL"/i, "no token-name conditional in the visibility check");
+});
+
+test("7. only Fundamental Analysis, Valuation Analysis, Market Structure & Liquidity, and Tokenomics & Supply are ever hidden when empty -- Market Performance, Technical Analysis, Cross-Domain Analysis, Key Investment Risks, Executive Assessment, Data Quality & Analytical Limitations, Final Analytical Conclusion, and Further Research Questions always render", () => {
+  const hidableSet = source.slice(source.indexOf("const HIDABLE_WHEN_EMPTY"), source.indexOf("]);", source.indexOf("const HIDABLE_WHEN_EMPTY")) + 3);
+  for (const key of ["fundamentalAnalysis", "valuationAnalysis", "marketStructureLiquidity", "tokenomicsSupply"]) {
+    assert.match(hidableSet, new RegExp(`"${key}"`), `${key} must be hidable when it has no evidence`);
+  }
+  for (const key of ["marketPerformance", "technicalAnalysis", "crossDomainAnalysis", "keyRisks", "executiveAssessment"]) {
+    assert.doesNotMatch(hidableSet, new RegExp(`"${key}"`), `${key} must always render`);
+  }
+  assert.match(source, /key === "executiveAssessment" \|\| !HIDABLE_WHEN_EMPTY\.has\(key\)/, "executiveAssessment is explicitly always visible regardless of the hidable set");
+});
+
+test("8. section numbering is sequential over only the sections that actually render, so hiding an empty section never leaves a gap in the visible numbering", () => {
+  assert.match(source, /const numberedKeys[^=]*=\s*visibleKeys\.filter/, "numbering is derived from the same visible-keys list used to decide what renders, not the full static section list");
+  assert.doesNotMatch(source, /ENGINE_SECTION_KEYS\.map\(\(key\) => \(\s*<Section/, "AnalysisBody must map over the dynamically visible keys, not the full static ENGINE_SECTION_KEYS list");
+});
+
 let failures = 0;
 for (const { name, run } of cases) {
   try {
