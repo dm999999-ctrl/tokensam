@@ -144,7 +144,7 @@ function patternHorizons(horizons: Horizon[]): Horizon[] {
  * Pulled out of multiHorizonMomentumFinding so the same, single classification logic drives both
  * price momentum and the volume-horizon finding below — never a second, parallel implementation.
  */
-function classifyMultiHorizonPattern(horizons: Horizon[]): { pattern: MultiHorizonPattern; severity: FindingSeverity; shortest: Horizon; longest: Horizon } {
+function classifyMultiHorizonPattern(horizons: Horizon[]): { pattern: MultiHorizonPattern; severity: FindingSeverity; shortest: Horizon; longest: Horizon; excludedDisagreement: Horizon | null } {
   const forPattern = patternHorizons(horizons);
   const shortest = forPattern[0];
   const longest = forPattern[forPattern.length - 1];
@@ -177,18 +177,31 @@ function classifyMultiHorizonPattern(horizons: Horizon[]): { pattern: MultiHoriz
     pattern = "mixed";
     severity = "low";
   }
-  return { pattern, severity, shortest, longest };
+
+  // A "consistent" pattern is classified from the longer, pattern-eligible horizons only (see
+  // patternHorizons -- 24H is deliberately excluded there so one noisy day cannot flip a genuine
+  // multi-week trend to "mixed"). But that exclusion must never let the narrative claim the regime
+  // holds "across every available horizon" when an excluded horizon's own sign disagrees -- e.g.
+  // 24H negative with 7D/30D both positive is a real pullback, not evidence this check should hide.
+  // Generalized (not hard-coded to 24H specifically): any horizon outside the pattern-eligible set
+  // whose direction opposes the established consistent direction is surfaced here.
+  let excludedDisagreement: Horizon | null = null;
+  if (pattern.startsWith("consistent_up") || pattern.startsWith("consistent_down")) {
+    const patternDirection = pattern.startsWith("consistent_up") ? "up" : "down";
+    excludedDisagreement = horizons.find((horizon) => !forPattern.includes(horizon) && directionOf(horizon) !== "flat" && directionOf(horizon) !== patternDirection) ?? null;
+  }
+  return { pattern, severity, shortest, longest, excludedDisagreement };
 }
 
 /** One consolidated momentum finding covering every available horizon — never one finding per horizon. */
 function multiHorizonMomentumFinding(fields: Map<string, PayloadField>): Finding | null {
   const horizons = availableHorizons(fields);
   if (horizons.length === 0) return null;
-  const { pattern, severity, shortest, longest } = classifyMultiHorizonPattern(horizons);
+  const { pattern, severity, shortest, longest, excludedDisagreement } = classifyMultiHorizonPattern(horizons);
   return {
     category: "marketPerformance", findingType: `multi_horizon_${pattern}`, severity,
     evidenceIds: horizons.map((horizon) => horizon.id), observationPeriods: horizons.map((horizon) => horizon.period),
-    data: { patternShortestKey: shortest.key, patternLongestKey: longest.key },
+    data: { patternShortestKey: shortest.key, patternLongestKey: longest.key, excludedDisagreementKey: excludedDisagreement?.key ?? null },
     horizons,
   };
 }
@@ -204,7 +217,7 @@ function volumeMultiHorizonFinding(fields: Map<string, PayloadField>): Finding |
     .map((key) => horizonFrom(key, shown(fields, `hist:volume_${key}`)))
     .filter((horizon): horizon is Horizon => horizon !== null);
   if (horizons.length < 2) return null; // a single volume-change figure is already shown elsewhere; this finding is for the multi-horizon comparison specifically
-  const { pattern, severity, shortest, longest } = classifyMultiHorizonPattern(horizons);
+  const { pattern, severity, shortest, longest, excludedDisagreement } = classifyMultiHorizonPattern(horizons);
   return {
     // Deliberately NOT prefixed "multi_horizon_" -- several places in synthesis.ts/report.ts/
     // narrative.ts match that exact prefix to mean "the price momentum finding" specifically
@@ -213,7 +226,7 @@ function volumeMultiHorizonFinding(fields: Map<string, PayloadField>): Finding |
     // lookups. "volume_multi_horizon_" shares the classification logic but never that prefix.
     category: "marketPerformance", findingType: `volume_multi_horizon_${pattern}`, severity,
     evidenceIds: horizons.map((horizon) => horizon.id), observationPeriods: horizons.map((horizon) => horizon.period),
-    data: { patternShortestKey: shortest.key, patternLongestKey: longest.key },
+    data: { patternShortestKey: shortest.key, patternLongestKey: longest.key, excludedDisagreementKey: excludedDisagreement?.key ?? null },
     horizons,
   };
 }

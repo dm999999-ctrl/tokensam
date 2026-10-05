@@ -164,7 +164,6 @@ function patternDirection(pattern: MultiHorizonPattern): "up" | "down" | "mixed"
 function momentumClause(finding: Finding, subject: "Price" | "Trading volume" = "Price"): string {
   const horizons = finding.horizons ?? [];
   const pattern = momentumPattern(finding);
-  const shortest = horizons[0], longest = horizons[horizons.length - 1];
   const figures = momentumFigures(finding);
   const verb = subject === "Price" ? "moved" : "changed";
   if (pattern === "single_up" || pattern === "single_down") {
@@ -173,15 +172,33 @@ function momentumClause(finding: Finding, subject: "Price" | "Trading volume" = 
   }
   if (pattern === "flat") return `${subject} has been essentially unchanged across the available observation windows (${figures}).`;
   if (pattern === "mixed") return `${subject} ${verb} ${figures}, without a single consistent direction across the available windows — a mixed short- and long-term picture rather than a clear regime.`;
+  // The shortest/longest horizons that actually drove the pattern classification (see
+  // classifyMultiHorizonPattern in findings.ts) -- never the raw first/last of the full horizons
+  // array, which can include a shorter horizon the pattern itself excluded (e.g. 24H excluded from
+  // a 7D/30D consistent-pattern judgment). Falls back to the full array only if that data is absent
+  // (e.g. a stored row from before this field existed).
+  const patternShortest = horizons.find((horizon) => horizon.key === finding.data.patternShortestKey) ?? horizons[0];
+  const patternLongest = horizons.find((horizon) => horizon.key === finding.data.patternLongestKey) ?? horizons[horizons.length - 1];
   if (pattern === "reversal_to_down" || pattern === "reversal_to_up") {
     const turn = pattern === "reversal_to_down" ? "turned negative" : "turned positive";
-    return `${subject} ${verb} ${figures}. The longer-term ${HORIZON_WORD[longest.key]} trend has been ${pattern === "reversal_to_down" ? "positive" : "negative"}, but the most recent ${HORIZON_WORD[shortest.key]} movement has ${turn}, marking a reversal within the observed history rather than a continuation of the longer-term regime.`;
+    return `${subject} ${verb} ${figures}. The longer-term ${HORIZON_WORD[patternLongest.key]} trend has been ${pattern === "reversal_to_down" ? "positive" : "negative"}, but the most recent ${HORIZON_WORD[patternShortest.key]} movement has ${turn}, marking a reversal within the observed history rather than a continuation of the longer-term regime.`;
   }
-  const paceClause = shortest.key === longest.key ? "" : pattern.endsWith("decelerating")
-    ? ` The ${HORIZON_WORD[longest.key]} figure is materially larger than the ${HORIZON_WORD[shortest.key]} figure, indicating a substantial share of the cumulative move occurred before the most recent window — a deceleration in pace, not a change in direction.`
+  const paceClause = patternShortest.key === patternLongest.key ? "" : pattern.endsWith("decelerating")
+    ? ` The ${HORIZON_WORD[patternLongest.key]} figure is materially larger than the ${HORIZON_WORD[patternShortest.key]} figure, indicating a substantial share of the cumulative move occurred before the most recent window — a deceleration in pace, not a change in direction.`
     : pattern.endsWith("accelerating")
-      ? ` The recent ${HORIZON_WORD[shortest.key]} pace of change is running faster than the pace implied by the remainder of the ${HORIZON_WORD[longest.key]} window, indicating the pace of change has picked up more recently.`
-      : ` The pace of change has remained broadly consistent between the ${HORIZON_WORD[shortest.key]} and ${HORIZON_WORD[longest.key]} windows.`;
+      ? ` The recent ${HORIZON_WORD[patternShortest.key]} pace of change is running faster than the pace implied by the remainder of the ${HORIZON_WORD[patternLongest.key]} window, indicating the pace of change has picked up more recently.`
+      : ` The pace of change has remained broadly consistent between the ${HORIZON_WORD[patternShortest.key]} and ${HORIZON_WORD[patternLongest.key]} windows.`;
+  // A "consistent" pattern is classified from the pattern-eligible horizons only (patternShortest/
+  // patternLongest above); a shorter horizon outside that set can still disagree in sign (e.g. a
+  // 24H pullback within a positive 7D/30D regime) -- when it does, the pattern genuinely does NOT
+  // hold "across every available horizon", so that claim is never made in this case.
+  const excludedKey = finding.data.excludedDisagreementKey as MomentumPeriodKey | null | undefined;
+  const excluded = excludedKey ? horizons.find((horizon) => horizon.key === excludedKey) : undefined;
+  if (excluded) {
+    const patternWord = pattern.includes("_up_") ? "positive" : "negative";
+    const pullbackWord = patternWord === "positive" ? "pullback" : "rebound";
+    return `${subject} ${verb} ${figures}, a ${patternWord} regime across the ${HORIZON_WORD[patternShortest.key]} and ${HORIZON_WORD[patternLongest.key]} horizons, with a short-term ${pullbackWord} over the ${HORIZON_WORD[excluded.key]} window (${pct(excluded.raw)}) rather than a continuation of that regime at every available horizon.${paceClause}`;
+  }
   return `${subject} ${verb} ${figures}, a persistent ${pattern.includes("_up_") ? "positive" : "negative"} regime across every available horizon.${paceClause}`;
 }
 

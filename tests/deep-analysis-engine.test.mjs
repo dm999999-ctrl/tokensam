@@ -505,6 +505,75 @@ test("H5. confidence/analyticalType survive a stored-row round-trip unchanged (p
 });
 
 // =====================================================================================
+// I. Mixed-horizon regime accuracy — a shorter horizon outside the pattern-eligible set must never
+// be silently claimed as part of "every available horizon" when it disagrees in sign (see
+// classifyMultiHorizonPattern's excludedDisagreement in findings.ts).
+// =====================================================================================
+
+/** A minimal ProfilePayload built directly from named fields, bypassing the Supabase fixture
+ * pipeline entirely — reliable for exercising one specific combination of obs:/hist: fields. */
+function directPayload(overrides) {
+  const field = (id, section, label, value, raw, period = null) => ({
+    id, section, label, value, raw, status: "shown", scope: "token", period, periodRequired: period !== null,
+    note: null, asOf: MIDNIGHT.toISOString(), intervalHours: null, technicalState: null, technicalReadings: null,
+  });
+  return {
+    version: "test",
+    token: { id: "mixed-e2e", name: "Mixed Horizon Token", symbol: "MHT", chain: "Ethereum", category: "DeFi", isNative: false, contractAddress: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984" },
+    dataAsOf: MIDNIGHT.toISOString(),
+    scope: [
+      { id: "scope:defillama", provider: "DeFiLlama", mapped: false, statement: "No DeFiLlama protocol mapping." },
+      { id: "scope:dexscreener", provider: "DEX Screener", mapped: false, statement: "No DEX Screener mapping." },
+    ],
+    fields: [
+      field("obs:price", "Overview", "Price", "$45.00", 45),
+      field("obs:change_24h", "Overview", "24H change", `${overrides.change24h >= 0 ? "+" : ""}${overrides.change24h}%`, overrides.change24h, "24H (rolling 24 hours, as reported by the provider)"),
+      field("obs:change_7d", "Overview", "7D change", `${overrides.change7d >= 0 ? "+" : ""}${overrides.change7d}%`, overrides.change7d, "7D (rolling 7 days, as reported by the provider)"),
+      field("hist:price_30d", "Market history", "Price history · 30D", `latest $45.00 · ${overrides.change30d >= 0 ? "+" : ""}${overrides.change30d}% over 30 days`, overrides.change30d, "30D window: 30 observations spanning 29 days"),
+      field("obs:market_cap", "Overview", "Market cap", "$400.00M", 400_000_000),
+      field("obs:volume_24h", "Overview", "24H volume", "$10.00M", 10_000_000),
+      field("obs:circulating_supply", "Tokenomics", "Circulating supply", "9.00M MHT", 9_000_000),
+      field("obs:total_supply", "Tokenomics", "Total supply", "10.00M MHT", 10_000_000),
+      field("obs:maximum_supply", "Tokenomics", "Maximum supply", "10.00M MHT", 10_000_000),
+    ],
+  };
+}
+
+test("I1. 24H negative with 7D/30D both positive (the ILV production case) is never described as 'persistent positive regime across every available horizon'", () => {
+  const payload = directPayload({ change24h: -4.27, change7d: 9.40, change30d: 28.14 });
+  const finding = extractFindings(payload).find((f) => f.category === "marketPerformance" && f.findingType.startsWith("multi_horizon_") && !f.findingType.startsWith("volume_"));
+  assert.equal(finding.findingType, "multi_horizon_consistent_up_accelerating", "7D/30D still classify as a consistent upward pattern");
+  assert.equal(finding.data.excludedDisagreementKey, "24h", "the pattern-excluded 24H horizon is flagged as disagreeing");
+  const report = buildEngineReport(payload);
+  const text = report.analysis.marketPerformance.paragraphs[0].text;
+  assert.doesNotMatch(text, /persistent positive regime across every available horizon/i, "must not claim the regime holds at every horizon when 24H disagrees");
+  assert.match(text, /-4\.27%/, "the disagreeing 24H figure is still stated, not hidden");
+  assert.match(text, /pullback/i, "the short-term disagreement is named as a pullback");
+  // The same guarantee must hold in the Executive Assessment and Final Conclusion, which reuse the same momentumClause.
+  assert.doesNotMatch(report.analysis.executiveAssessment.paragraphs[0].text, /persistent positive regime across every available horizon/i);
+  assert.doesNotMatch(report.analysis.finalConclusion.paragraphs[0].text, /persistent positive regime across every available horizon/i);
+});
+
+test("I2. 24H positive with 7D/30D both negative is described as a rebound, not a persistent negative regime at every horizon", () => {
+  const payload = directPayload({ change24h: 3.1, change7d: -6.5, change30d: -12.0 });
+  const finding = extractFindings(payload).find((f) => f.category === "marketPerformance" && f.findingType.startsWith("multi_horizon_") && !f.findingType.startsWith("volume_"));
+  assert.match(finding.findingType, /^multi_horizon_consistent_down_/);
+  assert.equal(finding.data.excludedDisagreementKey, "24h");
+  const report = buildEngineReport(payload);
+  const text = report.analysis.marketPerformance.paragraphs[0].text;
+  assert.doesNotMatch(text, /persistent negative regime across every available horizon/i);
+  assert.match(text, /rebound/i);
+});
+
+test("I3. 24H/7D/30D all positive (the BTC/ORCA production case) is still described as holding across every available horizon — the fix must not over-trigger on a genuinely consistent regime", () => {
+  const payload = directPayload({ change24h: 0.85, change7d: 3.94, change30d: 7.95 });
+  const finding = extractFindings(payload).find((f) => f.category === "marketPerformance" && f.findingType.startsWith("multi_horizon_") && !f.findingType.startsWith("volume_"));
+  assert.equal(finding.data.excludedDisagreementKey, null, "all horizons agree, so there is no excluded disagreement");
+  const report = buildEngineReport(payload);
+  assert.match(report.analysis.marketPerformance.paragraphs[0].text, /persistent positive regime across every available horizon/i);
+});
+
+// =====================================================================================
 
 let failures = 0;
 for (const { name, run } of cases) {
