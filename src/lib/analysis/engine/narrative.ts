@@ -519,38 +519,168 @@ function tokenomicsSupplySection(findings: Finding[]): EngineParagraph[] {
 }
 
 // ---- 8. Cross-Domain Analysis ----
+//
+// Each helper below answers one of the six cross-domain questions (reinforcement, divergence,
+// strongest support, strongest qualification, unavailable domains, implication) for one domain
+// pair, built directly from the same findings every other section already cites -- never a second
+// calculation, and never emitted unless the specific evidence pair it describes actually exists.
 
-const RELATIONSHIP_FRAME: Record<RelationshipType, (members: Finding[]) => string> = {
-  price_fundamental_divergence: () => "Price and tracked fundamental activity diverged over the same aligned interval — a market/fundamental relationship, not a causal claim.",
-  valuation_activity_relationship: () => "Market capitalization, TVL, and their relative growth rates are read together: how valuation and underlying activity have moved relative to one another over the available window.",
-  market_momentum_valuation: () => "Price momentum is read alongside a valuation multiple: whether the market's price behavior is or is not accompanied by a shift in how the market prices the token relative to its fundamentals.",
-  supply_valuation_exposure: () => "A low circulating share and a material FDV/market-cap gap are two expressions of the same dilution-exposure characteristic, not two independent facts.",
-  trading_liquidity_conditions: () => "DEX liquidity, volume, and transaction activity are read together as one current trading-conditions picture, not as independent metrics.",
-  fundamental_activity_trajectory: () => "TVL, fees, and revenue and their respective changes are read together as one fundamental-activity trajectory.",
-  technical_price_confluence: () => "Price momentum is read alongside its technical configuration (moving averages, MACD, RSI, Bollinger position) for confluence or divergence.",
-  technical_fundamental_relationship: () => "A 30-day technical price/TVL or valuation-trend reading is read alongside the fundamental-activity findings it relates to — technical and fundamental evidence considered together.",
-  technical_liquidity_conditions: () => "A 30-day technical price/volume or turnover-trend reading is read alongside current on-chain trading-structure findings.",
-};
+/** A directional technical finding's own clause, naming the indicator and what it shows -- not a generic "technical indicators" reference. */
+function technicalIndicatorClause(finding: Finding): string {
+  switch (finding.findingType) {
+    case "price_above_moving_averages": return "price sits above its available moving averages";
+    case "price_below_moving_averages": return "price sits below its available moving averages";
+    case "macd_above_signal": return "the MACD line sits above its signal line";
+    case "macd_below_signal": return "the MACD line sits below its signal line";
+    case "rsi_at_or_above_70": return "the 14-day RSI is at or above 70";
+    case "rsi_at_or_below_30": return "the 14-day RSI is at or below 30";
+    case "price_above_upper_band": return "the latest close sits above the upper Bollinger band";
+    case "price_below_lower_band": return "the latest close sits below the lower Bollinger band";
+    default: return finding.findingType.replace(/_/g, " ");
+  }
+}
+
+/** Price momentum read against its technical configuration: which indicators reinforce the price direction, which (if any) do not. Reuses synthesis.ts's own technical_price_confluence relationship for membership rather than re-deriving agreement. */
+function technicalConfluenceParagraph(findings: Finding[], synthesis: SynthesisResult): EngineParagraph | null {
+  const relationship = relationshipsOfType(synthesis, "technical_price_confluence")[0];
+  if (!relationship) return null;
+  const members = membersOf(relationship, findings);
+  const momentum = members.find((finding) => finding.findingType.startsWith("multi_horizon_") && !finding.findingType.startsWith("volume_multi_horizon_"));
+  const others = members.filter((finding) => finding !== momentum);
+  if (!momentum || others.length === 0) return null;
+  const direction = patternDirection(momentumPattern(momentum));
+  if (direction === "mixed" || direction === "flat") return null;
+  const agreeing = others.filter((finding) => direction === "up" ? finding.findingType.includes("above") || finding.findingType === "rsi_at_or_above_70" : finding.findingType.includes("below") || finding.findingType === "rsi_at_or_below_30");
+  const conflicting = others.filter((finding) => !agreeing.includes(finding));
+  const regimeWord = direction === "up" ? "appreciation" : "decline";
+  if (agreeing.length > 0 && conflicting.length === 0) {
+    return para(`Price ${regimeWord} is reinforced by the technical configuration: ${joinList(agreeing.map(technicalIndicatorClause))}. These independent technical measures therefore support rather than contradict the prevailing price regime.`, [momentum, ...agreeing]);
+  }
+  if (conflicting.length > 0 && agreeing.length === 0) {
+    return para(`Price ${regimeWord} is not confirmed by the technical configuration: ${joinList(conflicting.map(technicalIndicatorClause))}, which diverges from the price direction rather than reinforcing it.`, [momentum, ...conflicting]);
+  }
+  return para(`The technical configuration is mixed relative to price ${regimeWord}: ${joinList(agreeing.map(technicalIndicatorClause))} reinforce the direction, while ${joinList(conflicting.map(technicalIndicatorClause))} do not — partial rather than full technical confirmation.`, [momentum, ...agreeing, ...conflicting]);
+}
+
+/** Price momentum read against the volume multi-horizon pattern over the same horizons -- confirmation, divergence, or (if volume data is absent) nothing emitted. */
+function volumeConfirmationParagraph(findings: Finding[]): EngineParagraph | null {
+  const momentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_") && !finding.findingType.startsWith("volume_multi_horizon_"));
+  const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
+  if (!momentum || !volumeMomentum) return null;
+  const priceDirection = patternDirection(momentumPattern(momentum));
+  const volDirection = patternDirection(momentumPattern(volumeMomentum));
+  if (priceDirection === "mixed" || priceDirection === "flat") return null;
+  const regimeWord = priceDirection === "up" ? "constructive" : "negative";
+  if (volDirection === priceDirection) {
+    return para(`The ${regimeWord} price regime is accompanied by trading volume moving in the same direction across the same horizons, providing some confirmation from market participation rather than price movement alone.`, [momentum, volumeMomentum]);
+  }
+  if (volDirection !== "mixed" && volDirection !== "flat") {
+    return para(`Price performance is ${regimeWord}, but the volume evidence does not move in the same direction across the same horizons, providing only partial confirmation of the price regime rather than evidence of sustained broad-based participation.`, [momentum, volumeMomentum]);
+  }
+  return para(`Price performance is ${regimeWord}, but the volume evidence is less consistent across horizons than the price regime it is being compared against — recent and longer-horizon activity do not move together, which qualifies rather than confirms the price move.`, [momentum, volumeMomentum]);
+}
+
+/** Price momentum read against realized volatility and/or the Bollinger position -- strong performance is never equated with low risk. */
+function volatilityQualificationParagraph(findings: Finding[]): EngineParagraph | null {
+  const momentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_") && !finding.findingType.startsWith("volume_multi_horizon_"));
+  if (!momentum) return null;
+  const direction = patternDirection(momentumPattern(momentum));
+  if (direction === "mixed" || direction === "flat") return null;
+  const volatility = byCategory(findings, "risk").filter((finding) => finding.findingType === "elevated_volatility");
+  const bollingerExtended = byType(findings, "price_above_upper_band") ?? byType(findings, "price_below_lower_band");
+  if (volatility.length === 0 && !bollingerExtended) return null;
+  const regimeWord = direction === "up" ? "constructive" : "negative";
+  const members = [momentum, ...volatility, ...(bollingerExtended ? [bollingerExtended] : [])];
+  const volatilityClause = volatility.length > 0 ? joinList(volatility.map((finding) => `${str(finding.data.value)} over ${finding.data.period ?? "the available window"}`)) : "a statistically extended Bollinger position relative to the 20-day average";
+  return para(`The ${regimeWord} price regime is accompanied by elevated realized volatility (${volatilityClause}). The volatility evidence does not invalidate the direction of the current regime, but it materially qualifies the risk associated with it — the absence of a large reported drawdown does not by itself indicate a low-risk environment.`, members);
+}
+
+/** Price momentum read against the 30-day closing-range position -- near-range-edge strength carries more reversal risk than the direction alone conveys. */
+function rangePositionQualificationParagraph(findings: Finding[]): EngineParagraph | null {
+  const momentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_") && !finding.findingType.startsWith("volume_multi_horizon_"));
+  if (!momentum) return null;
+  const direction = patternDirection(momentumPattern(momentum));
+  if (direction === "mixed" || direction === "flat") return null;
+  const range = byType(findings, "closing_range_upper_third") ?? byType(findings, "closing_range_lower_third");
+  if (!range) return null;
+  const atEdge = (direction === "up" && range.findingType === "closing_range_upper_third") || (direction === "down" && range.findingType === "closing_range_lower_third");
+  if (!atEdge) return null;
+  const edgeWord = direction === "up" ? "upper" : "lower";
+  return para(`The latest close ${rangePositionPhrase(range.data.raw as number)} (${str(range.data.raw)}%), reinforcing the strength of the current move while also increasing the importance of reversal risk if the ${direction === "up" ? "advance" : "decline"} does not persist near this ${edgeWord} boundary.`, [momentum, range]);
+}
+
+const FUNDAMENTAL_GROWTH_LABEL: Record<"tvl" | "fees" | "revenue", string> = { tvl: "TVL", fees: "fees", revenue: "revenue" };
+function fundamentalGrowthLabel(finding: Finding): string {
+  const key = finding.findingType.startsWith("tvl") ? "tvl" : finding.findingType.startsWith("fees") ? "fees" : "revenue";
+  return FUNDAMENTAL_GROWTH_LABEL[key];
+}
+
+/** Price momentum read against tracked fundamental activity (TVL/fees/revenue): reinforcement, divergence, or an explicit statement that no protocol-level comparison can currently be made. */
+function fundamentalsRelationshipParagraph(findings: Finding[]): EngineParagraph | null {
+  const priceTvlDivergence = byType(findings, "divergence_price_up_tvl_down") ?? byType(findings, "divergence_price_down_tvl_up");
+  if (priceTvlDivergence) {
+    return para(`Price performance is occurring despite tracked protocol TVL moving in the opposite direction over the same aligned interval, creating a divergence between market performance and the underlying activity measure that qualifies the strength of the market signal.`, priceTvlDivergence);
+  }
+  const momentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_") && !finding.findingType.startsWith("volume_multi_horizon_"));
+  const growth = (["tvl", "fees", "revenue"] as const).map((key) => byType(findings, `${key}_growth_increase`) ?? byType(findings, `${key}_growth_decrease`)).filter((finding): finding is Finding => finding !== undefined);
+  if (momentum && growth.length > 0) {
+    const priceDirection = patternDirection(momentumPattern(momentum));
+    if (priceDirection !== "mixed" && priceDirection !== "flat") {
+      const sameDirection = growth.filter((finding) => (finding.findingType.endsWith("_increase") ? "up" : "down") === priceDirection);
+      const opposite = growth.filter((finding) => !sameDirection.includes(finding));
+      if (sameDirection.length > 0 && opposite.length === 0) {
+        return para(`Market ${priceDirection === "up" ? "appreciation" : "decline"} is accompanied by ${joinList(sameDirection.map(fundamentalGrowthLabel))} moving in the same direction, providing cross-domain confirmation that market performance is occurring alongside a comparable move in tracked fundamental activity.`, [momentum, ...sameDirection]);
+      }
+      if (opposite.length > 0) {
+        return para(`Price ${priceDirection === "up" ? "appreciation" : "decline"} is occurring despite ${joinList(opposite.map(fundamentalGrowthLabel))} moving in the opposite direction, a divergence that qualifies the strength of the market signal rather than confirming it.`, [momentum, ...opposite]);
+      }
+    }
+  }
+  // No fundamental-performance findings of any kind -- state the coverage limitation explicitly rather than treating it as negative evidence.
+  if (byCategory(findings, "fundamentalPerformance").length === 0) {
+    return para("No protocol-level comparison between market performance and fundamental activity can currently be made for this token; this is a data-coverage limitation rather than negative fundamental evidence.", ["token"]);
+  }
+  return null;
+}
+
+/** Observable valuation multiples, explicitly without an attractiveness judgment, or an explicit statement that none exists. */
+function valuationCrossDomainParagraph(findings: Finding[]): EngineParagraph | null {
+  const ratios = byTypePrefix(byCategory(findings, "valuation"), "ratio_");
+  if (ratios.length > 0) {
+    const parts = ratios.map((finding) => str(finding.data.label));
+    return para(`${joinList(parts)} ${ratios.length === 1 ? "is" : "are"} observable from the current data, but attractiveness cannot be established without an appropriate comparative benchmark, which is not present in the available evidence.`, ratios);
+  }
+  if (byCategory(findings, "valuation").length === 0) {
+    return para("No valuation multiple can currently be compared against the market or technical regime described above.", ["token"]);
+  }
+  return null;
+}
+
+/** Supply maturity only when it is materially connected to the valuation/dilution picture (a low circulating share or a market-cap/FDV gap) -- not for every token's plain supply figures, which already belong in Tokenomics & Supply. */
+function tokenomicsCrossDomainParagraph(findings: Finding[]): EngineParagraph | null {
+  const lowShare = byType(findings, "low_circulating_share");
+  const mcOfFdv = byType(findings, "market_cap_of_fdv");
+  if (!lowShare && !mcOfFdv) return null;
+  if (lowShare) {
+    return para(`The reported supply position (${(lowShare.data.raw as number).toFixed(1)}% of maximum supply currently circulating) indicates a majority of eventual total supply has yet to enter circulation, context relevant to the market-cap/fully-diluted-valuation relationship above, although the available figures do not themselves establish the timing or market impact of future issuance.`, lowShare);
+  }
+  return para(`The reported supply position (market capitalization at ${str(mcOfFdv!.data.value)} of fully diluted valuation) indicates relatively mature circulation, providing context for how much of the token's fully diluted value the market currently prices in, although this does not by itself establish future dilution or valuation attractiveness.`, mcOfFdv!);
+}
 
 function crossDomainAnalysis(findings: Finding[], synthesis: SynthesisResult): EngineParagraph[] {
-  if (synthesis.relationships.length === 0) {
+  const paragraphs = [
+    technicalConfluenceParagraph(findings, synthesis),
+    volumeConfirmationParagraph(findings),
+    volatilityQualificationParagraph(findings),
+    rangePositionQualificationParagraph(findings),
+    fundamentalsRelationshipParagraph(findings),
+    valuationCrossDomainParagraph(findings),
+    tokenomicsCrossDomainParagraph(findings),
+  ].filter((paragraph): paragraph is EngineParagraph => paragraph !== null);
+  if (paragraphs.length === 0) {
     return [para("No cross-domain relationship could be established from the currently available data — the individual sections above are the extent of what this snapshot supports.", ["token"])];
   }
-  return synthesis.relationships.map((relationship) => {
-    const members = membersOf(relationship, findings);
-    const frame = RELATIONSHIP_FRAME[relationship.type](members);
-    const persistenceClause = relationship.persistence === "persistent"
-      ? " The relationship holds consistently across the horizons it draws on, not merely at a single point."
-      : relationship.persistence === "conflicting"
-        ? " The horizons it draws on do not agree with one another, which limits how much weight this relationship can carry on its own."
-        : "";
-    const completenessClause = relationship.completeness === "limited"
-      ? " This reading is based on partial data — a relevant metric is currently unavailable, which does not itself indicate a weaker underlying condition, only reduced confidence in this specific comparison."
-      : relationship.completeness === "partial"
-        ? " One relevant data point is currently unavailable, which modestly limits confidence in this comparison."
-        : "";
-    return para(`${frame}${persistenceClause}${completenessClause}`, relationship);
-  });
+  return paragraphs;
 }
 
 // ---- 9. Key Investment Risks ----

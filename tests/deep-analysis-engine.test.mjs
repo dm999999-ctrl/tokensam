@@ -238,15 +238,26 @@ test("B4. RSI/MACD/moving-average/Bollinger findings never use forbidden sentime
 // C. Cross-Domain Analysis is populated from real relationships, not padding
 // =====================================================================================
 
-test("C1. Cross-Domain Analysis has one paragraph per detected relationship, each citing that relationship's own evidence", () => {
+test("C1. Cross-Domain Analysis builds token-specific paragraphs directly from findings (price/technical confluence, range position, fundamentals, valuation), never the old generic one-sentence-per-relationship boilerplate", () => {
   const report = buildEngineReport(UNI_LIKE);
-  const synthesis = synthesize(extractFindings(UNI_LIKE));
-  assert.equal(report.analysis.crossDomainAnalysis.paragraphs.length, synthesis.relationships.length || 1);
+  const texts = report.analysis.crossDomainAnalysis.paragraphs.map((p) => p.text);
+  const joined = texts.join(" ");
+  // The old RELATIONSHIP_FRAME sentences must not appear verbatim.
+  assert.doesNotMatch(joined, /Price momentum is read alongside its technical configuration \(moving averages, MACD, RSI, Bollinger position\) for confluence or divergence\./);
+  assert.doesNotMatch(joined, /TVL, fees, and revenue and their respective changes are read together/);
+  // Every paragraph cites real evidence (no untraceable statements).
+  for (const p of report.analysis.crossDomainAnalysis.paragraphs) assert.ok(p.sourceIds.length > 0, `paragraph has no sourceIds: ${p.text}`);
+  // UNI_LIKE has a rich enough fixture (price history, technical indicators, TVL/fees/revenue growth, valuation ratios) that the technical-confluence and fundamentals paragraphs should name specific evidence, not just restate section titles.
+  assert.match(joined, /moving averages|MACD|RSI/i);
 });
 
-test("C2. a token with no detected relationship states that plainly, never inventing one", () => {
+test("C2. a token with no fundamental or valuation data states those specific coverage limitations, never a generic 'no relationship' placeholder when a real limitation can be named", () => {
   const report = buildEngineReport(BTC_LIKE);
-  assert.match(report.analysis.crossDomainAnalysis.paragraphs[0].text, /no cross-domain relationship/i);
+  const joined = report.analysis.crossDomainAnalysis.paragraphs.map((p) => p.text).join(" ");
+  assert.match(joined, /no protocol-level comparison/i);
+  assert.match(joined, /no valuation multiple/i);
+  // Never silently invent a relationship this fixture's data does not support.
+  assert.doesNotMatch(joined, /reinforced by the technical configuration/i);
 });
 
 // =====================================================================================
