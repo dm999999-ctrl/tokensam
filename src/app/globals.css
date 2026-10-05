@@ -86,9 +86,8 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .blade-button-art:hover { border-color: transparent; background-color: transparent; filter: brightness(1.08); }
 .blade-button-art::after { content: none; }
 .blade-art { display: block; width: 320px; height: auto; }
-/* Sized to sit above the price in the top-right corner without overpowering it. */
-.blade-button-art-sm { margin-bottom: 4px; }
-.blade-button-art-sm .blade-art { width: 180px; }
+/* Sized to fit the slim breadcrumb row at the very top of the page. */
+.blade-button-art-sm .blade-art { width: 160px; }
 .blade-button::after { position: absolute; top: 6px; right: 1px; width: 1px; height: 17px; background: var(--gold); transform: rotate(-45deg); transform-origin: top; content: ""; }
 
 .segmented { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-inset); }
@@ -279,7 +278,8 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .pagination-status { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* Token Profile */
-.crumbs { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; color: var(--subtle); font-size: 13px; }
+.crumbs-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
+.crumbs { display: flex; align-items: center; gap: 8px; color: var(--subtle); font-size: 13px; }
 .crumbs a { color: var(--muted); text-decoration: none; }
 .crumbs a:hover { color: var(--ink-strong); }
 .crumbs span[aria-hidden] { color: var(--crimson); }
@@ -308,8 +308,6 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 /* The AI button makes this section-head much taller than a normal one, so the
    section's usual top padding reads as extra dead space above the title and
    button rather than a gap between sections. */
-.profile-section:has(#market-title) { padding-top: 14px; }
-.section-head:has(#market-title) { margin-bottom: 6px; }
 .section-head { position: relative; display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; }
 .section-head::after { position: absolute; right: 0; bottom: 0; left: 0; height: 1px; background: linear-gradient(90deg, var(--gold) 0%, rgb(205 172 104 / 35%) 18%, var(--line) 50%, transparent); content: ""; }
 .section-head::before { position: absolute; bottom: -1px; left: 0; width: 16px; height: 3px; background: var(--crimson); content: ""; }
