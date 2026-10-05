@@ -83,6 +83,11 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .blade-copy small { color: #c49a93; font-size: 11px; }
 .blade-edge { position: absolute; right: 13px; bottom: -1px; left: -1px; height: 2px; background: linear-gradient(90deg, var(--crimson-bright), rgb(205 172 104 / 60%) 70%, transparent); }
 .blade-button-art { display: grid; justify-items: center; padding: 0; border: 0; clip-path: none; background: none; }
+/* The AI button is much taller than a section title, so this row centers both
+   instead of the usual baseline ("end") alignment every other section-head
+   uses -- otherwise the short title reads as sitting well below the button
+   rather than beside it. */
+.section-head:has(#market-title) { align-items: center; }
 .blade-button-art:hover { border-color: transparent; background-color: transparent; filter: brightness(1.08); }
 .blade-button-art::after { content: none; }
 .blade-art { display: block; width: 320px; height: auto; }
@@ -297,10 +302,8 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .hero-change { display: inline-flex; align-items: baseline; gap: 6px; font-size: 14px; }
 .hero-change small { color: var(--subtle); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .hero-change b { font-weight: 600; }
-.profile-subheader { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; padding: 16px 0 18px; border-top: 1px solid var(--line); }
-.profile-subheader::before { position: absolute; top: -1px; left: 0; width: min(420px, 60%); height: 1px; background: linear-gradient(90deg, var(--crimson-bright) 0 18px, var(--gold) 18px, transparent); content: ""; }
-.freshness-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
-.section-nav { position: sticky; top: 0; z-index: 10; display: flex; gap: 2px; margin: 0 calc(var(--page-inset-start) * -1); padding: 0 var(--page-inset-start); overflow-x: auto; border-bottom: 1px solid var(--line); background: rgb(10 10 11 / 92%); backdrop-filter: blur(10px); scrollbar-width: none; }
+.section-nav { position: sticky; top: 0; z-index: 10; display: flex; gap: 2px; margin: 0 calc(var(--page-inset-start) * -1); padding: 0 var(--page-inset-start); overflow-x: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: rgb(10 10 11 / 92%); backdrop-filter: blur(10px); scrollbar-width: none; }
+.section-nav::before { position: absolute; top: -1px; left: var(--page-inset-start); width: min(420px, 60%); height: 1px; background: linear-gradient(90deg, var(--crimson-bright) 0 18px, var(--gold) 18px, transparent); content: ""; }
 .section-nav a { flex: 0 0 auto; padding: 13px 12px 11px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; font-weight: 550; text-decoration: none; }
 .section-nav a:hover { border-bottom-color: var(--crimson); color: var(--ink-strong); }
 .profile-section { padding-top: 34px; }
@@ -620,7 +623,6 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
   .profile-identity { align-items: flex-start; }
   .profile-quote { justify-items: start; }
   .quote-changes { justify-content: flex-start; }
-  .profile-subheader { align-items: stretch; flex-direction: column; }
   .blade-button { width: 100%; }
   .tile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .tile { padding: 12px; }

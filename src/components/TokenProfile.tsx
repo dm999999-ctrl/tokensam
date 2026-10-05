@@ -7,7 +7,7 @@ import type { LiveTokenProfileData } from "@/types/token";
 import type { EngineAnalysisState } from "@/lib/analysis/deterministic-service";
 import { buildProfileModel, type Card, type PoolRow } from "@/lib/ui/profile-model";
 import { buildProfilePayload, formatProfilePayloadText } from "@/lib/analysis/profile-payload";
-import { formatChange, formatUsd, formatUtc, shortAddress } from "@/lib/ui/format";
+import { formatChange, formatUsd, shortAddress } from "@/lib/ui/format";
 import { HistoryCharts } from "@/components/HistoricalSection";
 import { IndicatorCard, TechnicalIndicators } from "@/components/TechnicalIndicators";
 import { DeepAnalysisPanel, deepAnalysisButtonHint } from "@/components/DeepAnalysisPanel";
@@ -109,7 +109,6 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
   // A stored analysis is shown by default; otherwise the panel opens on request.
   const [showAnalysis, setShowAnalysis] = useState(analysisState.status === "ready" && analysisState.latest !== null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
-  const updatedAt = data.metricSources.snapshot?.collectedAt ?? null;
   const price = formatUsd(token.priceUsd);
   const marketCap = formatUsd(token.marketCapUsd, true);
   // Sections without data are simply omitted (page and nav); no "not available" cards are rendered.
@@ -118,7 +117,6 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
 
   const reveal = (id: string) => window.requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   const openAnalysis = () => { setShowAnalysis(true); reveal("analysis"); };
-  const openSources = () => { setSourcesOpen(true); reveal("sources"); };
 
   return (
     <div className="page profile-page">
@@ -137,6 +135,8 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
               {data.isNative ? <span className="native-tag">Native asset</span> : data.contractAddress ? (
                 <span className="address"><code title={data.contractAddress}>{shortAddress(data.contractAddress)}</code><CopyButton value={data.contractAddress} label="contract address" /></span>
               ) : null}
+              {/* The same canonical dataset the AI analysis receives, as readable text. */}
+              <CopyButton value={copyData} label="token data shown on this page" text="Copy data" />
             </div>
           </div>
         </div>
@@ -150,27 +150,16 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
         </div>
       </header>
 
-      <div className="profile-subheader">
-        <p className="freshness-line">
-          <span className="status-dot" aria-hidden="true" />
-          {updatedAt ? <>Data as of {formatUtc(updatedAt)}</> : "No market data yet"}
-          <span aria-hidden="true">·</span>
-          <button type="button" className="text-button" onClick={openSources}>Sources &amp; methodology</button>
-          <span aria-hidden="true">·</span>
-          {/* The same canonical dataset the AI analysis receives, as readable text. */}
-          <CopyButton value={copyData} label="token data shown on this page" text="Copy data" />
-        </p>
-        <button className="blade-button blade-button-art" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label={`Deep AI Analysis: ${deepAnalysisButtonHint(analysisState)}`}>
-          <Image src={AI_BUTTON_ART.src} alt="Generate AI Research Report" width={AI_BUTTON_ART.width} height={AI_BUTTON_ART.height} className="blade-art" priority />
-        </button>
-      </div>
-
       <nav className="section-nav" aria-label="Profile sections">
         {model.sections.map((section) => <a key={section.id} href={`#${section.id}`} onClick={section.id === "sources" ? () => setSourcesOpen(true) : undefined}>{section.label}</a>)}
       </nav>
 
       <section className="profile-section" id="market" aria-labelledby="market-title">
-        <SectionHead eyebrow="Token" title="Market snapshot" id="market-title" />
+        <SectionHead eyebrow="Token" title="Market snapshot" id="market-title">
+          <button className="blade-button blade-button-art" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label={`Deep AI Analysis: ${deepAnalysisButtonHint(analysisState)}`}>
+            <Image src={AI_BUTTON_ART.src} alt="Generate AI Research Report" width={AI_BUTTON_ART.width} height={AI_BUTTON_ART.height} className="blade-art" priority />
+          </button>
+        </SectionHead>
         {model.snapshot.pairs.length > 0 ? (
           <div className="snapshot-pairs">
             {model.snapshot.pairs.map((pair) => (
