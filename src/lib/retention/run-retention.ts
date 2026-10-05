@@ -2,6 +2,14 @@ type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createS
 
 const BATCH_SIZE = 1000;
 const MAX_BATCHES_PER_FUNCTION = 1000;
+// retention_collapse_non_chart_daily_batch's batch_size counts token/metric/provider
+// GROUPS, not rows (see 20261005050000_bound_non_chart_collapse_by_groups.sql): each
+// group can carry up to a few dozen excess rows/day, so a smaller group count keeps a
+// single call's row-level work (and its DELETE's index maintenance) comfortably inside
+// the ~8s statement_timeout that PostgREST's connection actually enforces in production
+// (see pg_roles.rolconfig for 'authenticator') -- well below the 120s this was
+// originally sized against.
+const NON_CHART_COLLAPSE_BATCH_SIZE = 80;
 
 // Retention policy:
 // - 0–30 days: preserve all granular observations for the 30D-chart-required
@@ -70,7 +78,8 @@ export async function runRetentionBatches(client: SupabaseAdminClient, deadlineA
         stoppedEarly.push(fn);
         break;
       }
-      const { data, error } = await client.rpc(fn, { batch_size: BATCH_SIZE });
+      const batchSize = fn === "retention_collapse_non_chart_daily_batch" ? NON_CHART_COLLAPSE_BATCH_SIZE : BATCH_SIZE;
+      const { data, error } = await client.rpc(fn, { batch_size: batchSize });
       if (error) {
         failed[fn] = error.message;
         break;
