@@ -83,11 +83,12 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .blade-copy small { color: #c49a93; font-size: 11px; }
 .blade-edge { position: absolute; right: 13px; bottom: -1px; left: -1px; height: 2px; background: linear-gradient(90deg, var(--crimson-bright), rgb(205 172 104 / 60%) 70%, transparent); }
 .blade-button-art { display: grid; justify-items: center; padding: 0; border: 0; clip-path: none; background: none; }
-/* The AI button is much taller than a section title, so this row centers both
-   instead of the usual baseline ("end") alignment every other section-head
-   uses -- otherwise the short title reads as sitting well below the button
-   rather than beside it. */
-.section-head:has(#market-title) { align-items: center; }
+/* The AI button is much taller than a section title; since it's the tallest
+   child it already sets the row's height and stays put regardless of
+   alignment, so only the shorter title needs pulling up to read as sitting
+   beside the button instead of below it. */
+.section-head:has(#market-title) { align-items: stretch; }
+.section-head:has(#market-title) > div:first-child { display: flex; flex-direction: column; justify-content: flex-start; }
 .blade-button-art:hover { border-color: transparent; background-color: transparent; filter: brightness(1.08); }
 .blade-button-art::after { content: none; }
 .blade-art { display: block; width: 320px; height: auto; }
