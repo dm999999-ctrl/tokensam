@@ -706,6 +706,70 @@ test("J-F. no FDV/tokenomics narrative claims tokens are 'already issued but not
 });
 
 // =====================================================================================
+// K. Executive Assessment / Final Conclusion dynamically synthesize every materially available
+// domain (fundamentals, valuation, market structure/liquidity, risk) -- never silently stopping at
+// the market/technical conclusion merely because that conclusion is already established, and never
+// claiming a domain unavailable when the corresponding evidence actually exists.
+// =====================================================================================
+
+test("K1. ORCA-shaped (fundamentals + valuation available): Executive Assessment AND Final Conclusion both reflect fundamentals and valuation, not just the market/technical thesis", () => {
+  const report = buildEngineReport(ORCA_LIKE);
+  for (const key of ["executiveAssessment", "finalConclusion"]) {
+    const text = report.analysis[key].paragraphs.map((p) => p.text).join(" ");
+    assert.match(text, /protocol activity|tracked protocol activity/i, `${key} must mention fundamentals when available`);
+    assert.match(text, /valuation multiples are also observable/i, `${key} must mention valuation when available`);
+    assert.match(text, /comparative benchmark/i, `${key} must preserve the no-benchmark limitation`);
+  }
+});
+
+test("K2. BTC-shaped (fundamentals + valuation unavailable): Executive Assessment and Final Conclusion never falsely claim fundamentals or valuation are available", () => {
+  function f(id, section, label, value, raw, period = null) {
+    return { id, section, label, value, raw, status: "shown", scope: "token", period, periodRequired: period !== null, note: null, asOf: MIDNIGHT.toISOString(), intervalHours: null, technicalState: null, technicalReadings: null };
+  }
+  const payload = {
+    version: "test",
+    token: { id: "btc-k2", name: "Bitcoin", symbol: "BTC", chain: "Bitcoin", category: "Payments", isNative: true, contractAddress: null },
+    dataAsOf: MIDNIGHT.toISOString(),
+    scope: [
+      { id: "scope:defillama", provider: "DeFiLlama", mapped: false, statement: "No DeFiLlama protocol mapping." },
+      { id: "scope:dexscreener", provider: "DEX Screener", mapped: false, statement: "No DEX Screener mapping." },
+    ],
+    fields: [
+      f("obs:price", "Overview", "Price", "$85,956.00", 85956),
+      f("obs:change_24h", "Overview", "24H change", "+0.85%", 0.85, "24H (rolling 24 hours, as reported by the provider)"),
+      f("obs:change_7d", "Overview", "7D change", "+3.94%", 3.94, "7D (rolling 7 days, as reported by the provider)"),
+      f("hist:price_30d", "Market history", "Price history · 30D", "latest $85,956.00 · +7.95% over 30 days", 7.95, "30D window: 30 observations spanning 29 days"),
+      f("obs:market_cap", "Overview", "Market cap", "$1.73T", 1_730_000_000_000),
+      f("obs:circulating_supply", "Tokenomics", "Circulating supply", "20.09M BTC", 20_090_000),
+      f("obs:total_supply", "Tokenomics", "Total supply", "20.09M BTC", 20_090_000),
+      f("obs:maximum_supply", "Tokenomics", "Maximum supply", "21.00M BTC", 21_000_000),
+    ],
+  };
+  const report = buildEngineReport(payload);
+  for (const key of ["executiveAssessment", "finalConclusion"]) {
+    const text = report.analysis[key].paragraphs.map((p) => p.text).join(" ");
+    assert.doesNotMatch(text, /tracked protocol activity is also part of the available evidence/i, `${key} must not claim fundamentals are available`);
+    assert.doesNotMatch(text, /valuation multiples are also observable/i, `${key} must not claim valuation is available`);
+    assert.match(text, /protocol-level fundamentals|whether market performance is accompanied/i, `${key} must state the actual fundamentals limitation`);
+  }
+});
+
+test("K3. ORCA-shaped material fundamental pace qualification (price outpacing/trailing tracked fundamentals) survives into both Executive Assessment and Final Conclusion, not just Cross-Domain Analysis", () => {
+  const report = buildEngineReport(ORCA_LIKE);
+  for (const key of ["executiveAssessment", "finalConclusion"]) {
+    const text = report.analysis[key].paragraphs.map((p) => p.text).join(" ");
+    assert.match(text, /cross-metric evidence/i, `${key} must carry the pace qualification forward`);
+    assert.doesNotMatch(text, /fundamentals confirm the (size|magnitude) of the (price move|market move)/i);
+  }
+});
+
+test("K4. mixed/contradictory cross-domain evidence (ORCA-shaped: outpacing TVL while trailing revenue) is not silently simplified away in the Final Conclusion", () => {
+  const report = buildEngineReport(ORCA_LIKE);
+  const text = report.analysis.finalConclusion.paragraphs.map((p) => p.text).join(" ");
+  assert.match(text, /mixed across measures|outpaced|trailed/i, "the mixed pace signal must be acknowledged, not collapsed into a single clean confirmation");
+});
+
+// =====================================================================================
 
 let failures = 0;
 for (const { name, run } of cases) {

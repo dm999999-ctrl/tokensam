@@ -256,6 +256,64 @@ function momentumQualification(findings: Finding[], direction: "up" | "down"): {
   return { text: joinList(clauses), evidence };
 }
 
+/**
+ * Domain-synthesis clauses: one function per evidence domain (fundamentals, valuation, market
+ * structure/liquidity, risk), each returning a short, already-grounded paragraph when that domain
+ * has material evidence, or null when it genuinely does not -- never a new calculation, only a
+ * condensed reading of findings the dedicated section for that domain already cites in full.
+ * Shared by the Executive Assessment and Final Conclusion (see below) so neither section silently
+ * drops an available domain just because the market/technical thesis has already been stated, and
+ * neither invents a second, divergent description of the same evidence -- the full detail stays in
+ * each domain's own section; these are the pointer-plus-qualification a top-level synthesis needs.
+ */
+function fundamentalsSynthesisClause(findings: Finding[]): EngineParagraph | null {
+  const fundamentals = byCategory(findings, "fundamentalPerformance");
+  if (fundamentals.length === 0) return null;
+  const synthesisFinding = byType(fundamentals, "fundamentals_improving") ?? byType(fundamentals, "fundamentals_deteriorating") ?? byType(fundamentals, "fundamentals_mixed");
+  const directionWord = synthesisFinding?.findingType === "fundamentals_improving" ? "broadly improving"
+    : synthesisFinding?.findingType === "fundamentals_deteriorating" ? "broadly deteriorating"
+      : synthesisFinding ? "mixed across the available measures"
+        : "directionally positive or negative depending on the specific measure";
+  const pace = fundamentalPaceDirection(findings);
+  const paceEvidence = (["tvl", "revenue"] as const).map((key) => byType(findings, `points_price_change_vs_${key}_growth`)).filter((finding): finding is Finding => finding !== undefined);
+  const paceClause = pace === "outpacing"
+    ? " Market repricing has outpaced the measured change in tracked fundamental activity over the same aligned interval, so this supports the direction of the move more strongly than its magnitude."
+    : pace === "mixed"
+      ? " The available cross-metric evidence is itself mixed across measures, so fundamental activity does not uniformly confirm the pace of the market move (see Cross-Domain Analysis)."
+      : pace === "trailing"
+        ? " The available cross-metric evidence does not indicate the market has outpaced tracked fundamental activity over the same aligned interval."
+        : "";
+  const members = [...(synthesisFinding ? [synthesisFinding] : fundamentals.slice(0, 1)), ...paceEvidence];
+  return para(`Tracked protocol activity is also part of the available evidence and is ${directionWord} over the available observation periods (see Fundamental Analysis for the specific measures and their periods).${paceClause}`, members);
+}
+
+function valuationSynthesisClause(findings: Finding[]): EngineParagraph | null {
+  const ratios = byTypePrefix(byCategory(findings, "valuation"), "ratio_");
+  const fdvGap = byType(findings, "fdv_market_cap_gap");
+  const members = [...ratios, ...(fdvGap ? [fdvGap] : [])];
+  if (members.length === 0) return null;
+  return para("Valuation multiples are also observable from the available evidence (see Valuation Analysis for the specific ratios), but attractiveness cannot be established without an appropriate comparative benchmark, which is not present in the currently available evidence.", members);
+}
+
+function liquiditySynthesisClause(findings: Finding[]): EngineParagraph | null {
+  const liquidity = byCategory(findings, "liquidityMarketStructure");
+  if (liquidity.length === 0) return null;
+  return para("Market-structure and trading-activity evidence is also available (see Market Structure & Liquidity), though trading volume relative to market capitalization does not by itself establish executable liquidity, market depth, or expected slippage.", liquidity);
+}
+
+function riskSynthesisClause(findings: Finding[]): EngineParagraph | null {
+  const risks = byCategory(findings, "risk");
+  const substantive = risks.filter((finding) => finding.findingType !== "no_elevated_risk_indicated");
+  if (substantive.length > 0) {
+    return para("Material risk evidence is also present in the available data (see Key Investment Risks) and qualifies this assessment; a constructive market and technical regime does not by itself indicate low risk.", substantive);
+  }
+  const fallback = risks.find((finding) => finding.findingType === "no_elevated_risk_indicated");
+  if (fallback) {
+    return para("No available risk metric crossed this analysis's defined elevated-risk threshold. This should not be interpreted as an absence of risk -- only as the limit of what the currently available data supports.", fallback);
+  }
+  return null;
+}
+
 function executiveAssessment(findings: Finding[], synthesis: SynthesisResult): EngineParagraph[] {
   const momentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("multi_horizon_") && !finding.findingType.startsWith("volume_multi_horizon_"));
   const direction = momentum ? patternDirection(momentumPattern(momentum)) : null;
@@ -297,6 +355,13 @@ function executiveAssessment(findings: Finding[], synthesis: SynthesisResult): E
   const volumeMomentum = byCategory(findings, "marketPerformance").find((finding) => finding.findingType.startsWith("volume_multi_horizon_"));
   if (volumeMomentum) {
     paragraphs.push(para(`${momentumClause(volumeMomentum, "Trading volume")}${volumeRelationClause(momentumDirection, volumeMomentum)}`, volumeMomentum));
+  }
+
+  // 3.5. Every other materially available evidence domain -- never omitted merely because the
+  // market/technical thesis above has already been established. Each clause is null (and skipped)
+  // when that domain genuinely has no evidence; see fundamentalsSynthesisClause and siblings above.
+  for (const clause of [fundamentalsSynthesisClause(findings), valuationSynthesisClause(findings), liquiditySynthesisClause(findings), riskSynthesisClause(findings)]) {
+    if (clause) paragraphs.push(clause);
   }
 
   // 4. What cannot currently be assessed.
@@ -982,6 +1047,13 @@ function finalConclusion(findings: Finding[], synthesis: SynthesisResult): Engin
     paragraphs.push(para(`The principal qualification is that ${qualification.text}. This does not invalidate the direction of the current regime, but it materially qualifies the risk and confidence associated with it.`, qualification.evidence));
   } else if (conflictingSupport && confluence) {
     paragraphs.push(para(`The principal qualification is that the available technical indicators do not confirm the price direction (${joinList(confluence.conflicting.map(technicalIndicatorClause))}), which limits how far this reading can be extended.`, confluence.conflicting));
+  }
+
+  // 3.5. Every other materially available evidence domain, reconciled into the final weighing --
+  // never omitted merely because the market/technical conclusion is already established. Reuses the
+  // exact same domain clauses as the Executive Assessment (one derivation per domain, not two).
+  for (const clause of [fundamentalsSynthesisClause(findings), valuationSynthesisClause(findings), liquiditySynthesisClause(findings), riskSynthesisClause(findings)]) {
+    if (clause) paragraphs.push(clause);
   }
 
   // 4. What cannot currently be established, and how that bounds confidence.
