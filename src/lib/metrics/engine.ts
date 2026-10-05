@@ -233,48 +233,59 @@ function growthCalculation(points: SeriesPoint[], label: string): Calculation {
   return valid(((current.value / previous.value) - 1) * 100, sources, { startAt: previous.observation.observed_at, endAt: current.observation.observed_at });
 }
 
-function nearest(point: SeriesPoint, candidates: SeriesPoint[], before: number, tolerance: number): SeriesPoint | undefined {
-  return candidates
-    .filter((candidate) => candidate.time < before && Math.abs(candidate.time - point.time) <= tolerance)
-    .sort((a, b) => Math.abs(a.time - point.time) - Math.abs(b.time - point.time) || b.time - a.time)[0];
-}
-
 type CrossChange = { a: number; b: number; sources: SourceRef[]; startAt: string; endAt: string };
 
-function alignedCrossChange(aPoints: SeriesPoint[], bPoints: SeriesPoint[], aName: string, bName: string): CrossChange | Calculation {
-  const day = 24 * 60 * 60 * 1000;
-  const endPairs = aPoints.flatMap((a) => bPoints
-    .filter((b) => Math.abs(a.time - b.time) <= day)
-    .map((b) => ({ a, b, time: Math.max(a.time, b.time), diff: Math.abs(a.time - b.time) })))
-    .sort((x, y) => y.time - x.time || x.diff - y.diff);
-  if (!endPairs.length) return unavailable(`No ${aName}/${bName} observations have end times within 24 hours.`);
+const CROSS_CHANGE_HORIZON_HOURS = 24;
+// DeFiLlama's revenue_24h_usd/tvl_usd only actually update roughly once a day, at a
+// collection time that drifts by several hours day to day, so a tight tolerance around
+// "exactly 24h ago" would often miss a real, same-day-cycle baseline entirely.
+const CROSS_CHANGE_TOLERANCE_HOURS = 6;
 
-  for (const end of endPairs) {
-    const aPriorCandidates = aPoints.filter((point) => point.time < end.a.time).sort((x, y) => y.time - x.time);
-    for (const aPrior of aPriorCandidates) {
-      const bPrior = nearest(aPrior, bPoints.filter((point) => point.time < end.b.time), aPrior.time + day, day);
-      if (!bPrior) continue;
-      const aDuration = end.a.time - aPrior.time;
-      const bDuration = end.b.time - bPrior.time;
-      if (Math.abs(aDuration - bDuration) > day) continue;
-      const startAt = Math.max(aPrior.time, bPrior.time);
-      const endAt = Math.min(end.a.time, end.b.time);
-      if (startAt >= endAt) continue;
-      const sources = [aPrior, end.a, bPrior, end.b].map((point) => observationRef(point.observation));
-      if ([aPrior.value, end.a.value, bPrior.value, end.b.value].some((value) => value < 0)) {
-        return invalid("Aligned history includes a negative value.", sources);
-      }
-      if (aPrior.value === 0 || bPrior.value === 0) return unavailable("A previous aligned value is zero, so percentage change is undefined.", sources);
-      return {
-        a: ((end.a.value / aPrior.value) - 1) * 100,
-        b: ((end.b.value / bPrior.value) - 1) * 100,
-        sources,
-        startAt: new Date(startAt).toISOString(),
-        endAt: new Date(endAt).toISOString(),
-      };
-    }
+function nearestBefore(points: SeriesPoint[], targetTime: number, toleranceMs: number): SeriesPoint | undefined {
+  return points
+    .filter((point) => Math.abs(point.time - targetTime) <= toleranceMs)
+    .sort((a, b) => Math.abs(a.time - targetTime) - Math.abs(b.time - targetTime))[0];
+}
+
+/**
+ * Each series' own ~24h-ago change, computed independently (not opportunistically
+ * paired by nearest shared timestamp): the latest point vs. the point closest to
+ * horizonHours earlier, within toleranceHours. Standardizes every cross-metric
+ * comparison to the same real-world interval regardless of how densely each side is
+ * actually sampled -- previously, pairing by nearest-shared-timestamp let a sparse,
+ * once-daily series (revenue, TVL) get aligned against a densely-sampled one (price,
+ * market cap) over an arbitrarily short window, which could make one real day-over-day
+ * data update look like an extreme move within minutes.
+ */
+function alignedCrossChange(
+  aPoints: SeriesPoint[],
+  bPoints: SeriesPoint[],
+  aName: string,
+  bName: string,
+  horizonHours = CROSS_CHANGE_HORIZON_HOURS,
+  toleranceHours = CROSS_CHANGE_TOLERANCE_HOURS,
+): CrossChange | Calculation {
+  if (aPoints.length === 0 || bPoints.length === 0) return unavailable(`No ${aName}/${bName} observations available.`);
+  const aEnd = aPoints.at(-1)!;
+  const bEnd = bPoints.at(-1)!;
+  const horizonMs = horizonHours * 60 * 60 * 1000;
+  const toleranceMs = toleranceHours * 60 * 60 * 1000;
+  const aPrior = nearestBefore(aPoints.filter((point) => point.time < aEnd.time), aEnd.time - horizonMs, toleranceMs);
+  const bPrior = nearestBefore(bPoints.filter((point) => point.time < bEnd.time), bEnd.time - horizonMs, toleranceMs);
+  if (!aPrior || !bPrior) return unavailable(`Insufficient ~${horizonHours}h-apart history for ${aName} and ${bName}.`);
+
+  const sources = [aPrior, aEnd, bPrior, bEnd].map((point) => observationRef(point.observation));
+  if ([aPrior.value, aEnd.value, bPrior.value, bEnd.value].some((value) => value < 0)) {
+    return invalid("Aligned history includes a negative value.", sources);
   }
-  return unavailable(`Insufficient timestamp-aligned history for ${aName} and ${bName}.`);
+  if (aPrior.value === 0 || bPrior.value === 0) return unavailable("A previous aligned value is zero, so percentage change is undefined.", sources);
+  return {
+    a: ((aEnd.value / aPrior.value) - 1) * 100,
+    b: ((bEnd.value / bPrior.value) - 1) * 100,
+    sources,
+    startAt: new Date(Math.min(aPrior.time, bPrior.time)).toISOString(),
+    endAt: new Date(Math.max(aEnd.time, bEnd.time)).toISOString(),
+  };
 }
 
 type Pair = {
