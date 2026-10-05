@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import type { LiveTokenProfileData } from "@/types/token";
 import type { EngineAnalysisState } from "@/lib/analysis/deterministic-service";
@@ -14,6 +15,8 @@ import { SourcesMethodology } from "@/components/SourcesMethodology";
 import { TokenLogo } from "@/components/TokenLogo";
 import { CopyButton } from "@/components/CopyButton";
 import { PageFooter } from "@/components/AppShell";
+
+const AI_BUTTON_ART = { src: "/brand/ai-research-report-button.png", width: 2000, height: 667 } as const;
 
 function Change({ value, label }: { value: number | null; label: string }) {
   const change = formatChange(value);
@@ -157,9 +160,9 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
           {/* The same canonical dataset the AI analysis receives, as readable text. */}
           <CopyButton value={copyData} label="token data shown on this page" text="Copy data" />
         </p>
-        <button className="blade-button" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis">
-          <span className="blade-copy"><strong>Deep AI Analysis</strong><small>{deepAnalysisButtonHint(analysisState)}</small></span>
-          <span className="blade-edge" aria-hidden="true" />
+        <button className="blade-button blade-button-art" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label={`Deep AI Analysis: ${deepAnalysisButtonHint(analysisState)}`}>
+          <Image src={AI_BUTTON_ART.src} alt="Generate AI Research Report" width={AI_BUTTON_ART.width} height={AI_BUTTON_ART.height} className="blade-art" priority />
+          <small className="blade-hint">{deepAnalysisButtonHint(analysisState)}</small>
         </button>
       </div>
 
