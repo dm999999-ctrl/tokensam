@@ -86,7 +86,11 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .blade-button-art:hover { border-color: transparent; background-color: transparent; filter: brightness(1.08); }
 .blade-button-art::after { content: none; }
 .blade-art { display: block; width: 320px; height: auto; }
-.blade-button-art-sm .blade-art { width: 260px; }
+/* Stacked as a normal in-flow child of .profile-quote (not sharing a row
+   with the one-line breadcrumb): its own height is simply reserved like any
+   other content, so nothing above or below it shifts or leaves empty space. */
+.blade-button-art-sm { margin-bottom: 4px; }
+.blade-button-art-sm .blade-art { width: 220px; }
 .blade-button::after { position: absolute; top: 6px; right: 1px; width: 1px; height: 17px; background: var(--gold); transform: rotate(-45deg); transform-origin: top; content: ""; }
 
 .segmented { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-inset); }
@@ -277,8 +281,7 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .pagination-status { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* Token Profile */
-.crumbs-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
-.crumbs { display: flex; align-items: center; gap: 8px; color: var(--subtle); font-size: 13px; }
+.crumbs { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; color: var(--subtle); font-size: 13px; }
 .crumbs a { color: var(--muted); text-decoration: none; }
 .crumbs a:hover { color: var(--ink-strong); }
 .crumbs span[aria-hidden] { color: var(--crimson); }
