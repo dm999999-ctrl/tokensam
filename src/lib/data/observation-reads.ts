@@ -33,6 +33,7 @@ function fail(error: { message: string } | null, action: string): void {
 }
 
 type PageQuery = (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { message: string; code?: string } | null }>;
+type KeysetQuery = (afterId: number) => PromiseLike<{ data: unknown[] | null; error: { message: string; code?: string } | null }>;
 
 async function readPages<T>(query: PageQuery, action: string): Promise<{ rows: T[]; missing: boolean }> {
   const rows: T[] = [];
@@ -43,6 +44,38 @@ async function readPages<T>(query: PageQuery, action: string): Promise<{ rows: T
     const page = (data ?? []) as T[];
     rows.push(...page);
     if (page.length < PAGE_SIZE) return { rows, missing: false };
+  }
+}
+
+/**
+ * Pages by seeking past the last id instead of by OFFSET.
+ *
+ * OFFSET makes PostgreSQL produce and discard every row before the window, so a
+ * scan of N rows in pages of PAGE_SIZE costs O(N^2/PAGE_SIZE) overall. Measured on
+ * production (2026-10-06) for the 14-day coingecko price_usd series the metrics
+ * engine reads: 107,669 rows, 108 pages, and the single page at OFFSET 100000
+ * already read 101,118 rows and 60,573 buffers to return 1,000. Summed across the
+ * run that query exceeded PostgREST's statement timeout, which is what made the
+ * metrics step fail and time out repeatedly while leaving calculated metrics stale.
+ *
+ * Seeking on `id` is correct here because id is monotonic for an append-only table,
+ * so "id > last seen" never skips or repeats a row even as new rows arrive mid-read.
+ * It does mean rows come back in id order rather than the caller's preferred order;
+ * every caller below already sorts what it needs (latestPerMetric sorts by
+ * newestFirst, and run-calculation.ts sorts the merged series by observed_at, id),
+ * so no caller depends on the database's ordering.
+ */
+async function readKeyset<T extends { id: number }>(query: KeysetQuery, action: string): Promise<{ rows: T[]; missing: boolean }> {
+  const rows: T[] = [];
+  let afterId = 0;
+  for (;;) {
+    const { data, error } = await query(afterId);
+    if (afterId === 0 && isMissingRelation(error)) return { rows, missing: true };
+    fail(error, action);
+    const page = (data ?? []) as T[];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) return { rows, missing: false };
+    afterId = page[page.length - 1].id;
   }
 }
 
@@ -86,12 +119,10 @@ export async function readLatestObservations<T extends Row>(client: SupabaseAdmi
     // current data, so bound the read to the recent window and collapse to the
     // newest row per token/provider/metric in application memory.
     const since = new Date(Date.now() - LATEST_READ_WINDOW_MS).toISOString();
-    const all = await readPages<T>((from, to) => client.from("token_metric_observations")
+    const all = await readKeyset<T>((afterId) => client.from("token_metric_observations")
       .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS).is("excluded_reason", null)
       .gte("observed_at", since)
-      .order("token_id").order("provider_id").order("metric_id")
-      .order("observed_at", { ascending: false }).order("collected_at", { ascending: false }).order("id", { ascending: false })
-      .range(from, to), "read recent observations");
+      .gt("id", afterId).order("id", { ascending: true }).limit(PAGE_SIZE), "read recent observations");
     return latestPerMetric(all.rows);
   };
 
@@ -111,13 +142,12 @@ export async function readObservationWindow<T extends Row>(
   since: Date,
 ): Promise<T[]> {
   if (tokenIds.length === 0) return [];
-  const results = await Promise.all(series.map(({ providerId, metricId }) => readPages<T>((from, to) => client
+  const results = await Promise.all(series.map(({ providerId, metricId }) => readKeyset<T>((afterId) => client
     .from("token_metric_observations")
     .select(COLUMNS).in("token_id", tokenIds).eq("provider_id", providerId).eq("metric_id", metricId)
     .is("excluded_reason", null)
     .gte("observed_at", since.toISOString())
-    .order("observed_at", { ascending: true }).order("id", { ascending: true })
-    .range(from, to), `read ${providerId} ${metricId} history`)));
+    .gt("id", afterId).order("id", { ascending: true }).limit(PAGE_SIZE), `read ${providerId} ${metricId} history`)));
   return results.flatMap((result) => result.rows);
 }
 
