@@ -165,6 +165,8 @@ export async function generateDeterministicAnalysis(
       engineVersion: ENGINE_VERSION,
       analysisVersion: ANALYSIS_VERSION,
       dataSnapshotAt: built.dataSnapshotAt,
+      regime: built.regime,
+      regimeConfidence: built.regimeConfidence,
     },
   };
 

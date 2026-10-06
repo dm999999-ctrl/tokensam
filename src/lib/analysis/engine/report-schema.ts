@@ -46,7 +46,26 @@ export const ENGINE_SECTION_TITLES: Record<EngineSectionKey, string> = {
   finalConclusion: "Final Analytical Conclusion",
 };
 
-export type EngineParagraph = { text: string; sourceIds: string[] };
+/**
+ * How much analytical weight a paragraph's own conclusion should carry — derived in report.ts from
+ * the same already-computed synthesis.ts materiality/persistence/completeness signals (or, for the
+ * data-quality section, from the fact that a data gap is itself a directly observed condition, not
+ * an uncertain one). Never hand-set per paragraph inside narrative.ts and never invented: see
+ * `classifyParagraphs` in report.ts for the exact, fully deterministic derivation.
+ */
+export type Confidence = "high" | "moderate" | "low";
+
+/**
+ * What kind of analytical statement a paragraph is making, per the research-report redesign brief's
+ * requirement to distinguish observation / interpretation / inference / limitation. Derived
+ * structurally in report.ts from which section composed the paragraph (e.g. Cross-Domain Analysis
+ * paragraphs synthesize across categories and are "interpretation"; a plain Market Performance
+ * figure is "observation") — not inferred from the paragraph's own wording, which would be fragile
+ * and could silently drift from what narrative.ts actually writes.
+ */
+export type AnalyticalType = "observation" | "interpretation" | "inference" | "limitation";
+
+export type EngineParagraph = { text: string; sourceIds: string[]; confidence?: Confidence; analyticalType?: AnalyticalType };
 export type EngineSection = { paragraphs: EngineParagraph[] };
 export type ResearchQuestion = { question: string; rationale: string; sourceIds: string[] };
 
@@ -125,6 +144,9 @@ function checkParagraphText(value: string, path: string, ids: string[], check: C
   }
 }
 
+const VALID_CONFIDENCE = new Set<Confidence>(["high", "moderate", "low"]);
+const VALID_ANALYTICAL_TYPE = new Set<AnalyticalType>(["observation", "interpretation", "inference", "limitation"]);
+
 function paragraph(value: unknown, path: string, check: Check): EngineParagraph {
   if (!isRecord(value)) throw new AnalysisValidationError(`${path} must be an object.`);
   const paragraphText = text(value.text, `${path}.text`);
@@ -134,7 +156,13 @@ function paragraph(value: unknown, path: string, check: Check): EngineParagraph 
     check.violations.push(`${path}: must cite at least one source.`);
   }
   checkParagraphText(paragraphText, `${path}.text`, ids, check);
-  return { text: paragraphText, sourceIds: ids };
+  // confidence/analyticalType are server-derived classification labels (see report.ts's
+  // classifyParagraphs), never free text from narrative.ts -- passed through as-is (when present
+  // and one of the fixed enum values) so re-validating a stored report (parseStoredEngineAnalysis)
+  // doesn't silently drop them. Absent on reports generated before this field existed.
+  const confidence = typeof value.confidence === "string" && VALID_CONFIDENCE.has(value.confidence as Confidence) ? (value.confidence as Confidence) : undefined;
+  const analyticalType = typeof value.analyticalType === "string" && VALID_ANALYTICAL_TYPE.has(value.analyticalType as AnalyticalType) ? (value.analyticalType as AnalyticalType) : undefined;
+  return { text: paragraphText, sourceIds: ids, ...(confidence ? { confidence } : {}), ...(analyticalType ? { analyticalType } : {}) };
 }
 
 function section(value: unknown, path: string, check: Check): EngineSection {

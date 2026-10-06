@@ -241,7 +241,7 @@ export function ungroundedNumbers(text: string, cited: EvidenceItem[]): string[]
 
 const NAMED_PERIODS: { pattern: RegExp; evidence: RegExp }[] = [
   { pattern: /\b(24[- ]?hours?|24h|twenty-four[- ]hours?|past day)\b/i, evidence: /24-hour|24 hours|24h/i },
-  { pattern: /\b(7[- ]?days?|7d|seven[- ]days?)\b/i, evidence: /7-day|7 days/i },
+  { pattern: /\b(7[- ]?days?|7d|seven[- ]days?)\b/i, evidence: /7-day|7 days|7d/i },
   { pattern: /\b(30[- ]?days?|30d|thirty[- ]days?)\b/i, evidence: /30-day|30 days|30d/i },
   { pattern: /\b(90[- ]?days?|90d|ninety[- ]days?)\b/i, evidence: /90-day|90 days|90d/i },
   { pattern: /\bweekly\b/i, evidence: /weekly/i },

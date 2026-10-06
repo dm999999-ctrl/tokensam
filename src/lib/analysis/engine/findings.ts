@@ -138,10 +138,13 @@ function patternHorizons(horizons: Horizon[]): Horizon[] {
   return longer.length >= 2 ? longer : horizons;
 }
 
-/** One consolidated momentum finding covering every available horizon — never one finding per horizon. */
-function multiHorizonMomentumFinding(fields: Map<string, PayloadField>): Finding | null {
-  const horizons = availableHorizons(fields);
-  if (horizons.length === 0) return null;
+/**
+ * The direction/pace classification shared by price and volume multi-horizon findings: which of the
+ * twelve MultiHorizonPattern values the available horizons establish, and the severity band for it.
+ * Pulled out of multiHorizonMomentumFinding so the same, single classification logic drives both
+ * price momentum and the volume-horizon finding below — never a second, parallel implementation.
+ */
+function classifyMultiHorizonPattern(horizons: Horizon[]): { pattern: MultiHorizonPattern; severity: FindingSeverity; shortest: Horizon; longest: Horizon; excludedDisagreement: Horizon | null } {
   const forPattern = patternHorizons(horizons);
   const shortest = forPattern[0];
   const longest = forPattern[forPattern.length - 1];
@@ -175,10 +178,55 @@ function multiHorizonMomentumFinding(fields: Map<string, PayloadField>): Finding
     severity = "low";
   }
 
+  // A "consistent" pattern is classified from the longer, pattern-eligible horizons only (see
+  // patternHorizons -- 24H is deliberately excluded there so one noisy day cannot flip a genuine
+  // multi-week trend to "mixed"). But that exclusion must never let the narrative claim the regime
+  // holds "across every available horizon" when an excluded horizon's own sign disagrees -- e.g.
+  // 24H negative with 7D/30D both positive is a real pullback, not evidence this check should hide.
+  // Generalized (not hard-coded to 24H specifically): any horizon outside the pattern-eligible set
+  // whose direction opposes the established consistent direction is surfaced here.
+  let excludedDisagreement: Horizon | null = null;
+  if (pattern.startsWith("consistent_up") || pattern.startsWith("consistent_down")) {
+    const patternDirection = pattern.startsWith("consistent_up") ? "up" : "down";
+    excludedDisagreement = horizons.find((horizon) => !forPattern.includes(horizon) && directionOf(horizon) !== "flat" && directionOf(horizon) !== patternDirection) ?? null;
+  }
+  return { pattern, severity, shortest, longest, excludedDisagreement };
+}
+
+/** One consolidated momentum finding covering every available horizon — never one finding per horizon. */
+function multiHorizonMomentumFinding(fields: Map<string, PayloadField>): Finding | null {
+  const horizons = availableHorizons(fields);
+  if (horizons.length === 0) return null;
+  const { pattern, severity, shortest, longest, excludedDisagreement } = classifyMultiHorizonPattern(horizons);
   return {
     category: "marketPerformance", findingType: `multi_horizon_${pattern}`, severity,
     evidenceIds: horizons.map((horizon) => horizon.id), observationPeriods: horizons.map((horizon) => horizon.period),
-    data: { patternShortestKey: shortest.key, patternLongestKey: longest.key },
+    data: { patternShortestKey: shortest.key, patternLongestKey: longest.key, excludedDisagreementKey: excludedDisagreement?.key ?? null },
+    horizons,
+  };
+}
+
+/**
+ * The same multi-horizon pattern classification applied to the stored volume-history series
+ * (hist:volume_24h/7d/30d -- the same fields "Market history" already displays), so the narrative
+ * can compare the price regime above against how trading activity has moved across the identical
+ * set of horizons, rather than only the single 24h volume/market-cap snapshot used elsewhere.
+ */
+function volumeMultiHorizonFinding(fields: Map<string, PayloadField>): Finding | null {
+  const horizons = (["24h", "7d", "30d"] as const)
+    .map((key) => horizonFrom(key, shown(fields, `hist:volume_${key}`)))
+    .filter((horizon): horizon is Horizon => horizon !== null);
+  if (horizons.length < 2) return null; // a single volume-change figure is already shown elsewhere; this finding is for the multi-horizon comparison specifically
+  const { pattern, severity, shortest, longest, excludedDisagreement } = classifyMultiHorizonPattern(horizons);
+  return {
+    // Deliberately NOT prefixed "multi_horizon_" -- several places in synthesis.ts/report.ts/
+    // narrative.ts match that exact prefix to mean "the price momentum finding" specifically
+    // (thesis-driver construction, the report header's regime classification, etc.); a volume
+    // finding that happened to collide with it would silently be picked up by those price-only
+    // lookups. "volume_multi_horizon_" shares the classification logic but never that prefix.
+    category: "marketPerformance", findingType: `volume_multi_horizon_${pattern}`, severity,
+    evidenceIds: horizons.map((horizon) => horizon.id), observationPeriods: horizons.map((horizon) => horizon.period),
+    data: { patternShortestKey: shortest.key, patternLongestKey: longest.key, excludedDisagreementKey: excludedDisagreement?.key ?? null },
     horizons,
   };
 }
@@ -188,6 +236,8 @@ export function marketPerformanceFindings(payload: ProfilePayload): Finding[] {
   const findings: Finding[] = [];
   const momentum = multiHorizonMomentumFinding(fields);
   if (momentum) findings.push(momentum);
+  const volumeMomentum = volumeMultiHorizonFinding(fields);
+  if (volumeMomentum) findings.push(volumeMomentum);
 
   // Volume level relative to market cap is a market-structure characteristic (see liquidityFindings
   // for the ratio itself); here we only note the price/volume behavioral pattern it produces.
@@ -221,7 +271,7 @@ const growthFinding = (key: "tvl" | "fees" | "revenue", field: PayloadField | nu
   return {
     category: "fundamentalPerformance", findingType: `${key}_growth_${field.raw >= 0 ? "increase" : "decrease"}`,
     severity: severityForMomentum[band], evidenceIds: [field.id], observationPeriods: [field.period],
-    data: { value: field.value, raw: field.raw, period: field.period },
+    data: { value: field.value, raw: field.raw, period: field.period, intervalHours: field.intervalHours },
   };
 };
 
@@ -560,6 +610,16 @@ export function dataQualityFindings(payload: ProfilePayload): Finding[] {
       }
     }
   }
+  // No technical indicator cleared the minimum stored daily-close history to compute at all --
+  // a coverage gap distinct from the per-series insufficient_history_ findings above (those cover
+  // the raw price/volume/market-cap/TVL history itself, not the derived indicators), and the reason
+  // Technical Analysis is omitted from the report entirely rather than rendered with no content.
+  if (technicalFindings(payload).length === 0) {
+    findings.push({
+      category: "dataQuality", findingType: "no_technical_indicators", severity: "low",
+      evidenceIds: ["token"], observationPeriods: [null], data: {},
+    });
+  }
   return findings;
 }
 
@@ -623,27 +683,50 @@ function rsiFinding(fields: Map<string, PayloadField>): Finding | null {
   };
 }
 
-/** Only a close outside the bands is notable — within the bands is the ordinary case, not a Finding. */
+/**
+ * A close outside the bands is the statistically extended case; a close within the bands is the
+ * ordinary case but its %B still says where price sits relative to the 20-day average -- upper or
+ * lower half of the band range -- which the narrative reads alongside range position and momentum
+ * rather than staying silent on it. Severity is only elevated for the two extended states.
+ */
 function bollingerFinding(fields: Map<string, PayloadField>): Finding | null {
   const indicatorField = shown(fields, "calc:ind_bollinger_20_2");
   const percentB = indicatorField?.technicalReadings?.["%B"];
   if (!indicatorField || typeof percentB !== "number") return null;
-  const findingType = percentB >= 1 ? "price_above_upper_band" : percentB <= 0 ? "price_below_lower_band" : null;
-  if (!findingType) return null;
+  const findingType = percentB >= 1 ? "price_above_upper_band" : percentB <= 0 ? "price_below_lower_band" : percentB >= 0.5 ? "price_upper_half_of_bands" : "price_lower_half_of_bands";
   return {
-    category: "technical", findingType, severity: "moderate",
+    category: "technical", findingType, severity: findingType === "price_above_upper_band" || findingType === "price_below_lower_band" ? "moderate" : "low",
     evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period], data: { raw: percentB },
   };
 }
 
+/**
+ * The swing-structure indicator's own numeric readings (see catalog.ts) already carry the last/
+ * previous swing high and low; comparing them against the most recent price observation (its own,
+ * separately cited field — never invented) establishes whether the latest close has since moved
+ * beyond the swing-point structure the pattern itself was built from. This is the "has the market
+ * since moved past the resistance/support implied by the prior swing" reading the narrative needs
+ * to say a lower-high (or higher-low) pattern's implication is weakened or not yet weakened.
+ */
 function swingStructureFinding(fields: Map<string, PayloadField>): Finding | null {
   const indicatorField = shown(fields, "calc:ind_swing_structure");
   if (!indicatorField || !indicatorField.technicalState) return null;
   const slug = indicatorField.technicalState.toLowerCase().replace(/,\s*/g, "_").replace(/\s+/g, "_");
+  const readings = indicatorField.technicalReadings;
+  const lastHigh = readings?.["Last swing high"];
+  const lastLow = readings?.["Last swing low"];
+  const priceField = shown(fields, "obs:price");
+  const latestClose = priceField?.raw;
+  const evidenceIds = [indicatorField.id];
+  let beyondLastSwing: "above_high" | "below_low" | null = null;
+  if (typeof latestClose === "number" && typeof lastHigh === "number" && latestClose > lastHigh) beyondLastSwing = "above_high";
+  else if (typeof latestClose === "number" && typeof lastLow === "number" && latestClose < lastLow) beyondLastSwing = "below_low";
+  if (beyondLastSwing && priceField) evidenceIds.push(priceField.id);
   return {
     category: "technical", findingType: `swing_structure_${slug}`,
     severity: indicatorField.technicalState === "Higher high, higher low" || indicatorField.technicalState === "Lower high, lower low" ? "moderate" : "low",
-    evidenceIds: [indicatorField.id], observationPeriods: [indicatorField.period], data: {},
+    evidenceIds, observationPeriods: [indicatorField.period],
+    data: { lastHigh: lastHigh ?? null, lastLow: lastLow ?? null, latestClose: latestClose ?? null, beyondLastSwing },
   };
 }
 
