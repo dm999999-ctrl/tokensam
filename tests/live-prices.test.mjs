@@ -17,7 +17,7 @@ function token(id, overrides = {}) {
     volume24hUsd: 50, calculated: { volume_to_market_cap: 0.05 },
     fdvSupply: 20, fdvUsd: 2000, circulatingSupply: 10, maximumSupply: 20,
     tvlUsd: null, tvlChange30dPct: null, marketCapChange24hPct: null,
-    volumeChange48hPct: null, volumeToMarketCapChange48hPct: null,
+    volumeChange24hPct: null, volumeToMarketCapChange24hPct: null,
     fees24hUsd: null, revenue24hUsd: null, observedAt: fresh,
     metricSources: {
       priceUsd: { providerId: "coingecko", collectedAt: fresh, note: "stored" },
