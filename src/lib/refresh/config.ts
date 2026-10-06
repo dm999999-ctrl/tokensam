@@ -1,7 +1,10 @@
 export type ProviderStep = "coingecko" | "binance" | "defillama" | "dexscreener" | "defillama_coins";
 export type RefreshStep = ProviderStep | "metrics";
 
-export const PROVIDER_STEPS: ProviderStep[] = ["coingecko", "binance", "dexscreener", "defillama", "defillama_coins"];
+// Binance is temporarily out of PROVIDER_STEPS: every run currently returns HTTP 404,
+// consistent with BINANCE_API_BASE_URL being misconfigured on Vercel (not pointed at a
+// host serving /api/v3/ticker/24hr). Re-add "binance" once that env var is confirmed fixed.
+export const PROVIDER_STEPS: ProviderStep[] = ["coingecko", "dexscreener", "defillama", "defillama_coins"];
 
 const MINUTE = 60 * 1000;
 
