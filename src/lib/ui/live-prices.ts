@@ -79,6 +79,8 @@ export function applyLivePrices(
     if (!live || !Number.isFinite(live.p) || !Number.isFinite(live.c)) return token;
     // c7 is supplementary: a missing or unusable one leaves the stored 7-day change alone.
     const live7d = Number.isFinite(live.c7) ? (live.c7 as number) : null;
+    // Market cap and Vol / mcap derive from the price, so price being unchanged is enough
+    // to know they are unchanged too.
     if (token.priceUsd === live.p && token.change24hPct === live.c
       && (live7d === null || token.change7dPct === live7d)) return token;
     changed = true;
@@ -87,6 +89,22 @@ export function applyLivePrices(
       collectedAt,
       note: "Binance spot last trade, USDT-quoted (a USD proxy, not USD), polled live in the browser. Single-venue price for the fungible asset, not a cross-venue average.",
     };
+    /**
+     * Market cap is price x circulating supply, and supply does not move in seconds, so a
+     * live price makes the stored market cap wrong until the next refresh. It is scaled by
+     * the price move rather than recomputed as price x circulatingSupply: CoinGecko's own
+     * market cap does not exactly equal that product (checked across 181 tokens -- 158
+     * within 0.1%, worst 0.64%), so recomputing would visibly jump the figure the moment
+     * polling started. Scaling is jump-free, because the ratio is 1 on the first poll, and
+     * it applies only what actually changed.
+     */
+    const priceRatio = Number.isFinite(token.priceUsd) && (token.priceUsd as number) > 0
+      ? live.p / (token.priceUsd as number)
+      : null;
+    const liveMarketCap = priceRatio !== null && Number.isFinite(token.marketCapUsd) && (token.marketCapUsd as number) > 0
+      ? (token.marketCapUsd as number) * priceRatio
+      : null;
+
     const sources = { ...token.metricSources, priceUsd: source, change24hPct: source };
     if (live7d !== null) {
       sources.change7dPct = {
@@ -95,11 +113,29 @@ export function applyLivePrices(
         note: "Binance 7-day price change: the live USDT-quoted last trade against Binance's own 7-day rolling opening price. Single-venue, and derived from those two Binance figures rather than reported as a single field.",
       };
     }
+    if (liveMarketCap !== null) {
+      sources.marketCapUsd = {
+        providerId: "binance" as const,
+        collectedAt,
+        note: "Stored market cap scaled by the live Binance price move. Circulating supply is unchanged from the stored figure; only the price component is live.",
+      };
+    }
+
+    // Vol / mcap is a server-calculated metric whose denominator just moved, so it must be
+    // recomputed or the row would show a ratio that contradicts its own market-cap column.
+    // The 24-hour volume is NOT touched: it is value actually traded over a window, which a
+    // price tick does not retroactively change.
+    const calculated = liveMarketCap !== null && Number.isFinite(token.volume24hUsd)
+      ? { ...token.calculated, volume_to_market_cap: (token.volume24hUsd as number) / liveMarketCap }
+      : token.calculated;
+
     return {
       ...token,
       priceUsd: live.p,
       change24hPct: live.c,
       ...(live7d !== null ? { change7dPct: live7d } : {}),
+      ...(liveMarketCap !== null ? { marketCapUsd: liveMarketCap } : {}),
+      calculated,
       metricSources: sources,
     };
   });

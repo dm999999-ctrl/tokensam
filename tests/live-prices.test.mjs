@@ -14,7 +14,7 @@ function token(id, overrides = {}) {
   return {
     id, name: id, symbol: "X", chain: "Ethereum", category: "DeFi",
     priceUsd: 100, change24hPct: 1, change7dPct: 7, marketCapUsd: 1000,
-    volume24hUsd: 50, fdvUsd: null, circulatingSupply: 10, maximumSupply: 20,
+    volume24hUsd: 50, calculated: { volume_to_market_cap: 0.05 }, fdvUsd: null, circulatingSupply: 10, maximumSupply: 20,
     tvlUsd: null, tvlChange30dPct: null, marketCapChange24hPct: null,
     volumeChange48hPct: null, volumeToMarketCapChange48hPct: null,
     fees24hUsd: null, revenue24hUsd: null, observedAt: fresh,
@@ -41,10 +41,13 @@ test("a live price replaces the stored one and is attributed to Binance", () => 
   assert.equal(row.metricSources.priceUsd.providerId, "binance");
   assert.equal(row.metricSources.change24hPct.providerId, "binance");
   assert.match(row.metricSources.priceUsd.note, /USDT-quoted/);
-  // Everything else is untouched.
-  assert.equal(row.marketCapUsd, 1000);
-  assert.equal(row.change7dPct, 7);
+  // Market cap is a function of price, so it scales with it: 1000 x (123.45/100).
+  assert.equal(row.marketCapUsd, 1234.5);
+  // Volume is NOT a function of price -- it is value actually traded over a window, which
+  // a price tick does not retroactively change.
   assert.equal(row.volume24hUsd, 50);
+  // No 7-day figure was supplied in this payload, so the stored one stands.
+  assert.equal(row.change7dPct, 7);
 });
 
 test("a live 7-day change replaces the stored one and is attributed to Binance", () => {
@@ -78,6 +81,41 @@ test("a 7-day change that moved alone still produces a new array", () => {
   }, NOW);
   assert.notEqual(moved, input);
   assert.equal(moved[0].change7dPct, 8.75);
+});
+
+test("market cap scales with the price move, and Vol / mcap follows", () => {
+  // Price doubles: market cap must double, and volume/mcap must halve, or the row would
+  // contradict itself. Volume is untouched -- a price tick does not change what was traded.
+  const [row] = applyLivePrices([token(MAPPED_ID)], {
+    asOf: fresh, prices: { [MAPPED_SYMBOL]: { p: 200, c: 5 } },
+  }, NOW);
+
+  assert.equal(row.marketCapUsd, 2000, "1000 x (200/100)");
+  assert.equal(row.volume24hUsd, 50, "24h volume is not a function of price");
+  assert.equal(row.calculated.volume_to_market_cap, 0.025, "50 / 2000");
+  assert.equal(row.metricSources.marketCapUsd.providerId, "binance");
+  assert.match(row.metricSources.marketCapUsd.note, /Circulating supply is unchanged/);
+});
+
+test("market cap does not jump when polling starts", () => {
+  // First poll typically returns the same price the row was rendered with; the ratio is
+  // then 1 and the stored market cap must come through untouched.
+  const [row] = applyLivePrices([token(MAPPED_ID, { change24hPct: 99 })], {
+    asOf: fresh, prices: { [MAPPED_SYMBOL]: { p: 100, c: 1 } },
+  }, NOW);
+  assert.equal(row.marketCapUsd, 1000);
+  assert.equal(row.calculated.volume_to_market_cap, 0.05);
+});
+
+test("an unusable price or market cap leaves both the cap and the ratio alone", () => {
+  for (const overrides of [{ priceUsd: 0 }, { priceUsd: null }, { marketCapUsd: null }]) {
+    const [row] = applyLivePrices([token(MAPPED_ID, overrides)], {
+      asOf: fresh, prices: { [MAPPED_SYMBOL]: { p: 200, c: 5 } },
+    }, NOW);
+    assert.equal(row.marketCapUsd, overrides.marketCapUsd === null ? null : 1000, "no fabricated market cap");
+    assert.equal(row.calculated.volume_to_market_cap, 0.05, "stored ratio survives");
+    assert.equal(row.priceUsd, 200, "the live price still applies");
+  }
 });
 
 test("a token with no live entry keeps its server-rendered value and source", () => {
