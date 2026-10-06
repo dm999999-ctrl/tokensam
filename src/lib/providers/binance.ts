@@ -76,11 +76,28 @@ export class BinanceApiError extends Error {
   }
 }
 
+/** Market-data path every Binance-compatible host serves these endpoints under. */
+const API_PATH = "/api/v3";
+
 export function getBinanceConfig(
   env: Record<string, string | undefined> = process.env,
 ): { baseUrl: string } {
-  const override = env.BINANCE_API_BASE_URL?.trim().replace(/\/$/, "");
-  return { baseUrl: override || DEFAULT_BASE_URL };
+  const override = env.BINANCE_API_BASE_URL?.trim().replace(/\/+$/, "");
+  if (!override) return { baseUrl: DEFAULT_BASE_URL };
+
+  // A bare origin ("https://data-api.binance.vision") is accepted and gets the standard
+  // /api/v3 prefix appended. Without this, such a value silently builds requests against
+  // the host root ("/ticker/24hr") and Binance answers 404 on every run -- which is exactly
+  // what the first deployment of this collector did. Anything with a path of its own is
+  // left untouched, so a proxy mounted under a custom prefix still works as given.
+  let pathname: string;
+  try {
+    pathname = new URL(override).pathname;
+  } catch {
+    // Not a parseable URL; pass it through and let the request surface the error.
+    return { baseUrl: override };
+  }
+  return { baseUrl: pathname === "/" || pathname === "" ? `${override}${API_PATH}` : override };
 }
 
 function splitIntoBatches<T>(items: T[], batchSize: number): T[][] {

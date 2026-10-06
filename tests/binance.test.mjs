@@ -29,6 +29,19 @@ test("the default host is the unrestricted market-data mirror, overridable by en
   );
 });
 
+test("a bare-origin override gets /api/v3, which a custom proxy path keeps", () => {
+  // The first production deployment set this to a bare origin, so every request went to
+  // the host root and Binance answered 404 on all 288 runs/day. Both forms must work.
+  for (const value of ["https://data-api.binance.vision", "https://data-api.binance.vision/"]) {
+    assert.equal(getBinanceConfig({ BINANCE_API_BASE_URL: value }).baseUrl, "https://data-api.binance.vision/api/v3");
+  }
+  // A host with its own path is a deliberate proxy mount and is left exactly as given.
+  assert.equal(
+    getBinanceConfig({ BINANCE_API_BASE_URL: "https://worker.example/binance-proxy" }).baseUrl,
+    "https://worker.example/binance-proxy",
+  );
+});
+
 test("ticker normalization writes only price and 24h change, with provenance", () => {
   const collectedAt = "2026-10-06T12:00:00.000Z";
   const snapshot = normalizeBinanceTicker(
