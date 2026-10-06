@@ -17,13 +17,13 @@ type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createS
 export const CONTEXT_VERSION = "3";
 
 export type EvidenceScope = "token" | "protocol" | "chain" | "market";
-const PROVIDER_SCOPE: Record<string, EvidenceScope> = { coingecko: "token", defillama_coins: "token", defillama: "protocol", dexscreener: "market" };
+const PROVIDER_SCOPE: Record<string, EvidenceScope> = { coingecko: "token", binance: "market", defillama_coins: "token", defillama: "protocol", dexscreener: "market" };
 /** Requested windows reported to the model (all fit inside CONTEXT_HISTORY_DAYS). */
 const CONTEXT_COVERAGE_PERIODS = ["24H", "7D", "30D"] as const;
 /** History supplied to the model: one point per UTC day for this many days. */
 export const CONTEXT_HISTORY_DAYS = 30;
 const HOUR_MS = 60 * 60 * 1000;
-const PROVIDER_LABEL: Record<ProviderStep, string> = { coingecko: "CoinGecko", defillama: "DeFiLlama", dexscreener: "DEX Screener", defillama_coins: "DeFiLlama (token prices)" };
+const PROVIDER_LABEL: Record<ProviderStep, string> = { coingecko: "CoinGecko", binance: "Binance", defillama: "DeFiLlama", dexscreener: "DEX Screener", defillama_coins: "DeFiLlama (token prices)" };
 const HISTORY_SERIES = [
   { providerId: "coingecko", metricId: "price_usd" },
   { providerId: "coingecko", metricId: "market_cap_usd" },

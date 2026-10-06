@@ -1,4 +1,5 @@
 import { getDefiLlamaConfig } from "../providers/defillama.ts";
+import { runBinanceCollection } from "../providers/run-binance-collection.ts";
 import { runCoinGeckoCollection } from "../providers/run-coingecko-collection.ts";
 import { repairCoinGeckoDailyGaps } from "../providers/repair-coingecko-daily-gaps.ts";
 import { repairDefiLlamaDailyGaps } from "../providers/repair-defillama-daily-gaps.ts";
@@ -53,6 +54,9 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
       }
     },
   },
+  // Live price and 24h change only; no gap repair, because Binance is never the
+  // history provider (see docs/binance-integration.md).
+  binance: { collect: (client, options) => runBinanceCollection(client, options) },
   dexscreener: { collect: (client, options) => runDexScreenerCollection(client, options) },
   defillama: {
     // The written-permission gate is enforced, never bypassed: without it the step is skipped.

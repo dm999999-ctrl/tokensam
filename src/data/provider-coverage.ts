@@ -1,4 +1,5 @@
 import { canonicalTokens, type CanonicalTokenDefinition } from "./canonical-tokens.ts";
+import { binanceSymbols, binanceUnmapped } from "./binance-token-mappings.ts";
 import { coingeckoTokenIds } from "./coingecko-token-mappings.ts";
 import { defillamaProtocolMappings } from "./defillama-protocol-mappings.ts";
 import { dexScreenerTokenMappings } from "./dexscreener-token-mappings.ts";
@@ -11,7 +12,7 @@ import { dexScreenerTokenMappings } from "./dexscreener-token-mappings.ts";
  * carries an explicit reason so the UI and AI can say *why* data is absent.
  */
 
-export type CoverageProvider = "coingecko" | "defillama_coins" | "defillama" | "dexscreener";
+export type CoverageProvider = "coingecko" | "binance" | "defillama_coins" | "defillama" | "dexscreener";
 export type CoverageScope = "token" | "protocol" | "market";
 export type CoverageReason =
   | "provider_does_not_support_token"
@@ -44,6 +45,7 @@ export type ProviderCoverage = {
 
 export const PROVIDER_LABELS: Record<CoverageProvider, string> = {
   coingecko: "CoinGecko",
+  binance: "Binance",
   defillama_coins: "DeFiLlama (token prices)",
   defillama: "DeFiLlama (protocol)",
   dexscreener: "DEX Screener",
@@ -104,6 +106,24 @@ export function tokenCoverage(token: CanonicalTokenDefinition): ProviderCoverage
       mappingClass: "D_not_supported", verification: null, reason: "provider_does_not_support_token", detail: "No CoinGecko ID is mapped.",
     };
 
+  const binanceSymbol = binanceSymbols[token.id] ?? null;
+  const binanceGap = binanceUnmapped[token.id];
+  const binance: ProviderCoverage = binanceSymbol
+    ? {
+      provider: "binance", label: PROVIDER_LABELS.binance, scope: "market", status: "mapped", identifier: binanceSymbol,
+      mappingClass: "C_manual_curation",
+      verification: "Curated Binance spot symbol, confirmed TRADING and spot-enabled in GET /api/v3/exchangeInfo (2026-10-06); never derived from the ticker at runtime.",
+      reason: null,
+      detail: "Preferred live price and 24-hour price change (Binance spot last trade, USDT-quoted). Not market cap, supply, volume, or history -- those stay CoinGecko's.",
+    }
+    : {
+      provider: "binance", label: PROVIDER_LABELS.binance, scope: "market", status: "unavailable", identifier: null,
+      mappingClass: "D_not_supported", verification: null,
+      reason: binanceGap?.reason ?? "no_provider_data",
+      detail: binanceGap?.detail
+        ?? "No curated Binance spot symbol exists for this token; the live price falls back to CoinGecko.",
+    };
+
   const defillamaCoins: ProviderCoverage = llamaKey
     ? {
       provider: "defillama_coins", label: PROVIDER_LABELS.defillama_coins, scope: "token", status: "mapped", identifier: llamaKey,
@@ -147,7 +167,7 @@ export function tokenCoverage(token: CanonicalTokenDefinition): ProviderCoverage
       detail: dex?.unmappedReason ?? "No verified DEX Screener address mapping exists.",
     };
 
-  return [coingecko, defillamaCoins, defillamaProtocol, dexscreener];
+  return [coingecko, binance, defillamaCoins, defillamaProtocol, dexscreener];
 }
 
 export function coverageMatrix(): { tokenId: string; symbol: string; isNative: boolean; coverage: ProviderCoverage[] }[] {

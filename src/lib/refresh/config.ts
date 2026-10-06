@@ -1,7 +1,7 @@
-export type ProviderStep = "coingecko" | "defillama" | "dexscreener" | "defillama_coins";
+export type ProviderStep = "coingecko" | "binance" | "defillama" | "dexscreener" | "defillama_coins";
 export type RefreshStep = ProviderStep | "metrics";
 
-export const PROVIDER_STEPS: ProviderStep[] = ["coingecko", "dexscreener", "defillama", "defillama_coins"];
+export const PROVIDER_STEPS: ProviderStep[] = ["coingecko", "binance", "dexscreener", "defillama", "defillama_coins"];
 
 const MINUTE = 60 * 1000;
 
@@ -34,6 +34,14 @@ const MINUTE = 60 * 1000;
  */
 export const REFRESH_POLICY: Record<ProviderStep, { label: string; intervalMs: number; staleAfterMs: number; timeoutMs: number }> = {
   coingecko: { label: "CoinGecko", intervalMs: 15 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 140_000 },
+  // Binance supplies the live price and 24h change only (see binance.ts). It is the cheapest
+  // provider here by a wide margin -- no API key, and the whole universe costs 80 of Binance's
+  // published 6,000 request-weight/minute per IP in two requests -- so it refreshes on the
+  // shortest cadence the external scheduler can actually deliver. staleAfterMs is kept tight
+  // on purpose: once a Binance price is older than this the read layer stops preferring it and
+  // falls back to CoinGecko, so a long staleness window would let a frozen venue price linger
+  // in front of a fresher CoinGecko one.
+  binance: { label: "Binance", intervalMs: 5 * MINUTE, staleAfterMs: 20 * MINUTE, timeoutMs: 30_000 },
   dexscreener: { label: "DEX Screener", intervalMs: 30 * MINUTE, staleAfterMs: 2 * 60 * MINUTE, timeoutMs: 40_000 },
   // Current TVL + fees + revenue: three small requests per protocol (72 for 24), paced 1.1 s apart.
   // Measured 2026-09-25 at 109 s for 24 protocols, so the budget is 150 s (pacing is unchanged).

@@ -9,6 +9,7 @@
 /** Dataset name for each collection step, used for freshness lines. */
 export const DATASET_LABELS: Record<string, string> = {
   coingecko: "Market data",
+  binance: "Live exchange price",
   defillama_coins: "Reference token prices",
   defillama: "Protocol data",
   dexscreener: "DEX market data",
@@ -22,6 +23,7 @@ export function datasetLabel(providerId: string, fallback: string): string {
 /** Data provenance: which external service supplies each dataset. Only rendered in that disclosure. */
 export const TECHNICAL_PROVENANCE: { dataset: string; provider: string }[] = [
   { dataset: "Market data", provider: "CoinGecko" },
+  { dataset: "Live exchange price", provider: "Binance" },
   { dataset: "Reference token prices", provider: "DeFiLlama (coins API)" },
   { dataset: "Protocol data", provider: "DeFiLlama" },
   { dataset: "DEX market data", provider: "DEX Screener" },
@@ -34,6 +36,9 @@ const REPLACEMENTS: [RegExp, string][] = [
   [/\bDeFiLlama\b/g, "associated-protocol"],
   [/\bDEX Screener\b/g, "DEX market"],
   [/\bCoinGecko\b/g, "token"],
+  // Binance appears in the stored provenance note on every live price observation
+  // (see BINANCE_PRICE_NOTE); the same policy applies to it as to the other providers.
+  [/\bBinance\b/g, "exchange"],
 ];
 
 /**

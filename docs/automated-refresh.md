@@ -1,6 +1,6 @@
 # Automated data refresh
 
-Phase 11B keeps Supabase current without running each collector by hand. A single server-side orchestrator runs the existing CoinGecko, DEX Screener, and DeFiLlama collectors, recalculates metrics, and records the outcome. The browser never calls a provider. It only reads Supabase through the server.
+Phase 11B keeps Supabase current without running each collector by hand. A single server-side orchestrator runs the CoinGecko, Binance, DEX Screener, and DeFiLlama collectors, recalculates metrics, and records the outcome. The browser never calls a provider. It only reads Supabase through the server.
 
 ```
 Vercel Cron (hourly) ─► GET /api/cron/refresh  (Bearer CRON_SECRET)
@@ -45,6 +45,7 @@ The cron fires hourly, and each run collects only the providers that are **due**
 | Provider | Interval | Shown stale after | Step budget | Basis |
 | --- | --- | --- | --- | --- |
 | CoinGecko | 1 hour | 3 hours | 90 s | One `/coins/markets` call per run (100 IDs, max 250 per call) ≈ 744 calls/month against the documented 10,000/month Demo allowance |
+| Binance | 5 minutes | 20 minutes | 30 s | Live price and 24h change only. No API key; two requests per run at weight 40 each against a published 6,000 request-weight/minute per IP. Shown stale after 20 min because the read layer stops preferring Binance past that and falls back to CoinGecko |
 | DEX Screener | 1 hour | 3 hours | 90 s | About 13 batched requests per run (63 mapped tokens, up to 30 addresses per chain request) against the documented 300 requests/minute |
 | DeFiLlama | 6 hours | 24 hours | 150 s | No published numeric free-tier limit, so refreshed least often. Fees and revenue are 24-hour totals and TVL history is daily. 72 requests for 24 protocols took 109 s on 2026-09-25, so the budget rose from 120 s. Providers run in parallel, and 150 s plus 90 s for metrics stays below the route's 300 s limit |
 | DeFiLlama (token prices) | 1 hour | 3 hours | 30 s | Four batched requests (25 keys each) for 100 tokens |

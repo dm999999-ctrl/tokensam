@@ -8,7 +8,8 @@ The projection logic lives in [`src/lib/data/live-data.ts`](../src/lib/data/live
 
 | UI value | Table | Provider / rule |
 | --- | --- | --- |
-| Price, 24h/7d change, market cap, 24h volume, supply | `token_metric_observations` | CoinGecko only |
+| Price, 24h change | `token_metric_observations` | **Binance preferred, CoinGecko fallback** — see [binance-integration.md](binance-integration.md). `metricSources` records which one supplied the value |
+| 7d change, market cap, 24h volume, supply | `token_metric_observations` | CoinGecko only (Binance publishes none of these, and its volume is single-venue) |
 | TVL, 24h fees, 24h revenue | `token_metric_observations` | DeFiLlama only (protocol-level association) |
 | TVL · 30d | `token_metric_observations` | Computed server-side from DeFiLlama TVL observations ~30 days apart (3-day baseline tolerance) |
 | Calculated metrics | `calculated_metric_observations` + `calculated_metric_definitions` | Latest row per metric; category comes from the definition |

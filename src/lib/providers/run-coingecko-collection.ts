@@ -30,7 +30,11 @@ const PRICE_CHANGE_METRICS = [
   {
     id: "price_change_24h_pct",
     name: "24-hour price change",
-    description: "CoinGecko-reported 24-hour price change percentage.",
+    // Provider-neutral: Binance writes this metric too (see run-binance-collection.ts), and a
+    // metric_definitions row is shared across providers, so naming one here would have the two
+    // collectors overwrite each other's description every run. Per-observation provenance lives
+    // in the observation's own note.
+    description: "Provider-reported 24-hour price change percentage. The reporting provider is recorded per observation.",
   },
   {
     id: "price_change_7d_pct",

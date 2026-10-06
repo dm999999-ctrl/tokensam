@@ -1,7 +1,7 @@
 export type TokenCategory = string;
 
 export type MetricSource = {
-  providerId: "coingecko" | "defillama" | "dexscreener" | "defillama_coins" | "geckoterminal" | "calculated";
+  providerId: "coingecko" | "binance" | "defillama" | "dexscreener" | "defillama_coins" | "geckoterminal" | "calculated";
   collectedAt: string;
   note?: string | null;
 };
