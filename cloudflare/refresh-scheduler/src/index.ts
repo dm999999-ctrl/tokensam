@@ -1,3 +1,5 @@
+import { BINANCE_SYMBOLS } from "./binance-symbols.ts";
+
 export interface Env {
   /** Base URL of the Vercel deployment, e.g. "https://tokensam.vercel.app" (no trailing slash needed). */
   REFRESH_URL: string;
@@ -18,6 +20,95 @@ export interface Env {
 }
 
 const COINGECKO_PROXY_PREFIX = "/coingecko-proxy";
+const LIVE_PRICES_PATH = "/binance-prices";
+
+/**
+ * Seconds a live-price response is cached at the edge.
+ *
+ * This is what decouples viewer count from upstream load: every viewer polling
+ * inside the same window is served one cached response, so Binance sees at most
+ * 12 requests/minute no matter how many dashboards are open.
+ */
+const LIVE_PRICES_TTL_SECONDS = 5;
+
+/**
+ * This route is deliberately PUBLIC -- unlike every other route here, it carries no
+ * `Authorization: Bearer <CRON_SECRET>`. It is polled from the browser, where any
+ * secret would be readable in client JavaScript, so there is nothing to check.
+ *
+ * Two things keep that from making it an open Binance proxy. The caller sends no
+ * symbol list: the symbols come from BINANCE_SYMBOLS, generated from the canonical
+ * mapping, so the route can only ever quote this project's 180 tokens. And the
+ * response is edge-cached for LIVE_PRICES_TTL_SECONDS, so hammering it costs
+ * Binance nothing beyond one request per window. The data itself is public market
+ * data, which is why `*` is an acceptable CORS origin.
+ */
+function corsHeaders(): Record<string, string> {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-max-age": "86400",
+  };
+}
+
+async function handleBinancePrices(request: Request, ctx: ExecutionContext): Promise<Response> {
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
+  if (request.method !== "GET") {
+    return Response.json({ error: "Method not allowed" }, { status: 405, headers: corsHeaders() });
+  }
+
+  // Cache by path alone: the response never varies by caller, so every viewer in the
+  // window shares one entry.
+  const cacheKey = new Request(new URL(LIVE_PRICES_PATH, request.url).toString(), { method: "GET" });
+  const cached = await caches.default.match(cacheKey);
+  if (cached) {
+    const withCors = new Response(cached.body, cached);
+    for (const [key, value] of Object.entries(corsHeaders())) withCors.headers.set(key, value);
+    withCors.headers.set("x-live-prices-cache", "hit");
+    return withCors;
+  }
+
+  // data-api.binance.vision, not api.binance.com: the latter answers 451 to
+  // US-originating requests. Same reasoning as src/lib/providers/binance.ts.
+  const url = new URL("https://data-api.binance.vision/api/v3/ticker/24hr");
+  url.searchParams.set("symbols", JSON.stringify(BINANCE_SYMBOLS));
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(8_000) });
+  } catch {
+    return Response.json({ error: "Binance request failed." }, { status: 502, headers: corsHeaders() });
+  }
+  if (!upstream.ok) {
+    // Never pass Binance's body through; the status is enough for the client to back off.
+    return Response.json({ error: `Binance returned HTTP ${upstream.status}.` }, { status: 502, headers: corsHeaders() });
+  }
+
+  const payload: unknown = await upstream.json();
+  if (!Array.isArray(payload)) {
+    return Response.json({ error: "Binance returned an unexpected ticker response." }, { status: 502, headers: corsHeaders() });
+  }
+
+  const prices: Record<string, { p: number; c: number }> = {};
+  for (const item of payload as { symbol?: string; lastPrice?: string; priceChangePercent?: string }[]) {
+    const price = Number(item?.lastPrice);
+    const change = Number(item?.priceChangePercent);
+    // A non-finite field is omitted rather than sent as 0: the client then keeps the
+    // server-rendered value for that token instead of showing a fabricated price.
+    if (!item?.symbol || !Number.isFinite(price) || !Number.isFinite(change)) continue;
+    prices[item.symbol] = { p: price, c: change };
+  }
+
+  const response = Response.json({ asOf: new Date().toISOString(), prices }, {
+    headers: {
+      ...corsHeaders(),
+      "cache-control": `public, max-age=${LIVE_PRICES_TTL_SECONDS}`,
+      "x-live-prices-cache": "miss",
+    },
+  });
+  ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
+  return response;
+}
 
 /**
  * Forwards a CoinGecko request through Cloudflare's network instead of Vercel's, working
@@ -247,9 +338,15 @@ export default {
   // A plain GET lets the deployment be smoke-tested from a browser/curl without waiting for
   // the next Cron Trigger tick; it does not run on any schedule itself. A request under
   // /coingecko-proxy instead takes the dedicated CoinGecko-egress path above.
-  async fetch(request: Request, env: Env): Promise<Response> {
-    if (new URL(request.url).pathname.startsWith(COINGECKO_PROXY_PREFIX)) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const { pathname } = new URL(request.url);
+    if (pathname.startsWith(COINGECKO_PROXY_PREFIX)) {
       return handleCoinGeckoProxy(request, env);
+    }
+    // Public, edge-cached live prices for the dashboard's polling. Checked before the
+    // fallback below, which would otherwise run a whole refresh on a browser GET.
+    if (pathname === LIVE_PRICES_PATH) {
+      return handleBinancePrices(request, ctx);
     }
     const results = await run(env);
     return Response.json({ ok: results.every((result) => !result.error), results });
