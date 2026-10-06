@@ -168,17 +168,21 @@ test("a provider or metric outside the requested series is never returned", asyn
 test("readLatestObservations still collapses to the newest row per token/provider/metric", async () => {
   // Row order from the database is now id order, not newest-first, so the
   // newest-per-metric collapse must come from latestPerMetric rather than the query.
+  // Relative to now, NOT fixed dates: readLatestObservations only reads a 6-hour window
+  // (LATEST_READ_WINDOW_MS), so fixed timestamps silently fall out of range as wall-clock
+  // time passes and the test starts returning nothing.
+  const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
   const rows = [
-    observation(1, "token-a", "coingecko", "price_usd", "2026-10-06T09:00:00.000Z"),
-    observation(2, "token-a", "coingecko", "price_usd", "2026-10-06T11:00:00.000Z"),
-    observation(3, "token-a", "coingecko", "price_usd", "2026-10-06T10:00:00.000Z"),
+    observation(1, "token-a", "coingecko", "price_usd", minutesAgo(180)),
+    observation(2, "token-a", "coingecko", "price_usd", minutesAgo(60)),
+    observation(3, "token-a", "coingecko", "price_usd", minutesAgo(120)),
   ];
   const db = createFakeSupabase({ seed: { token_metric_observations: rows }, views: false });
 
   const read = await readLatestObservations(db.client, ["token-a"]);
   const prices = read.filter((row) => row.metric_id === "price_usd");
   assert.equal(prices.length, 1, "one row per token/provider/metric");
-  assert.equal(prices[0].observed_at, "2026-10-06T11:00:00.000Z", "the newest observation wins, not the highest id");
+  assert.equal(prices[0].observed_at, minutesAgo(60), "the newest observation wins, not the highest id");
 });
 
 let failures = 0;

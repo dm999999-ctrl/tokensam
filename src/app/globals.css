@@ -662,3 +662,30 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
+
+/* Live price flash: the price cell lights for PRICE_FLASH_MS (see use-price-flash.ts)
+   when a Binance poll moves the price -- green up, red down. Applied only to the
+   dashboard's price column, never to the change or valuation columns, which already
+   carry their own tone colour and would compete with it.
+
+   The lit state is a background wash plus the tone colour rather than a colour change
+   alone: the price text is otherwise neutral, so recolouring it alone reads as a
+   permanent state rather than a moment. The animation fades out so the cell settles
+   back to normal instead of snapping. */
+@keyframes price-flash-up {
+  from { background-color: rgb(134 179 149 / 28%); color: var(--positive); }
+  to   { background-color: transparent; }
+}
+@keyframes price-flash-down {
+  from { background-color: rgb(226 118 109 / 28%); color: var(--negative); }
+  to   { background-color: transparent; }
+}
+.price-flash { border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+.price-flash-up { animation: price-flash-up 1.5s ease-out; }
+.price-flash-down { animation: price-flash-down 1.5s ease-out; }
+
+/* A flashing cell is decoration, not information: the number itself is already there,
+   and the direction is in the 24h column. Honour the viewer's motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .price-flash-up, .price-flash-down { animation: none; }
+}

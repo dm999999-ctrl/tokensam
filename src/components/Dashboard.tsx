@@ -14,6 +14,8 @@ import { PageFooter } from "@/components/AppShell";
 import { UniverseHero } from "@/components/UniverseHero";
 import { applyLivePrices, livePricesUrl } from "@/lib/ui/live-prices";
 import { useLivePrices } from "@/lib/ui/use-live-prices";
+import { usePriceFlashes } from "@/lib/ui/use-price-flash";
+import type { FlashDirection } from "@/lib/ui/price-flash";
 
 type SortState = { key: SortKey; direction: "asc" | "desc" };
 
@@ -21,7 +23,7 @@ function SearchIcon() {
   return <svg aria-hidden="true" viewBox="0 0 20 20" className="search-icon"><circle cx="8.8" cy="8.8" r="5.7" /><path d="m13 13 4 4" /></svg>;
 }
 
-function Cell({ row, column }: { row: Row; column: Column }) {
+function Cell({ row, column, flash }: { row: Row; column: Column; flash?: FlashDirection }) {
   const value = row[column.key];
   if (value === null) {
     const reason = missingReason(column, row.token);
@@ -33,7 +35,13 @@ function Cell({ row, column }: { row: Row; column: Column }) {
   }
   if (column.format === "ratio") return <>{formatRatio(value)}</>;
   if (column.format === "share") return <>{formatShare(value)}</>;
-  return <>{formatUsd(value, column.format === "usd-compact")}</>;
+  const text = formatUsd(value, column.format === "usd-compact");
+  // Only the price column flashes. Market cap and FDV also move with the live price, but
+  // lighting every one of them at once would wash the row rather than draw the eye.
+  if (column.key === "priceUsd" && flash) {
+    return <span className={`price-flash price-flash-${flash}`}>{text}</span>;
+  }
+  return <>{text}</>;
 }
 
 function AssetCell({ token }: { token: DashboardToken }) {
@@ -65,6 +73,8 @@ export default function Dashboard({ tokens, error, dataUpdatedAt, refreshStatus,
   // when there is nothing to apply, so a poll that moved no price re-renders nothing.
   const live = useLivePrices(livePricesUrl(process.env.NEXT_PUBLIC_LIVE_PRICES_URL));
   const liveTokens = useMemo(() => applyLivePrices(tokens, live), [tokens, live]);
+
+  const priceFlashes = usePriceFlashes(liveTokens);
 
   const rows = useMemo(() => liveTokens.map(toRow), [liveTokens]);
   const summary = useMemo(() => universeSummary(liveTokens), [liveTokens]);
@@ -211,7 +221,9 @@ export default function Dashboard({ tokens, error, dataUpdatedAt, refreshStatus,
                 <tr key={row.token.id} data-testid="token-row">
                   <td className="asset-col"><AssetCell token={row.token} /></td>
                   {columns.map((column) => (
-                    <td key={column.key} data-label={column.label}><Cell row={row} column={column} /></td>
+                    <td key={column.key} data-label={column.label}>
+                      <Cell row={row} column={column} flash={priceFlashes[row.token.id]} />
+                    </td>
                   ))}
                 </tr>
               ))}
