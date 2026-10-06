@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { requestTokenAnalysis } from "@/app/tokens/[id]/actions";
-import type { EngineAnalysisState } from "@/lib/analysis/deterministic-service";
 import { ENGINE_SECTION_KEYS, ENGINE_SECTION_TITLES, type EngineParagraph, type EngineSectionKey, type EngineTokenAnalysis } from "@/lib/analysis/engine/report-schema";
 import { buildFootnoteIndex, footnoteNumbersFor, type FootnoteIndex } from "@/lib/analysis/footnotes";
 import type { ProfilePayload } from "@/lib/analysis/profile-payload";
@@ -204,53 +203,168 @@ function AnalysisBody({ analysis, payload }: { analysis: EngineTokenAnalysis; pa
   );
 }
 
-export function deepAnalysisButtonHint(state: EngineAnalysisState): string {
-  if (state.status !== "ready") return "Unavailable";
-  return state.latest ? `Generated ${utc(state.latest.metadata.generatedAt)}` : `${state.model} · generate on request`;
+/**
+ * One unit of text the typewriter reveals progressively: a section heading or one paragraph's
+ * text, flattened in the exact same order AnalysisBody renders them (same visibleSectionKeys/
+ * numberedKeys derivation) so the typed sequence matches the final report precisely. Only plain
+ * text is typed -- footnote marks, the valuation table, Footnotes, and Evidence & Methodology are
+ * supplementary apparatus around the prose, not the prose itself, so they appear instantly once
+ * typing finishes rather than being animated piece by piece.
+ */
+type TypingUnit = { kind: "heading"; text: string } | { kind: "paragraph"; text: string };
+
+function buildTypingUnits(analysis: EngineTokenAnalysis): TypingUnit[] {
+  const visibleKeys = visibleSectionKeys(analysis);
+  const numberedKeys: EngineSectionKey[] = visibleKeys.filter((key) => key !== "executiveAssessment");
+  const units: TypingUnit[] = [];
+  for (const key of visibleKeys) {
+    const number = numberedKeys.indexOf(key);
+    units.push({ kind: "heading", text: `${number >= 0 ? `${number + 1}. ` : ""}${ENGINE_SECTION_TITLES[key]}` });
+    const section = analysis[key];
+    if (section.paragraphs.length === 0) {
+      units.push({ kind: "paragraph", text: "No content was generated for this section from the current data snapshot." });
+    } else {
+      for (const paragraph of section.paragraphs) units.push({ kind: "paragraph", text: paragraph.text });
+    }
+  }
+  units.push({ kind: "heading", text: `${numberedKeys.length + 1}. Further Research Questions` });
+  if (analysis.furtherResearchQuestions.length === 0) {
+    units.push({ kind: "paragraph", text: "No research questions arise from a materially significant, currently unresolved relationship in this snapshot." });
+  } else {
+    for (const item of analysis.furtherResearchQuestions) {
+      units.push({ kind: "paragraph", text: item.question });
+      units.push({ kind: "paragraph", text: item.rationale });
+    }
+  }
+  return units;
 }
 
-export function DeepAnalysisPanel({ tokenId, initialState, hidden, payload }: { tokenId: string; initialState: EngineAnalysisState; hidden: boolean; payload: ProfilePayload }) {
-  const [state, setState] = useState(initialState);
+const TYPING_CHARS_PER_TICK = 3;
+const TYPING_TICK_MS = 10;
+
+function TypingReport({ units, unitIndex, charIndex }: { units: TypingUnit[]; unitIndex: number; charIndex: number }) {
+  const current = unitIndex < units.length ? units[unitIndex] : null;
+  return (
+    <div className="report-body report-typing">
+      {units.slice(0, unitIndex).map((unit, index) => (
+        unit.kind === "heading" ? <h3 key={index}>{unit.text}</h3> : <p key={index} className="report-paragraph">{unit.text}</p>
+      ))}
+      {current && (
+        current.kind === "heading"
+          ? <h3>{current.text.slice(0, charIndex)}<span className="typing-caret" aria-hidden="true" /></h3>
+          : <p className="report-paragraph">{current.text.slice(0, charIndex)}<span className="typing-caret" aria-hidden="true" /></p>
+      )}
+    </div>
+  );
+}
+
+type GenerationStatus = "idle" | "pending" | "typing" | "done" | "error";
+
+/**
+ * Stateless, per-visitor generation: each call to requestTokenAnalysis recomputes the report fresh
+ * from the current live data and returns it straight to this component's own local state -- nothing
+ * is persisted server-side, so a report generated here is never visible to another visitor of the
+ * same token page, and a page refresh clears it (generating again produces a fresh computation, not
+ * a cached one). `autoGenerateSignal` is incremented by the header's own "Generate AI Research
+ * Report" art button (see TokenProfile.tsx); any change to it past the initial mount starts a fresh
+ * generation here even if a report is already showing, so the header button always works regardless
+ * of this panel's current state.
+ */
+export function DeepAnalysisPanel({ tokenId, payload, autoGenerateSignal, onBackToOverview }: { tokenId: string; payload: ProfilePayload; autoGenerateSignal: number; onBackToOverview: () => void }) {
+  const [status, setStatus] = useState<GenerationStatus>("idle");
+  const [analysis, setAnalysis] = useState<EngineTokenAnalysis | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const [units, setUnits] = useState<TypingUnit[]>([]);
+  const [unitIndex, setUnitIndex] = useState(0);
+  const [charIndex, setCharIndex] = useState(0);
+  const pendingRef = useRef(false);
 
-  const generate = () => {
+  const generate = useCallback(() => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setStatus("pending");
     setError(null);
-    startTransition(async () => {
-      const result = await requestTokenAnalysis(tokenId);
-      if (result.ok) {
-        setState((current) => current.status === "ready" ? { ...current, latest: result.analysis, nextAllowedAt: result.nextAllowedAt } : current);
-      } else {
-        setError(result.message);
-        if (result.nextAllowedAt && state.status === "ready") setState({ ...state, nextAllowedAt: result.nextAllowedAt });
+    (async () => {
+      try {
+        const result = await requestTokenAnalysis(tokenId);
+        if (result.ok) {
+          setAnalysis(result.analysis);
+          setUnits(buildTypingUnits(result.analysis));
+          setUnitIndex(0);
+          setCharIndex(0);
+          setStatus("typing");
+        } else {
+          setError(result.message);
+          setStatus("error");
+        }
+      } catch {
+        setError("The AI report could not be generated. Please try again later.");
+        setStatus("error");
+      } finally {
+        pendingRef.current = false;
       }
-    });
-  };
+    })();
+  }, [tokenId]);
 
-  const latest = state.status === "ready" ? state.latest : null;
-  // The server reports nextAllowedAt only while a cooldown is active (and enforces it again on request).
-  const coolingDown = state.status === "ready" && state.nextAllowedAt !== null;
+  const lastSignal = useRef(autoGenerateSignal);
+  useEffect(() => {
+    if (autoGenerateSignal === lastSignal.current) return;
+    lastSignal.current = autoGenerateSignal;
+    generate();
+  }, [autoGenerateSignal, generate]);
+
+  // Typewriter: a few characters per tick, paused whenever status leaves "typing" (e.g. a fresh
+  // generate() call resets status to "pending" first, which this effect no-ops on).
+  useEffect(() => {
+    if (status !== "typing") return;
+    const timer = setTimeout(() => {
+      if (unitIndex >= units.length) { setStatus("done"); return; }
+      const unit = units[unitIndex];
+      if (charIndex >= unit.text.length) {
+        setUnitIndex((index) => index + 1);
+        setCharIndex(0);
+      } else {
+        setCharIndex((count) => Math.min(unit.text.length, count + TYPING_CHARS_PER_TICK));
+      }
+    }, TYPING_TICK_MS);
+    return () => clearTimeout(timer);
+  }, [status, unitIndex, charIndex, units]);
 
   return (
-    <section className="ai-panel" id="deep-ai-analysis" aria-labelledby="deep-ai-title" hidden={hidden}>
+    <section className="ai-panel" id="deep-ai-analysis" aria-labelledby="deep-ai-title">
       <header className="section-head ai-head">
         <div><p className="eyebrow">Research report · institutional-style analysis</p><h2 id="deep-ai-title">Deep AI Analysis</h2></div>
       </header>
 
-      {state.status !== "ready" ? (
-        <div className="ai-state" role="status"><strong>AI analysis unavailable</strong><p>{state.message}</p></div>
-      ) : (
-        <>
-          <div className="ai-toolbar">
-            {!latest && <p className="ai-empty">No analysis has been generated for this token yet. Generation uses the current stored evidence and runs only when requested.</p>}
-            <button className="ai-generate-button" type="button" onClick={generate} disabled={pending || coolingDown}>
-              {pending ? "Generating…" : latest ? "Regenerate analysis" : "Generate analysis"}
-            </button>
+      {status === "idle" && (
+        <div className="analysis-invite">
+          <div>
+            <p className="muted-copy">An evidence-labelled reading of this profile&apos;s current data, generated fresh for you on request. Not investment advice.</p>
           </div>
-          {coolingDown && !pending && <p className="ai-note">Regeneration is available after {utc(state.nextAllowedAt)}.</p>}
-          {pending && <div className="ai-state" role="status"><strong>Generating analysis…</strong><p>Building the report from the current data snapshot. This is a local computation and typically finishes in under a second.</p></div>}
-          {error && !pending && <div className="ai-state error" role="alert"><strong>Analysis not updated</strong><p>{error}</p></div>}
-          {latest && <AnalysisBody analysis={latest} payload={payload} />}
+          <button className="blade-button" type="button" onClick={generate}>
+            <span className="blade-copy"><strong>Generate AI Research Report</strong></span>
+            <span className="blade-edge" aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
+      {status === "error" && (
+        <div className="ai-state error" role="alert">
+          <strong>Analysis not generated</strong>
+          <p>{error}</p>
+          <button className="ai-generate-button" type="button" onClick={generate}>Try again</button>
+        </div>
+      )}
+
+      {status === "typing" && <TypingReport units={units} unitIndex={unitIndex} charIndex={charIndex} />}
+
+      {status === "done" && analysis && (
+        <>
+          <AnalysisBody analysis={analysis} payload={payload} />
+          <button className="blade-button back-to-overview" type="button" onClick={onBackToOverview}>
+            <span className="blade-copy"><strong>↑ Back to Token Overview</strong></span>
+            <span className="blade-edge" aria-hidden="true" />
+          </button>
         </>
       )}
     </section>

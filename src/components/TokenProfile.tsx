@@ -4,13 +4,12 @@ import { useMemo, useState, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import type { LiveTokenProfileData } from "@/types/token";
-import type { EngineAnalysisState } from "@/lib/analysis/deterministic-service";
 import { buildProfileModel, type Card, type PoolRow } from "@/lib/ui/profile-model";
 import { buildProfilePayload, formatProfilePayloadText } from "@/lib/analysis/profile-payload";
 import { formatChange, formatUsd, shortAddress } from "@/lib/ui/format";
 import { HistoryCharts } from "@/components/HistoricalSection";
 import { IndicatorCard, TechnicalIndicators } from "@/components/TechnicalIndicators";
-import { DeepAnalysisPanel, deepAnalysisButtonHint } from "@/components/DeepAnalysisPanel";
+import { DeepAnalysisPanel } from "@/components/DeepAnalysisPanel";
 import { SourcesMethodology } from "@/components/SourcesMethodology";
 import { TokenLogo } from "@/components/TokenLogo";
 import { CopyButton } from "@/components/CopyButton";
@@ -101,14 +100,16 @@ function Signals({ items, title = "Divergence signals" }: { items: Card[]; title
   );
 }
 
-export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileData; analysisState: EngineAnalysisState }) {
+export function TokenProfile({ data }: { data: LiveTokenProfileData }) {
   const { token } = data;
   const model = useMemo(() => buildProfileModel(data), [data]);
   const payload = useMemo(() => buildProfilePayload(data), [data]);
   const copyData = useMemo(() => formatProfilePayloadText(payload), [payload]);
-  // A stored analysis is shown by default; otherwise the panel opens on request.
-  const [showAnalysis, setShowAnalysis] = useState(analysisState.status === "ready" && analysisState.latest !== null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  // Clicking the header's "Generate AI Research Report" art button scrolls to the report section
+  // and starts generation there; incrementing this counter is the signal DeepAnalysisPanel watches
+  // (see its own useEffect) to start a fresh generation even if one is already showing.
+  const [autoGenerateSignal, setAutoGenerateSignal] = useState(0);
   const price = formatUsd(token.priceUsd);
   const marketCap = formatUsd(token.marketCapUsd, true);
   // Sections without data are simply omitted (page and nav); no "not available" cards are rendered.
@@ -116,7 +117,7 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
   const hasCrossMetric = divergence.comparisons.length + divergence.signals.length + divergence.indicators.length > 0;
 
   const reveal = (id: string) => window.requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  const openAnalysis = () => { setShowAnalysis(true); reveal("analysis"); };
+  const openAnalysis = () => { setAutoGenerateSignal((signal) => signal + 1); reveal("analysis"); };
 
   return (
     <div className="page profile-page">
@@ -140,7 +141,7 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
             </div>
           </div>
         </div>
-        <button className="blade-button blade-button-art blade-button-art-sm" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label={`Deep AI Analysis: ${deepAnalysisButtonHint(analysisState)}`}>
+        <button className="blade-button blade-button-art blade-button-art-sm" type="button" onClick={openAnalysis} aria-controls="deep-ai-analysis" aria-label="Generate a fresh AI research report">
           <Image src={AI_BUTTON_ART.src} alt="Generate AI Research Report" width={AI_BUTTON_ART.width} height={AI_BUTTON_ART.height} className="blade-art" priority />
         </button>
         <div className="profile-quote">
@@ -293,20 +294,7 @@ export function TokenProfile({ data, analysisState }: { data: LiveTokenProfileDa
       ) : null}
 
       <section className="profile-section analysis-section" id="analysis" aria-label="Deep AI Analysis">
-        {showAnalysis ? null : (
-          <div className="analysis-invite">
-            <div>
-              <p className="eyebrow">Research report</p>
-              <h2>Deep AI Analysis</h2>
-              <p className="muted-copy">An evidence-labelled reading of this profile&apos;s data. Generated only on request; not investment advice.</p>
-            </div>
-            <button className="blade-button" type="button" onClick={openAnalysis}>
-              <span className="blade-copy"><strong>Open analysis</strong><small>{deepAnalysisButtonHint(analysisState)}</small></span>
-              <span className="blade-edge" aria-hidden="true" />
-            </button>
-          </div>
-        )}
-        <DeepAnalysisPanel tokenId={token.id} initialState={analysisState} hidden={!showAnalysis} payload={payload} />
+        <DeepAnalysisPanel tokenId={token.id} payload={payload} autoGenerateSignal={autoGenerateSignal} onBackToOverview={() => reveal("overview")} />
       </section>
 
       <SourcesMethodology

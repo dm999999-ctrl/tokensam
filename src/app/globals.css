@@ -472,6 +472,14 @@ h3 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12
 .ai-state.error { border-color: rgb(226 118 109 / 40%); border-left-color: var(--negative); background: rgb(195 50 43 / 10%); }
 .ai-state strong { color: var(--ink-strong); font-size: 14px; }
 .ai-state p { margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.ai-state .ai-generate-button { margin-top: 10px; }
+
+/* Typewriter reveal while a freshly generated report is being "typed out" */
+.report-typing { min-height: 120px; }
+.typing-caret { display: inline-block; width: 7px; height: 1em; margin-left: 1px; background: var(--gold); vertical-align: text-bottom; animation: typing-caret-blink 0.9s step-end infinite; }
+@keyframes typing-caret-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+.back-to-overview { margin-top: 24px; }
 .ai-body { display: grid; margin-top: 4px; }
 .ai-section { padding: 20px 0 20px 46px; border-bottom: 1px solid var(--line-soft); }
 .ai-section:last-child { border-bottom: 0; }
