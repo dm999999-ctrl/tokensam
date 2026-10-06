@@ -12,6 +12,13 @@
 -- windows (price_usd 37 days, volume_24h_usd and market_cap_usd 30 days), which are
 -- deliberately not collapsible. The policy is simply larger than this plan holds.
 --
+-- Applied to production 2026-10-06: the retention change plus a one-off
+-- VACUUM FULL public.raw_provider_records (deleting rows frees space for reuse inside
+-- the table but does not return it to disk, and the existing auto-full-vacuum in
+-- 20261003090441 targets token_metric_observations and only arms at 470 MB) took the
+-- database from 459.7 MiB to 389.9 MiB -- 92% of the plan limit down to 78%. The
+-- backlog cleared was 37,872 rows. The index drop below did not apply; see its note.
+--
 -- This migration therefore takes the two reductions that cost no chart, indicator,
 -- or live value at all. It does NOT shorten any observation window: narrowing the
 -- 37-day price_usd window would degrade the risk-profile curve and is a product
@@ -63,7 +70,19 @@ $function$;
 -- Deliberately KEPT: token_metric_coingecko_gap_lookup_idx (24 MB, 6,960 scans).
 -- Its scan count is low but it backs the daily gap audit that
 -- 20261003183000_optimize_coingecko_daily_gap_audit.sql exists to make fast.
+-- A plain DROP INDEX needs ACCESS EXCLUSIVE on token_metric_observations, which this
+-- deployment never grants for long: the dashboard reads it continuously and the refresh
+-- cron writes every 5 minutes. Applied against production on 2026-10-06 it timed out
+-- waiting for the lock, both plainly and with CONCURRENTLY (the index was left intact
+-- and indisvalid, so a timeout here is safe and changes nothing).
+--
+-- lock_timeout makes that failure fast and loud instead of a hang. If this statement is
+-- skipped the only cost is ~12 MB; re-run it during a quiet window, ideally as
+--   DROP INDEX CONCURRENTLY public.chain_metric_history_lookup_idx;
+-- outside a transaction block, with the refresh cron paused.
+SET lock_timeout = '5s';
 DROP INDEX IF EXISTS public.chain_metric_history_lookup_idx;
+RESET lock_timeout;
 
 -- Verify (expect raw_provider_records to shrink as retention runs catch up):
 --   select (regexp_match(prosrc, 'collected_at < now\(\) - interval ''([^'']+)'''))[1]
