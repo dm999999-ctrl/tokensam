@@ -204,55 +204,109 @@ function AnalysisBody({ analysis, payload }: { analysis: EngineTokenAnalysis; pa
 }
 
 /**
- * One unit of text the typewriter reveals progressively: a section heading or one paragraph's
- * text, flattened in the exact same order AnalysisBody renders them (same visibleSectionKeys/
- * numberedKeys derivation) so the typed sequence matches the final report precisely. Only plain
- * text is typed -- footnote marks, the valuation table, Footnotes, and Evidence & Methodology are
- * supplementary apparatus around the prose, not the prose itself, so they appear instantly once
- * typing finishes rather than being animated piece by piece.
+ * Every typeable text field in the report, flattened in the exact order AnalysisBody renders them
+ * (same visibleSectionKeys/numberedKeys derivation): one entry per paragraph, plus one "question"
+ * and one "rationale" entry per further-research-question item. A section/group with no paragraphs
+ * still gets one "empty" placeholder entry, so it is correctly counted as "reached" once the
+ * typewriter gets to it (matching Section's own zero-paragraph "No content..." fallback) rather
+ * than never appearing. Headings are NOT typed here at all -- Section/FurtherResearchQuestions
+ * compute and render their own heading text from props, so once a group is "reached" its heading
+ * renders instantly and correctly through those same, unmodified components.
  */
-type TypingUnit = { kind: "heading"; text: string } | { kind: "paragraph"; text: string };
+type FieldLocation =
+  | { group: "section"; sectionKey: EngineSectionKey; field: "paragraph"; index: number }
+  | { group: "section"; sectionKey: EngineSectionKey; field: "empty" }
+  | { group: "research"; field: "question" | "rationale"; index: number }
+  | { group: "research"; field: "empty" };
 
-function buildTypingUnits(analysis: EngineTokenAnalysis): TypingUnit[] {
+type TypingField = { location: FieldLocation; text: string };
+
+function groupKeyOf(location: FieldLocation): EngineSectionKey | "research" {
+  return location.group === "section" ? location.sectionKey : "research";
+}
+
+function buildTypingFields(analysis: EngineTokenAnalysis): TypingField[] {
   const visibleKeys = visibleSectionKeys(analysis);
-  const numberedKeys: EngineSectionKey[] = visibleKeys.filter((key) => key !== "executiveAssessment");
-  const units: TypingUnit[] = [];
+  const fields: TypingField[] = [];
   for (const key of visibleKeys) {
-    const number = numberedKeys.indexOf(key);
-    units.push({ kind: "heading", text: `${number >= 0 ? `${number + 1}. ` : ""}${ENGINE_SECTION_TITLES[key]}` });
-    const section = analysis[key];
-    if (section.paragraphs.length === 0) {
-      units.push({ kind: "paragraph", text: "No content was generated for this section from the current data snapshot." });
+    const paragraphs = analysis[key].paragraphs;
+    if (paragraphs.length === 0) {
+      fields.push({ location: { group: "section", sectionKey: key, field: "empty" }, text: "" });
     } else {
-      for (const paragraph of section.paragraphs) units.push({ kind: "paragraph", text: paragraph.text });
+      paragraphs.forEach((paragraph, index) => fields.push({ location: { group: "section", sectionKey: key, field: "paragraph", index }, text: paragraph.text }));
     }
   }
-  units.push({ kind: "heading", text: `${numberedKeys.length + 1}. Further Research Questions` });
-  if (analysis.furtherResearchQuestions.length === 0) {
-    units.push({ kind: "paragraph", text: "No research questions arise from a materially significant, currently unresolved relationship in this snapshot." });
+  const questions = analysis.furtherResearchQuestions;
+  if (questions.length === 0) {
+    fields.push({ location: { group: "research", field: "empty" }, text: "" });
   } else {
-    for (const item of analysis.furtherResearchQuestions) {
-      units.push({ kind: "paragraph", text: item.question });
-      units.push({ kind: "paragraph", text: item.rationale });
-    }
+    questions.forEach((item, index) => {
+      fields.push({ location: { group: "research", field: "question", index }, text: item.question });
+      fields.push({ location: { group: "research", field: "rationale", index }, text: item.rationale });
+    });
   }
-  return units;
+  return fields;
 }
 
 const TYPING_CHARS_PER_TICK = 3;
 const TYPING_TICK_MS = 10;
+/** Appended to the field currently being typed so the reused Paragraph/question rendering shows a
+ *  cursor with zero special-casing -- it is plain text, removed the instant typing finishes. */
+const TYPING_CURSOR = "▌";
 
-function TypingReport({ units, unitIndex, charIndex }: { units: TypingUnit[]; unitIndex: number; charIndex: number }) {
-  const current = unitIndex < units.length ? units[unitIndex] : null;
+/**
+ * Builds a partial `EngineTokenAnalysis` -- structurally identical to the real one, just with less
+ * text revealed -- and renders it through the exact same Section/FurtherResearchQuestions/
+ * ReportHeader components AnalysisBody uses for the finished report. This is what guarantees the
+ * typed-out report and the finished report share pixel-identical formatting: it is not two
+ * separate renderers kept visually in sync, it is the same renderer fed a smaller version of the
+ * same data. Paragraph `sourceIds` are always left intact (only `.text` is truncated), so footnote
+ * marks and the Valuation Analysis table -- neither of which reads from paragraph text -- already
+ * look exactly as they will in the finished report the moment each section appears.
+ */
+function PartialAnalysisBody({ analysis, fields, fieldIndex, charIndex, payload }: {
+  analysis: EngineTokenAnalysis; fields: TypingField[]; fieldIndex: number; charIndex: number; payload: ProfilePayload;
+}) {
+  const footnoteIndex = buildFootnoteIndex(analysis);
+  const visibleKeys = visibleSectionKeys(analysis);
+  const numberedKeys: EngineSectionKey[] = visibleKeys.filter((key) => key !== "executiveAssessment");
+  const groupOrder: (EngineSectionKey | "research")[] = [...visibleKeys, "research"];
+  const currentGroup = fieldIndex < fields.length ? groupKeyOf(fields[fieldIndex].location) : null;
+  const currentGroupOrder = currentGroup === null ? groupOrder.length : groupOrder.indexOf(currentGroup);
+  const reached = new Set(groupOrder.slice(0, currentGroupOrder + 1));
+
+  const sectionParagraphs = new Map<EngineSectionKey, EngineParagraph[]>();
+  const questionDrafts = new Map<number, { question: string; rationale: string; sourceIds: string[] }>();
+  for (let i = 0; i <= fieldIndex && i < fields.length; i++) {
+    const { location } = fields[i];
+    const isCurrent = i === fieldIndex;
+    if (location.group === "section") {
+      if (location.field === "empty") { if (!sectionParagraphs.has(location.sectionKey)) sectionParagraphs.set(location.sectionKey, []); continue; }
+      const original = analysis[location.sectionKey].paragraphs[location.index];
+      const text = isCurrent ? original.text.slice(0, charIndex) + TYPING_CURSOR : original.text;
+      const list = sectionParagraphs.get(location.sectionKey) ?? [];
+      list.push({ ...original, text });
+      sectionParagraphs.set(location.sectionKey, list);
+    } else if (location.field !== "empty") {
+      const original = analysis.furtherResearchQuestions[location.index];
+      const draft = questionDrafts.get(location.index) ?? { question: "", rationale: "", sourceIds: original.sourceIds };
+      const full = original[location.field];
+      draft[location.field] = isCurrent ? full.slice(0, charIndex) + TYPING_CURSOR : full;
+      questionDrafts.set(location.index, draft);
+    }
+  }
+
+  const reachedSectionKeys = visibleKeys.filter((key) => reached.has(key));
+  const partialQuestions = reached.has("research") ? [...questionDrafts.entries()].sort((a, b) => a[0] - b[0]).map(([, draft]) => draft) : [];
+
   return (
-    <div className="report-body report-typing">
-      {units.slice(0, unitIndex).map((unit, index) => (
-        unit.kind === "heading" ? <h3 key={index}>{unit.text}</h3> : <p key={index} className="report-paragraph">{unit.text}</p>
+    <div className="report-body">
+      <ReportHeader payload={payload} analysis={analysis} />
+      {reachedSectionKeys.map((key) => (
+        <Section key={key} sectionKey={key} section={{ paragraphs: sectionParagraphs.get(key) ?? [] }} number={numberedKeys.indexOf(key)} footnoteIndex={footnoteIndex} sources={analysis.metadata.sources} />
       ))}
-      {current && (
-        current.kind === "heading"
-          ? <h3>{current.text.slice(0, charIndex)}<span className="typing-caret" aria-hidden="true" /></h3>
-          : <p className="report-paragraph">{current.text.slice(0, charIndex)}<span className="typing-caret" aria-hidden="true" /></p>
+      {reached.has("research") && (
+        <FurtherResearchQuestions analysis={{ ...analysis, furtherResearchQuestions: partialQuestions }} footnoteIndex={footnoteIndex} number={numberedKeys.length + 1} />
       )}
     </div>
   );
@@ -274,8 +328,8 @@ export function DeepAnalysisPanel({ tokenId, payload, autoGenerateSignal, onBack
   const [status, setStatus] = useState<GenerationStatus>("idle");
   const [analysis, setAnalysis] = useState<EngineTokenAnalysis | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [units, setUnits] = useState<TypingUnit[]>([]);
-  const [unitIndex, setUnitIndex] = useState(0);
+  const [fields, setFields] = useState<TypingField[]>([]);
+  const [fieldIndex, setFieldIndex] = useState(0);
   const [charIndex, setCharIndex] = useState(0);
   const pendingRef = useRef(false);
 
@@ -289,8 +343,8 @@ export function DeepAnalysisPanel({ tokenId, payload, autoGenerateSignal, onBack
         const result = await requestTokenAnalysis(tokenId);
         if (result.ok) {
           setAnalysis(result.analysis);
-          setUnits(buildTypingUnits(result.analysis));
-          setUnitIndex(0);
+          setFields(buildTypingFields(result.analysis));
+          setFieldIndex(0);
           setCharIndex(0);
           setStatus("typing");
         } else {
@@ -318,17 +372,17 @@ export function DeepAnalysisPanel({ tokenId, payload, autoGenerateSignal, onBack
   useEffect(() => {
     if (status !== "typing") return;
     const timer = setTimeout(() => {
-      if (unitIndex >= units.length) { setStatus("done"); return; }
-      const unit = units[unitIndex];
-      if (charIndex >= unit.text.length) {
-        setUnitIndex((index) => index + 1);
+      if (fieldIndex >= fields.length) { setStatus("done"); return; }
+      const field = fields[fieldIndex];
+      if (charIndex >= field.text.length) {
+        setFieldIndex((index) => index + 1);
         setCharIndex(0);
       } else {
-        setCharIndex((count) => Math.min(unit.text.length, count + TYPING_CHARS_PER_TICK));
+        setCharIndex((count) => Math.min(field.text.length, count + TYPING_CHARS_PER_TICK));
       }
     }, TYPING_TICK_MS);
     return () => clearTimeout(timer);
-  }, [status, unitIndex, charIndex, units]);
+  }, [status, fieldIndex, charIndex, fields]);
 
   return (
     <section className="ai-panel" id="deep-ai-analysis" aria-labelledby="deep-ai-title">
@@ -356,7 +410,7 @@ export function DeepAnalysisPanel({ tokenId, payload, autoGenerateSignal, onBack
         </div>
       )}
 
-      {status === "typing" && <TypingReport units={units} unitIndex={unitIndex} charIndex={charIndex} />}
+      {status === "typing" && analysis && <PartialAnalysisBody analysis={analysis} fields={fields} fieldIndex={fieldIndex} charIndex={charIndex} payload={payload} />}
 
       {status === "done" && analysis && (
         <>
