@@ -18,7 +18,10 @@ function token(id, overrides = {}) {
     tvlUsd: null, tvlChange30dPct: null, marketCapChange24hPct: null,
     volumeChange48hPct: null, volumeToMarketCapChange48hPct: null,
     fees24hUsd: null, revenue24hUsd: null, observedAt: fresh,
-    metricSources: { priceUsd: { providerId: "coingecko", collectedAt: fresh, note: "stored" } },
+    metricSources: {
+      priceUsd: { providerId: "coingecko", collectedAt: fresh, note: "stored" },
+      change7dPct: { providerId: "coingecko", collectedAt: fresh, note: "stored" },
+    },
     ...overrides,
   };
 }
@@ -42,6 +45,39 @@ test("a live price replaces the stored one and is attributed to Binance", () => 
   assert.equal(row.marketCapUsd, 1000);
   assert.equal(row.change7dPct, 7);
   assert.equal(row.volume24hUsd, 50);
+});
+
+test("a live 7-day change replaces the stored one and is attributed to Binance", () => {
+  // c7 is computed server-side from the live price against Binance's own 7-day open
+  // (see src/app/api/live-prices/route.ts), so it ticks with every price move.
+  const [row] = applyLivePrices([token(MAPPED_ID)], {
+    asOf: fresh, prices: { [MAPPED_SYMBOL]: { p: 123.45, c: -2.5, c7: 8.75 } },
+  }, NOW);
+
+  assert.equal(row.change7dPct, 8.75);
+  assert.equal(row.metricSources.change7dPct.providerId, "binance");
+  assert.match(row.metricSources.change7dPct.note, /7-day rolling opening price/);
+});
+
+test("a missing or unusable 7-day change leaves the stored one untouched", () => {
+  // The 7-day figure is supplementary: the live price must still apply without it.
+  for (const entry of [{ p: 123.45, c: -2.5 }, { p: 123.45, c: -2.5, c7: Number.NaN }]) {
+    const [row] = applyLivePrices([token(MAPPED_ID)], { asOf: fresh, prices: { [MAPPED_SYMBOL]: entry } }, NOW);
+    assert.equal(row.change7dPct, 7, "the stored 7-day change survives");
+    assert.equal(row.metricSources.change7dPct.providerId, "coingecko", "and keeps its own provenance");
+    assert.equal(row.priceUsd, 123.45, "while the live price still applies");
+    assert.equal(row.metricSources.priceUsd.providerId, "binance");
+  }
+});
+
+test("a 7-day change that moved alone still produces a new array", () => {
+  // Price and 24h unchanged, only c7 moved: the row must still update.
+  const input = [token(MAPPED_ID, { priceUsd: 123.45, change24hPct: -2.5, change7dPct: 8.0 })];
+  const moved = applyLivePrices(input, {
+    asOf: fresh, prices: { [MAPPED_SYMBOL]: { p: 123.45, c: -2.5, c7: 8.75 } },
+  }, NOW);
+  assert.notEqual(moved, input);
+  assert.equal(moved[0].change7dPct, 8.75);
 });
 
 test("a token with no live entry keeps its server-rendered value and source", () => {

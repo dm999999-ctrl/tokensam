@@ -17,7 +17,13 @@ import type { DashboardToken } from "../../types/token.ts";
  * Cloudflare's network, which is not blocked.
  */
 
-export type LivePriceEntry = { p: number; c: number };
+/**
+ * `p` live price, `c` Binance's reported 24-hour change, `c7` the 7-day change
+ * computed server-side from `p` against Binance's own 7-day opening price (see
+ * src/app/api/live-prices/route.ts). `c7` is optional: it is absent when no
+ * opening price is held, and the row then keeps its stored 7-day change.
+ */
+export type LivePriceEntry = { p: number; c: number; c7?: number };
 export type LivePriceResponse = { asOf: string; prices: Record<string, LivePriceEntry> };
 
 /**
@@ -71,18 +77,30 @@ export function applyLivePrices(
     const symbol = binanceSymbols[token.id];
     const live = symbol ? response.prices[symbol] : undefined;
     if (!live || !Number.isFinite(live.p) || !Number.isFinite(live.c)) return token;
-    if (token.priceUsd === live.p && token.change24hPct === live.c) return token;
+    // c7 is supplementary: a missing or unusable one leaves the stored 7-day change alone.
+    const live7d = Number.isFinite(live.c7) ? (live.c7 as number) : null;
+    if (token.priceUsd === live.p && token.change24hPct === live.c
+      && (live7d === null || token.change7dPct === live7d)) return token;
     changed = true;
     const source = {
       providerId: "binance" as const,
       collectedAt,
       note: "Binance spot last trade, USDT-quoted (a USD proxy, not USD), polled live in the browser. Single-venue price for the fungible asset, not a cross-venue average.",
     };
+    const sources = { ...token.metricSources, priceUsd: source, change24hPct: source };
+    if (live7d !== null) {
+      sources.change7dPct = {
+        providerId: "binance" as const,
+        collectedAt,
+        note: "Binance 7-day price change: the live USDT-quoted last trade against Binance's own 7-day rolling opening price. Single-venue, and derived from those two Binance figures rather than reported as a single field.",
+      };
+    }
     return {
       ...token,
       priceUsd: live.p,
       change24hPct: live.c,
-      metricSources: { ...token.metricSources, priceUsd: source, change24hPct: source },
+      ...(live7d !== null ? { change7dPct: live7d } : {}),
+      metricSources: sources,
     };
   });
   return changed ? next : tokens;
