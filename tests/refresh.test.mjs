@@ -45,18 +45,28 @@ function marketItem(id) {
   };
 }
 
+function tickerItem(symbol) {
+  return { symbol, lastPrice: "2", priceChangePercent: "1", closeTime: NOW.getTime() };
+}
+
 /** Routes provider HTTP calls to fixtures; never touches the network. */
 function providerFetch(mode, calls = []) {
+  // Binance needs no key and is always enabled, so every scenario gets a working
+  // ticker fixture unless it opts into a failure mode explicitly.
+  mode = { binance: "ok", ...mode };
   return async (input, init = {}) => {
     const url = new URL(String(input));
     calls.push(url.hostname);
-    const behaviour = url.hostname.includes("coingecko") ? mode.coingecko : url.hostname.includes("dexscreener") ? mode.dexscreener : "unexpected";
+    const behaviour = url.hostname.includes("coingecko") ? mode.coingecko
+      : url.hostname.includes("binance") ? mode.binance
+      : url.hostname.includes("dexscreener") ? mode.dexscreener : "unexpected";
     if (behaviour === "unexpected") throw new Error(`Unexpected provider host ${url.hostname}`);
     if (behaviour === "error") return new Response("{}", { status: 500 });
     if (behaviour === "hang") {
       return new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal.reason), { once: true }));
     }
     if (url.hostname.includes("coingecko")) return Response.json(url.searchParams.get("ids").split(",").map(marketItem));
+    if (url.hostname.includes("binance")) return Response.json(JSON.parse(url.searchParams.get("symbols")).map(tickerItem));
     return Response.json([]); // DEX Screener: mapped tokens with no pools.
   };
 }
@@ -69,11 +79,11 @@ test("1-2. a full refresh runs the real collectors, persists observations, then 
   const db = createFakeSupabase({ seed: baseSeed() });
   const hosts = [];
   const result = await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "scheduled", fetchImpl: providerFetch({ coingecko: "ok", dexscreener: "ok" }, hosts), sleep: noSleep,
+    trigger: "scheduled", fetchImpl: providerFetch({ coingecko: "ok", binance: "ok", dexscreener: "ok" }, hosts), sleep: noSleep,
   });
 
   assert.equal(result.status, "succeeded");
-  assert.deepEqual(new Set(result.due), new Set(["coingecko", "dexscreener", "defillama", "defillama_coins"]));
+  assert.deepEqual(new Set(result.due), new Set(["coingecko", "binance", "dexscreener", "defillama", "defillama_coins"]));
   const byStep = Object.fromEntries(result.steps.map((step) => [step.step, step]));
   assert.equal(byStep.coingecko.status, "succeeded");
   assert.equal(byStep.coingecko.detail.returnedAssets, 238);
@@ -145,7 +155,7 @@ test("3-4. when every provider fails, metrics are skipped and stored results are
   const calculated = [{ id: 1, token_id: BTC.id, chain_id: BTC.chainId, metric_id: "volume_to_market_cap", value: 0.05, status: "available", calculated_at: ago(HOUR), input_fingerprint: "x" }];
   const db = createFakeSupabase({ seed: baseSeed({ calculated_metric_observations: calculated }) });
   const result = await runDataRefresh(db.client, new SupabaseRefreshStore(db.client), {
-    trigger: "scheduled", fetchImpl: providerFetch({ coingecko: "error", dexscreener: "error" }), sleep: noSleep,
+    trigger: "scheduled", fetchImpl: providerFetch({ coingecko: "error", binance: "error", dexscreener: "error" }), sleep: noSleep,
   });
   assert.equal(result.status, "failed");
   assert.equal(result.steps.find((step) => step.step === "metrics").status, "skipped");
@@ -227,6 +237,7 @@ test("5. metrics run once after providers and are skipped when nothing is due", 
   const order = [];
   const collectors = {
     coingecko: { collect: async () => { order.push("coingecko"); return { observations: 1 }; } },
+    binance: { collect: async () => { order.push("binance"); return { observations: 1 }; } },
     dexscreener: { collect: async () => { order.push("dexscreener"); return { observations: 1 }; } },
     defillama: { collect: async () => { order.push("defillama"); return { observations: 1 }; } },
   };
@@ -264,6 +275,7 @@ test("cadence: force refresh behavior remains unchanged", async () => {
   const order = [];
   const collectors = {
     coingecko: { collect: async () => { order.push("coingecko"); return { observations: 1 }; } },
+    binance: { collect: async () => { order.push("binance"); return { observations: 1 }; } },
     dexscreener: { collect: async () => { order.push("dexscreener"); return { observations: 1 }; } },
     defillama: { collect: async () => { order.push("defillama"); return { observations: 1 }; } },
   };
@@ -277,7 +289,7 @@ test("cadence: force refresh behavior remains unchanged", async () => {
   order.length = 0;
   const forced = await runDataRefresh(db.client, store, { trigger: "manual", collectors, calculateMetrics, force: true });
   assert.equal(forced.status, "succeeded");
-  assert.deepEqual(new Set(order), new Set(["coingecko", "dexscreener", "defillama", "metrics"]));
+  assert.deepEqual(new Set(order), new Set(["coingecko", "binance", "dexscreener", "defillama", "metrics"]));
 });
 
 test("overall status distinguishes succeeded, partial, failed, and skipped", () => {
@@ -295,6 +307,7 @@ test("9. overlapping runs are prevented and abandoned locks expire", async () =>
   const calls = [];
   const collectors = {
     coingecko: { collect: async () => { calls.push("coingecko"); await gate; return {}; } },
+    binance: { collect: async () => ({}) },
     dexscreener: { collect: async () => ({}) },
     defillama: { collect: async () => ({}) },
   };

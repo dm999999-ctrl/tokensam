@@ -1,7 +1,7 @@
 export type TokenCategory = string;
 
 export type MetricSource = {
-  providerId: "coingecko" | "defillama" | "dexscreener" | "defillama_coins" | "geckoterminal" | "calculated";
+  providerId: "coingecko" | "binance" | "defillama" | "dexscreener" | "defillama_coins" | "geckoterminal" | "calculated";
   collectedAt: string;
   note?: string | null;
 };
@@ -40,6 +40,13 @@ export type DashboardToken = {
   volume24hUsd: number | null;
   /** Token-level FDV as reported in the stored market-data record (never a DEX-reported FDV). Absent = unavailable. */
   fdvUsd?: number | null;
+  /**
+   * Supply implied by the same stored record's own FDV and price (fdv / price), which is
+   * the total supply CoinGecko used. Carried so a live price can move FDV without the
+   * client inventing a supply figure: the row has circulating and maximum supply, but FDV
+   * is priced on TOTAL supply, which is neither. Null when it could not be derived.
+   */
+  fdvSupply?: number | null;
   /** Sum of seven non-overlapping stored 24-hour volume observations covering the latest 7 days. Absent/null = unavailable. */
   volume7dUsd?: number | null;
   circulatingSupply?: number | null;

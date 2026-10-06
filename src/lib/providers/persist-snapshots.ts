@@ -88,7 +88,16 @@ export async function persistProviderSnapshots(
   snapshots: ProviderSnapshot[],
   diagnostics?: CollectorDiagnostics,
   signal?: AbortSignal,
+  /**
+   * `persistRawRecords: false` skips the raw_provider_records insert entirely and leaves
+   * each observation's raw_record_id null (the column is nullable and already written as
+   * `?? null`). Use it for a provider whose raw payload carries nothing the observations
+   * do not already hold, where the rows are pure storage cost -- see
+   * run-binance-collection.ts, where 180 tokens every refresh dominated a 500 MB plan.
+   */
+  options: { persistRawRecords?: boolean } = {},
 ): Promise<{ rawRecords: number; observations: number; pairMappings: number; timingMs: Record<string, number> }> {
+  const persistRawRecords = options.persistRawRecords ?? true;
   if (snapshots.length === 0) return { rawRecords: 0, observations: 0, pairMappings: 0, timingMs: {} };
   const withSignal = <T extends { abortSignal(signal: AbortSignal): T }>(query: T): T => (signal ? query.abortSignal(signal) : query);
 
@@ -115,6 +124,10 @@ export async function persistProviderSnapshots(
   diagnostics?.start("coingecko.persist.mappingLookup");
   const [insertedRawRows, mappingRows] = await Promise.all([
     (async () => {
+      if (!persistRawRecords) {
+        diagnostics?.end("coingecko.persist.rawRecordsInsert");
+        return [] as { id: number; token_id: string; chain_id: string }[];
+      }
       const chunks = chunkRawRows(rawRows);
       const results = await Promise.all(chunks.map(async (rawBatch) => {
         const { data, error } = await withSignal(client
@@ -257,7 +270,7 @@ export async function persistProviderSnapshots(
   diagnostics?.end("coingecko.persist.observationInsert");
   const observationInsertMs = Date.now() - observationInsertStart;
   return {
-    rawRecords: rawRows.length,
+    rawRecords: persistRawRecords ? rawRows.length : 0,
     observations: newObservationRows.length,
     pairMappings: pairRows.length,
     timingMs: { rawInsertMs, mappingLookupMs, existingKeysMs, observationInsertMs },

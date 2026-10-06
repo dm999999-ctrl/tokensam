@@ -97,7 +97,9 @@ test("4. new protocol mappings are protocol-scoped, pinned to a verified record,
   }
   for (const token of phase15CanonicalTokens) {
     const scopes = Object.fromEntries(tokenCoverage(token).map((item) => [item.provider, item.scope]));
-    assert.deepEqual(scopes, { coingecko: "token", defillama_coins: "token", defillama: "protocol", dexscreener: "market" }, token.id);
+    // Binance is market-scoped: it reports one venue's traded price, not a token-scoped
+    // aggregate like CoinGecko's, so it must never be read as a token-scope figure.
+    assert.deepEqual(scopes, { coingecko: "token", binance: "market", defillama_coins: "token", defillama: "protocol", dexscreener: "market" }, token.id);
   }
 });
 

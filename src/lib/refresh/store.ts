@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RefreshStep } from "./config.ts";
+import { PROVIDER_STEPS, type RefreshStep } from "./config.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
@@ -45,7 +45,12 @@ export interface RefreshStore {
   latestRun(): Promise<LatestRun | null>;
 }
 
-const STEPS: RefreshStep[] = ["coingecko", "defillama", "dexscreener", "defillama_coins", "metrics"];
+/**
+ * Derived from PROVIDER_STEPS rather than listed by hand: a provider missing from
+ * this list never reports a last successful run, so isProviderDue treats it as due
+ * on every tick and it refreshes far more often than its configured interval.
+ */
+const STEPS: RefreshStep[] = [...PROVIDER_STEPS, "metrics"];
 const UNIQUE_VIOLATION = "23505";
 
 // TEMPORARY diagnostic logging for the acquireRun 500 investigation. Logs only the

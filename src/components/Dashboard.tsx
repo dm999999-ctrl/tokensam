@@ -12,6 +12,8 @@ import { formatChange, formatRatio, formatShare, formatUsd } from "@/lib/ui/form
 import { TokenLogo } from "@/components/TokenLogo";
 import { PageFooter } from "@/components/AppShell";
 import { UniverseHero } from "@/components/UniverseHero";
+import { applyLivePrices, livePricesUrl } from "@/lib/ui/live-prices";
+import { useLivePrices } from "@/lib/ui/use-live-prices";
 
 type SortState = { key: SortKey; direction: "asc" | "desc" };
 
@@ -58,8 +60,14 @@ export default function Dashboard({ tokens, error, dataUpdatedAt, refreshStatus,
   const [sort, setSort] = useState<SortState>({ key: DEFAULT_SORT_KEY, direction: "desc" });
   const [page, setPage] = useState(1);
 
-  const rows = useMemo(() => tokens.map(toRow), [tokens]);
-  const summary = useMemo(() => universeSummary(tokens), [tokens]);
+  // Live price and 24h change, polled from the Worker while the tab is visible. Everything
+  // else on the row stays as server-rendered; applyLivePrices returns `tokens` unchanged
+  // when there is nothing to apply, so a poll that moved no price re-renders nothing.
+  const live = useLivePrices(livePricesUrl(process.env.NEXT_PUBLIC_LIVE_PRICES_URL));
+  const liveTokens = useMemo(() => applyLivePrices(tokens, live), [tokens, live]);
+
+  const rows = useMemo(() => liveTokens.map(toRow), [liveTokens]);
+  const summary = useMemo(() => universeSummary(liveTokens), [liveTokens]);
   const chains = useMemo(() => [...new Set(tokens.map((token) => token.chain))].sort(), [tokens]);
   const categories = useMemo(() => [...new Set(tokens.map((token) => token.category))].sort(), [tokens]);
   const filtered = useMemo(() => filterRows(rows, filters), [rows, filters]);

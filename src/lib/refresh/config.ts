@@ -1,7 +1,7 @@
-export type ProviderStep = "coingecko" | "defillama" | "dexscreener" | "defillama_coins";
+export type ProviderStep = "coingecko" | "binance" | "defillama" | "dexscreener" | "defillama_coins";
 export type RefreshStep = ProviderStep | "metrics";
 
-export const PROVIDER_STEPS: ProviderStep[] = ["coingecko", "dexscreener", "defillama", "defillama_coins"];
+export const PROVIDER_STEPS: ProviderStep[] = ["coingecko", "binance", "dexscreener", "defillama", "defillama_coins"];
 
 const MINUTE = 60 * 1000;
 
@@ -34,6 +34,20 @@ const MINUTE = 60 * 1000;
  */
 export const REFRESH_POLICY: Record<ProviderStep, { label: string; intervalMs: number; staleAfterMs: number; timeoutMs: number }> = {
   coingecko: { label: "CoinGecko", intervalMs: 15 * MINUTE, staleAfterMs: 3 * 60 * MINUTE, timeoutMs: 140_000 },
+  // Binance supplies the live price and 24h change only (see binance.ts). Binance's own limits
+  // would allow a far shorter cadence -- no API key, and the whole universe costs 80 of its
+  // published 6,000 request-weight/minute in two requests -- but the binding constraint is
+  // Supabase, not Binance: at the original 5-minute interval this collector wrote ~52,000
+  // observation rows/day against CoinGecko's ~17,500, enough to put a 500 MB plan back at
+  // ~97% once the 2-day window filled. Freshness no longer depends on this cadence either,
+  // because the dashboard polls the Worker directly for the live value (see
+  // src/lib/ui/live-prices.ts); this step now only supplies the server-rendered starting
+  // value, the stored provenance the AI layer reads, and the fallback when the Worker is down.
+  //
+  // staleAfterMs is 2x the interval: long enough that a healthy collector is always preferred
+  // over CoinGecko, short enough that a failing one falls back after about one missed run
+  // rather than keeping a stale venue price in front of a fresher CoinGecko reading.
+  binance: { label: "Binance", intervalMs: 15 * MINUTE, staleAfterMs: 30 * MINUTE, timeoutMs: 30_000 },
   dexscreener: { label: "DEX Screener", intervalMs: 30 * MINUTE, staleAfterMs: 2 * 60 * MINUTE, timeoutMs: 40_000 },
   // Current TVL + fees + revenue: three small requests per protocol (72 for 24), paced 1.1 s apart.
   // Measured 2026-09-25 at 109 s for 24 protocols, so the budget is 150 s (pacing is unchanged).

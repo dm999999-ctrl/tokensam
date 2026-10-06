@@ -6,7 +6,7 @@ import { selectMovers, type Movers } from "../ui/movers.ts";
 import { buildTechnicalIndicators, INDICATOR_METHOD, withExtraIndicators } from "../indicators/build.ts";
 import { buildConcentrationIndicators } from "../indicators/onchain-concentration.ts";
 import type { TechnicalIndicatorsView } from "../../types/technical-indicators.ts";
-import { PROVIDER_STEPS, type ProviderStep, type RefreshStep } from "../refresh/config.ts";
+import { PROVIDER_STEPS, REFRESH_POLICY, type ProviderStep, type RefreshStep } from "../refresh/config.ts";
 import { buildDatasetFreshness, buildRefreshStatus, type RefreshStatusView } from "../refresh/freshness.ts";
 import { buildHistoricalSeries } from "./historical-series.ts";
 import { sevenDayVolume, sevenDayVolumeBands, type VolumePoint } from "./seven-day-volume.ts";
@@ -83,7 +83,7 @@ type DbObservation = {
   token_id: string;
   chain_id: string;
   metric_id: string;
-  provider_id: "coingecko" | "defillama" | "dexscreener" | "defillama_coins" | "geckoterminal";
+  provider_id: "coingecko" | "binance" | "defillama" | "dexscreener" | "defillama_coins" | "geckoterminal";
   value: number | string | null;
   status: string;
   observed_at: string;
@@ -131,6 +131,60 @@ function observationFor(
 
 function sourceFor(row: DbObservation | undefined): MetricSource | undefined {
   return row ? { providerId: row.provider_id, collectedAt: row.collected_at, note: row.note } : undefined;
+}
+
+/**
+ * How long a Binance observation may be before the live price falls back to CoinGecko.
+ *
+ * Kept equal to REFRESH_POLICY.binance.staleAfterMs so there is one definition of
+ * "a Binance price is no longer current" rather than a UI rule and a refresh rule
+ * that can drift apart.
+ */
+const BINANCE_PREFERRED_MAX_AGE_MS = REFRESH_POLICY.binance.staleAfterMs;
+
+/**
+ * The live price and 24-hour change prefer Binance and fall back to CoinGecko.
+ *
+ * Binance is preferred because it is a venue's own last trade on a ~5-minute
+ * refresh, where CoinGecko's /coins/markets is a cross-venue average on a
+ * 15-minute one. The fallback is taken whenever Binance cannot stand behind the
+ * number, which is any of:
+ *
+ *   - no Binance mapping for the token (USDT and halted symbols; see
+ *     src/data/binance-token-mappings.ts),
+ *   - a Binance row written as `unavailable`, which is what the collector does
+ *     for a ticker whose last trade is too old to serve (see MAX_TICKER_AGE_MS),
+ *   - a Binance row that has gone stale since it was written, for instance
+ *     because the Binance refresh step has been failing while CoinGecko's keeps
+ *     succeeding.
+ *
+ * Staleness here is measured on `collected_at`, not `observed_at`. The two
+ * differ for Binance: `observed_at` is the symbol's last *trade*, which lags by
+ * minutes on a thinly traded pair even though the data is current (see
+ * MAX_TICKER_AGE_MS in binance.ts for the measured spread). The question this
+ * function asks is whether the pipeline has refreshed recently, which is
+ * `collected_at`; whether the venue's own price is frozen is already settled by
+ * the collector, which writes such a row as `unavailable`.
+ *
+ * Returning the row rather than the value matters: the caller records which
+ * provider actually supplied the number in `metricSources`, so the UI and the
+ * AI layer attribute a Binance price to Binance (with its USDT-quoted,
+ * single-venue note) and a fallback price to CoinGecko, and never claim one
+ * provider's provenance for the other's figure.
+ */
+function livePriceRow(
+  rows: DbObservation[],
+  tokenId: string,
+  metricId: "price_usd" | "price_change_24h_pct",
+  now: number,
+  maxAgeMs = BINANCE_PREFERRED_MAX_AGE_MS,
+): DbObservation | undefined {
+  const binance = observationFor(rows, tokenId, "binance", metricId);
+  if (binance && binance.status === "available" && numberValue(binance.value) !== null) {
+    const collectedAt = Date.parse(binance.collected_at);
+    if (Number.isFinite(collectedAt) && now - collectedAt <= maxAgeMs) return binance;
+  }
+  return observationFor(rows, tokenId, "coingecko", metricId);
 }
 
 function observationValue(row: DbObservation | undefined): number | null {
@@ -230,12 +284,25 @@ function volumeToMarketCapChangeOverHorizon(
   return Number.isFinite(change) ? change : null;
 }
 
-export function buildDashboardTokens(tokens: DbToken[], chains: DbChain[], observations: DbObservation[]): DashboardToken[] {
+export function buildDashboardTokens(
+  tokens: DbToken[],
+  chains: DbChain[],
+  observations: DbObservation[],
+  /** Injected for tests so Binance-vs-CoinGecko freshness is judged on a fixed clock. */
+  now: number = Date.now(),
+): DashboardToken[] {
   const chainNames = new Map(chains.map((chain) => [chain.id, chain.name]));
   return tokens.map((token) => {
     const metricSources: Partial<Record<DashboardMetricKey, MetricSource>> = {};
     const valueFor = (metricId: string, providerId: DbObservation["provider_id"], key: DashboardMetricKey) => {
       const row = observationFor(observations, token.id, providerId, metricId);
+      const source = sourceFor(row);
+      if (source) metricSources[key] = source;
+      return observationValue(row);
+    };
+    /** Binance-preferred, CoinGecko-fallback value, attributed to whichever actually supplied it. */
+    const liveValueFor = (metricId: "price_usd" | "price_change_24h_pct", key: DashboardMetricKey) => {
+      const row = livePriceRow(observations, token.id, metricId, now);
       const source = sourceFor(row);
       if (source) metricSources[key] = source;
       return observationValue(row);
@@ -275,8 +342,8 @@ export function buildDashboardTokens(tokens: DbToken[], chains: DbChain[], obser
       symbol: token.symbol,
       chain: chainNames.get(token.chain_id) ?? token.chain_id,
       category: token.category,
-      priceUsd: valueFor("price_usd", "coingecko", "priceUsd"),
-      change24hPct: valueFor("price_change_24h_pct", "coingecko", "change24hPct"),
+      priceUsd: liveValueFor("price_usd", "priceUsd"),
+      change24hPct: liveValueFor("price_change_24h_pct", "change24hPct"),
       change7dPct: valueFor("price_change_7d_pct", "coingecko", "change7dPct"),
       marketCapUsd: valueFor("market_cap_usd", "coingecko", "marketCapUsd"),
       volume24hUsd: valueFor("volume_24h_usd", "coingecko", "volume24hUsd"),
@@ -424,7 +491,7 @@ export function attachDashboardExtras(
   extras: {
     logos: Record<string, string>;
     calculated: Map<string, Partial<Record<DashboardCalculatedKey, number | null>>>;
-    fdv?: Record<string, { value: number; collectedAt: string }>;
+    fdv?: Record<string, { value: number; supply: number | null; collectedAt: string }>;
     /** 7D volume (sum of seven non-overlapping 24-hour observations); absent = unavailable. */
     volume7d?: Record<string, number>;
   },
@@ -445,6 +512,7 @@ export function attachDashboardExtras(
     return {
       ...token,
       fdvUsd: fdv?.value ?? null,
+      fdvSupply: fdv?.supply ?? null,
       volume7dUsd: extras.volume7d?.[token.id] ?? null,
       metricSources: fdv
         ? { ...token.metricSources, fdvUsd: { providerId: "coingecko", collectedAt: fdv.collectedAt, note: "Token-level FDV as reported in the stored market-data record." } }
@@ -501,7 +569,7 @@ async function readSevenDayVolumes(client: SupabaseAdminClient, latest: DbObserv
 }
 
 /** Token-level FDV from the latest stored /coins/markets payloads; optional, so a failed read leaves FDV unavailable. */
-async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]): Promise<Record<string, { value: number; collectedAt: string }>> {
+async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]): Promise<Record<string, { value: number; supply: number | null; collectedAt: string }>> {
   // Read directly from the indexed CoinGecko markets history instead of the latest_raw
   // view (same fix as readTokenLogos below, for the same reason): that view's DISTINCT ON
   // over the full raw_provider_records table has no matching index and was intermittently
@@ -517,7 +585,7 @@ async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]):
     // the first hit), so within that bounded set the array is reversed to oldest-first:
     // the newest record for each token is then the last write and wins.
     const result = await client.from("raw_provider_records")
-      .select("token_id,collected_at,endpoint_label,payload_id:payload->>id,fdv:payload->fully_diluted_valuation")
+      .select("token_id,collected_at,endpoint_label,payload_id:payload->>id,fdv:payload->fully_diluted_valuation,price:payload->current_price")
       .eq("provider_id", "coingecko")
       .eq("endpoint_label", COINGECKO_MARKETS_ENDPOINT)
       .in("token_id", tokenIds)
@@ -707,7 +775,7 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
       }),
       () => latestRead.then((rows) => readSevenDayVolumes(client, rows)),
     ] satisfies Array<() => Promise<unknown>>) as [
-      DbObservation[], DbObservation[], Record<string, string>, Record<string, { value: number; collectedAt: string }>, DbCalculatedValue[], Record<string, number>,
+      DbObservation[], DbObservation[], Record<string, string>, Record<string, { value: number; supply: number | null; collectedAt: string }>, DbCalculatedValue[], Record<string, number>,
     ];
     const refreshStatus = await readRefreshStatus(client, latest);
     const baseTokens = buildDashboardTokens(tokens, (chainResult.data ?? []) as DbChain[], mergeById(latest, tvlHistory));
