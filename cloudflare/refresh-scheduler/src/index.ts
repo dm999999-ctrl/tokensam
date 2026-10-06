@@ -75,7 +75,15 @@ async function handleBinancePrices(request: Request, ctx: ExecutionContext): Pro
 
   let upstream: Response;
   try {
-    upstream = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(8_000) });
+    // An explicit User-Agent is required, not cosmetic: Binance answered this Worker's
+    // requests with HTTP 403 while the identical URL returned 200 from a normal client.
+    // Workers' fetch sends no User-Agent of its own, and Binance's edge rejects the
+    // anonymous request. A stable, honest identifier is what clears it -- never a spoofed
+    // browser string, which would misrepresent the caller to get past a deliberate block.
+    upstream = await fetch(url, {
+      headers: { accept: "application/json", "user-agent": "TokenSamurai/1.0" },
+      signal: AbortSignal.timeout(8_000),
+    });
   } catch {
     return Response.json({ error: "Binance request failed." }, { status: 502, headers: corsHeaders() });
   }
