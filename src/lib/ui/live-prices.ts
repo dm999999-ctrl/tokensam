@@ -89,7 +89,14 @@ export function applyLivePrices(
 }
 
 /**
- * Endpoint the browser polls; unset (or blank) disables live polling entirely.
+ * Endpoint the browser polls. Unset (or blank) means the same-origin route
+ * /api/live-prices, which is where live prices are served from: Binance rejects
+ * Cloudflare Workers' egress with intermittent 403s, while Vercel's reaches it
+ * reliably (see src/app/api/live-prices/route.ts). Same-origin also removes the
+ * CORS surface and the cross-origin round trip.
+ *
+ * NEXT_PUBLIC_LIVE_PRICES_URL therefore only needs setting to point somewhere
+ * else; pointing it at the Cloudflare Worker is what this default replaces.
  *
  * Takes the value rather than reading process.env itself. Next.js only inlines a
  * NEXT_PUBLIC_* variable into client code where it appears literally as
@@ -98,7 +105,9 @@ export function applyLivePrices(
  * with no error anywhere. The caller therefore passes the literal, and this stays
  * a pure function the tests can drive.
  */
+export const DEFAULT_LIVE_PRICES_PATH = "/api/live-prices";
+
 export function livePricesUrl(value: string | undefined): string | null {
   const base = value?.trim().replace(/\/+$/, "");
-  return base ? base : null;
+  return base ? base : DEFAULT_LIVE_PRICES_PATH;
 }

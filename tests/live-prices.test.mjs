@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { applyLivePrices, livePricesUrl, tokenIdForSymbol, LIVE_PRICE_MAX_AGE_MS } from "../src/lib/ui/live-prices.ts";
+import { applyLivePrices, livePricesUrl, tokenIdForSymbol, DEFAULT_LIVE_PRICES_PATH, LIVE_PRICE_MAX_AGE_MS } from "../src/lib/ui/live-prices.ts";
 import { binanceSymbols } from "../src/data/binance-token-mappings.ts";
 import { BINANCE_SYMBOLS } from "../cloudflare/refresh-scheduler/src/binance-symbols.ts";
 
@@ -83,10 +83,12 @@ test("an unchanged poll returns the same array reference, so React re-renders no
   assert.notEqual(moved, input, "a moved price must produce a new array");
 });
 
-test("the endpoint is only enabled when the env var is actually set", () => {
-  assert.equal(livePricesUrl(undefined), null);
-  assert.equal(livePricesUrl("   "), null);
-  assert.equal(livePricesUrl("https://w.example/binance-prices/"), "https://w.example/binance-prices");
+test("polling defaults to the same-origin route, with the env var as an override", () => {
+  // Binance 403s Cloudflare Workers' egress, so live prices are served from Vercel at
+  // /api/live-prices. An unset env var must mean that route, not "disabled".
+  assert.equal(livePricesUrl(undefined), DEFAULT_LIVE_PRICES_PATH);
+  assert.equal(livePricesUrl("   "), DEFAULT_LIVE_PRICES_PATH);
+  assert.equal(livePricesUrl("https://elsewhere.example/prices/"), "https://elsewhere.example/prices");
 });
 
 test("the Worker's generated symbol allowlist matches the canonical mapping", () => {
