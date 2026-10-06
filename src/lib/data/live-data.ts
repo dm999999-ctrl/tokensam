@@ -216,8 +216,8 @@ const CHANGE_TOLERANCE_HOURS = 3;
 const HOUR_MS = 60 * 60 * 1000;
 const MARKET_CAP_CHANGE_HOURS = 24;
 /** The latest volume_24h_usd reading is already "the past 24 hours"; comparing it against the
- *  closest reading ~24h earlier (that tick's own trailing 24h window) gives "the preceding 24
- *  hours" -- together a 48-hour span, hence the "48h" label on the displayed card. */
+ *  closest reading ~24h earlier (that tick's own trailing 24h window) gives a day-over-day change
+ *  in the rolling-24h figure, labeled "24h" like marketCapChange24hPct's identical comparison. */
 const VOLUME_CHANGE_TARGET_HOURS = 24;
 const VOLUME_TO_MARKET_CAP_CHANGE_HOURS = 24;
 
@@ -315,8 +315,8 @@ export function buildDashboardTokens(
       note: "Calculated server-side from DeFiLlama TVL observations approximately 30 days apart.",
     };
     const marketCapChange24hPct = changeOverHorizon(observations, token.id, "coingecko", "market_cap_usd", MARKET_CAP_CHANGE_HOURS);
-    const volumeChange48hPct = changeOverHorizon(observations, token.id, "coingecko", "volume_24h_usd", VOLUME_CHANGE_TARGET_HOURS);
-    const volumeToMarketCapChange48hPct = volumeToMarketCapChangeOverHorizon(observations, token.id, VOLUME_TO_MARKET_CAP_CHANGE_HOURS);
+    const volumeChange24hPct = changeOverHorizon(observations, token.id, "coingecko", "volume_24h_usd", VOLUME_CHANGE_TARGET_HOURS);
+    const volumeToMarketCapChange24hPct = volumeToMarketCapChangeOverHorizon(observations, token.id, VOLUME_TO_MARKET_CAP_CHANGE_HOURS);
     const latestMarketCap = observationFor(observations, token.id, "coingecko", "market_cap_usd");
     if (latestMarketCap) metricSources.marketCapChange24hPct = {
       providerId: "calculated",
@@ -324,15 +324,15 @@ export function buildDashboardTokens(
       note: "Calculated server-side from CoinGecko market cap observations approximately 24 hours apart.",
     };
     const latestVolume = observationFor(observations, token.id, "coingecko", "volume_24h_usd");
-    if (latestVolume) metricSources.volumeChange48hPct = {
+    if (latestVolume) metricSources.volumeChange24hPct = {
       providerId: "calculated",
       collectedAt: latestVolume.collected_at,
-      note: "The latest stored 24h volume (itself already a trailing 24-hour figure) vs. the closest stored 24h volume observation approximately 24 hours before that -- i.e. the past 24 hours' volume vs. the preceding 24 hours'.",
+      note: "The latest stored 24h volume (itself already a trailing 24-hour figure) vs. the closest stored 24h volume observation approximately 24 hours before that -- i.e. the past 24 hours' volume vs. the preceding 24 hours', a day-over-day change in the rolling-24h figure.",
     };
-    if (latestVolume) metricSources.volumeToMarketCapChange48hPct = {
+    if (latestVolume) metricSources.volumeToMarketCapChange24hPct = {
       providerId: "calculated",
       collectedAt: latestVolume.collected_at,
-      note: "Calculated server-side from the volume_24h_usd / market_cap_usd ratio at matching CoinGecko collection timestamps approximately 24 hours apart (volume_24h_usd is itself already a trailing 24h figure, so this spans 48h of underlying trading activity, like volumeChange48hPct).",
+      note: "Calculated server-side from the volume_24h_usd / market_cap_usd ratio at matching CoinGecko collection timestamps approximately 24 hours apart, the same day-over-day comparison as volumeChange24hPct.",
     };
     const tokenRows = observations.filter((row) => row.token_id === token.id);
     const observedAt = tokenRows.map((row) => row.collected_at).sort().at(-1) ?? "";
@@ -353,8 +353,8 @@ export function buildDashboardTokens(
       tvlUsd: valueFor("tvl_usd", "defillama", "tvlUsd"),
       tvlChange30dPct,
       marketCapChange24hPct,
-      volumeChange48hPct,
-      volumeToMarketCapChange48hPct,
+      volumeChange24hPct,
+      volumeToMarketCapChange24hPct,
       fees24hUsd: valueFor("fees_24h_usd", "defillama", "fees24hUsd"),
       revenue24hUsd: valueFor("revenue_24h_usd", "defillama", "revenue24hUsd"),
       observedAt,

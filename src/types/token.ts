@@ -18,8 +18,8 @@ export type DashboardMetricKey =
   | "tvlUsd"
   | "tvlChange30dPct"
   | "marketCapChange24hPct"
-  | "volumeChange48hPct"
-  | "volumeToMarketCapChange48hPct"
+  | "volumeChange24hPct"
+  | "volumeToMarketCapChange24hPct"
   | "fees24hUsd"
   | "revenue24hUsd";
 
@@ -57,13 +57,11 @@ export type DashboardToken = {
   marketCapChange24hPct?: number | null;
   /** % change between the latest stored 24h volume (volume_24h_usd, itself already a trailing 24h figure) and the
    *  closest stored volume_24h_usd observation ~24h before that -- i.e. "today's 24h volume" vs "the preceding 24h
-   *  volume". Absent/null = unavailable. */
-  volumeChange48hPct?: number | null;
+   *  volume", a day-over-day change in the rolling-24h figure. Absent/null = unavailable. */
+  volumeChange24hPct?: number | null;
   /** % change in the volume_24h_usd / market_cap_usd ratio vs its closest matched-timestamp value ~24h earlier --
-   *  labeled "48h" like volumeChange48hPct since the ratio's own volume_24h_usd numerator is already a trailing
-   *  24h figure, so a 24h-apart comparison of the ratio spans 48h of underlying trading activity the same way.
-   *  Absent/null = unavailable. */
-  volumeToMarketCapChange48hPct?: number | null;
+   *  same day-over-day comparison as volumeChange24hPct. Absent/null = unavailable. */
+  volumeToMarketCapChange24hPct?: number | null;
   fees24hUsd: number | null;
   revenue24hUsd: number | null;
   observedAt: string;
