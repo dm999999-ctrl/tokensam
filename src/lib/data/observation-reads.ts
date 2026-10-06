@@ -33,8 +33,7 @@ function fail(error: { message: string } | null, action: string): void {
 }
 
 type PageQuery = (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { message: string; code?: string } | null }>;
-type KeysetQuery = (afterId: number) => PromiseLike<{ data: unknown[] | null; error: { message: string; code?: string } | null }>;
-
+/** Offset paging, kept for the small raw-record reads where depth never grows. */
 async function readPages<T>(query: PageQuery, action: string): Promise<{ rows: T[]; missing: boolean }> {
   const rows: T[] = [];
   for (let offset = 0; ; offset += PAGE_SIZE) {
@@ -47,35 +46,71 @@ async function readPages<T>(query: PageQuery, action: string): Promise<{ rows: T
   }
 }
 
+type KeysetQuery = (fromObservedAt: string | null) => PromiseLike<{ data: unknown[] | null; error: { message: string; code?: string } | null }>;
+
 /**
- * Pages by seeking past the last id instead of by OFFSET.
+ * Pages by seeking forward on `observed_at` instead of by OFFSET.
  *
- * OFFSET makes PostgreSQL produce and discard every row before the window, so a
- * scan of N rows in pages of PAGE_SIZE costs O(N^2/PAGE_SIZE) overall. Measured on
- * production (2026-10-06) for the 14-day coingecko price_usd series the metrics
- * engine reads: 107,669 rows, 108 pages, and the single page at OFFSET 100000
- * already read 101,118 rows and 60,573 buffers to return 1,000. Summed across the
- * run that query exceeded PostgREST's statement timeout, which is what made the
- * metrics step fail and time out repeatedly while leaving calculated metrics stale.
+ * OFFSET made PostgreSQL produce and discard every row before the window, so a scan
+ * of N rows in pages of PAGE_SIZE cost O(N^2/PAGE_SIZE). For the 14-day coingecko
+ * price_usd series the metrics engine reads (107,669 rows, 108 pages) the deep pages
+ * blew PostgREST's statement timeout, which is what made the metrics step fail
+ * repeatedly and leave calculated metrics stale.
  *
- * Seeking on `id` is correct here because id is monotonic for an append-only table,
- * so "id > last seen" never skips or repeats a row even as new rows arrive mid-read.
- * It does mean rows come back in id order rather than the caller's preferred order;
- * every caller below already sorts what it needs (latestPerMetric sorts by
- * newestFirst, and run-calculation.ts sorts the merged series by observed_at, id),
- * so no caller depends on the database's ordering.
+ * Seeking on observed_at -- rather than on `id`, which an earlier attempt at this fix
+ * used -- is what makes it fast. provider_metric_history_lookup_idx is
+ * (provider_id, metric_id, observed_at), so an observed_at range is an index condition
+ * and every row the scan touches is a row the caller wants. Seeking on id instead
+ * forced a primary-key scan that filtered provider/metric/observed_at per row and
+ * discarded ~22,000 rows to fill the first page (1,478 ms, measured), which still timed
+ * out under production load. Measured on production (2026-10-06) for the same first
+ * page: 1,107 buffers and 29.6 ms via observed_at, against 6,717 buffers and 1,478 ms
+ * via id, and 60,573 buffers and 113 ms for OFFSET 100000.
+ *
+ * The cursor is inclusive (`>= last observed_at`) because observed_at is NOT unique --
+ * a provider writes one timestamp across every token in a batch -- so an exclusive
+ * seek would skip the rest of the boundary group. The overlap that creates is removed
+ * by id, which is why `seen` is tracked.
+ *
+ * This requires PAGE_SIZE to exceed the number of rows sharing a single observed_at
+ * (182 at the time of writing: one per canonical token in a batch, against PAGE_SIZE
+ * 1000). If that ever stops holding, a page cannot advance past the group, and the
+ * guard below throws rather than looping forever.
+ *
+ * Rows come back in observed_at order. Callers that need another order sort for
+ * themselves: latestPerMetric sorts by newestFirst, and run-calculation.ts sorts the
+ * merged series by observed_at then id.
  */
-async function readKeyset<T extends { id: number }>(query: KeysetQuery, action: string): Promise<{ rows: T[]; missing: boolean }> {
+async function readKeyset<T extends { id: number; observed_at: string }>(
+  query: KeysetQuery,
+  action: string,
+): Promise<{ rows: T[]; missing: boolean }> {
   const rows: T[] = [];
-  let afterId = 0;
+  const seen = new Set<number>();
+  let cursor: string | null = null;
+
   for (;;) {
-    const { data, error } = await query(afterId);
-    if (afterId === 0 && isMissingRelation(error)) return { rows, missing: true };
+    const { data, error } = await query(cursor);
+    if (cursor === null && isMissingRelation(error)) return { rows, missing: true };
     fail(error, action);
     const page = (data ?? []) as T[];
-    rows.push(...page);
+
+    let added = 0;
+    for (const row of page) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      rows.push(row);
+      added += 1;
+    }
     if (page.length < PAGE_SIZE) return { rows, missing: false };
-    afterId = page[page.length - 1].id;
+
+    const nextCursor = page[page.length - 1].observed_at;
+    if (added === 0 && nextCursor === cursor) {
+      throw new Error(
+        `Supabase ${action} failed: more than ${PAGE_SIZE} rows share observed_at ${cursor}, so keyset paging cannot advance.`,
+      );
+    }
+    cursor = nextCursor;
   }
 }
 
@@ -119,10 +154,11 @@ export async function readLatestObservations<T extends Row>(client: SupabaseAdmi
     // current data, so bound the read to the recent window and collapse to the
     // newest row per token/provider/metric in application memory.
     const since = new Date(Date.now() - LATEST_READ_WINDOW_MS).toISOString();
-    const all = await readKeyset<T>((afterId) => client.from("token_metric_observations")
+    const all = await readKeyset<T>((fromObservedAt) => client.from("token_metric_observations")
       .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS).is("excluded_reason", null)
-      .gte("observed_at", since)
-      .gt("id", afterId).order("id", { ascending: true }).limit(PAGE_SIZE), "read recent observations");
+      .gte("observed_at", fromObservedAt ?? since)
+      .order("observed_at", { ascending: true }).order("id", { ascending: true })
+      .limit(PAGE_SIZE), "read recent observations");
     return latestPerMetric(all.rows);
   };
 
@@ -142,12 +178,13 @@ export async function readObservationWindow<T extends Row>(
   since: Date,
 ): Promise<T[]> {
   if (tokenIds.length === 0) return [];
-  const results = await Promise.all(series.map(({ providerId, metricId }) => readKeyset<T>((afterId) => client
+  const results = await Promise.all(series.map(({ providerId, metricId }) => readKeyset<T>((fromObservedAt) => client
     .from("token_metric_observations")
     .select(COLUMNS).in("token_id", tokenIds).eq("provider_id", providerId).eq("metric_id", metricId)
     .is("excluded_reason", null)
-    .gte("observed_at", since.toISOString())
-    .gt("id", afterId).order("id", { ascending: true }).limit(PAGE_SIZE), `read ${providerId} ${metricId} history`)));
+    .gte("observed_at", fromObservedAt ?? since.toISOString())
+    .order("observed_at", { ascending: true }).order("id", { ascending: true })
+    .limit(PAGE_SIZE), `read ${providerId} ${metricId} history`)));
   return results.flatMap((result) => result.rows);
 }
 

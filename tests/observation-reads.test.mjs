@@ -91,6 +91,60 @@ test("readObservationWindow stops at the cutoff and does not loop forever", asyn
   assert.equal(all.length, PAGE_SIZE);
 });
 
+test("rows sharing one observed_at are not skipped or duplicated across page boundaries", async () => {
+  // Production shape: a provider writes ONE observed_at across every token in a batch
+  // (182 rows share a timestamp on this deployment). The cursor is inclusive (>=) because
+  // an exclusive seek would drop the rest of a boundary group, so the overlap it creates
+  // has to be removed by id. Group size here is chosen so groups straddle page edges.
+  const GROUP = 182;
+  const groups = 14; // 2548 rows: boundaries land mid-group, not on a page edge
+  const base = Date.parse("2026-10-01T00:00:00.000Z");
+  const rows = [];
+  let id = 1;
+  for (let g = 0; g < groups; g += 1) {
+    const observedAt = new Date(base + g * 900_000).toISOString();
+    for (let t = 0; t < GROUP; t += 1) {
+      rows.push(observation(id++, `token-${t}`, "coingecko", "price_usd", observedAt));
+    }
+  }
+  const db = createFakeSupabase({ seed: { token_metric_observations: rows } });
+
+  const read = await readObservationWindow(
+    db.client,
+    [...new Set(rows.map((row) => row.token_id))],
+    [{ providerId: "coingecko", metricId: "price_usd" }],
+    new Date("2026-09-01T00:00:00.000Z"),
+  );
+
+  assert.equal(read.length, rows.length, "every row across every timestamp group must come back");
+  assert.equal(new Set(read.map((row) => row.id)).size, rows.length, "the inclusive cursor must not duplicate the boundary group");
+  assert.deepEqual(
+    read.map((row) => row.id).sort((a, b) => a - b),
+    rows.map((row) => row.id),
+    "no row may be skipped at a group that straddles a page boundary",
+  );
+});
+
+test("a timestamp group larger than one page throws instead of looping forever", async () => {
+  // The seek is only safe while PAGE_SIZE exceeds the rows sharing one observed_at.
+  // If the token universe ever grew past a page, the cursor could not advance.
+  const sameTime = "2026-10-01T00:00:00.000Z";
+  const rows = Array.from({ length: PAGE_SIZE + 50 }, (_, index) =>
+    observation(index + 1, `token-${index}`, "coingecko", "price_usd", sameTime));
+  const db = createFakeSupabase({ seed: { token_metric_observations: rows } });
+
+  await assert.rejects(
+    readObservationWindow(
+      db.client,
+      rows.map((row) => row.token_id),
+      [{ providerId: "coingecko", metricId: "price_usd" }],
+      new Date("2026-09-01T00:00:00.000Z"),
+    ),
+    /share observed_at/,
+    "must fail loudly rather than spin",
+  );
+});
+
 test("a provider or metric outside the requested series is never returned", async () => {
   const rows = [
     ...seedRows(5),
