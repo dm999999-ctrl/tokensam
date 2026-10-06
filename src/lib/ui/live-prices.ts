@@ -121,6 +121,24 @@ export function applyLivePrices(
       };
     }
 
+    /**
+     * FDV is price x TOTAL supply. It is recomputed from the live price and the supply
+     * implied by the stored record (see fdvSupply in types/token.ts) rather than scaled
+     * by the price ratio, because that supply is exact: it comes from the same payload as
+     * the FDV, so the two can never be mismatched. Omitted when no supply was derived,
+     * leaving the stored FDV and its CoinGecko provenance alone.
+     */
+    const liveFdv = Number.isFinite(token.fdvSupply) && (token.fdvSupply as number) > 0
+      ? live.p * (token.fdvSupply as number)
+      : null;
+    if (liveFdv !== null) {
+      sources.fdvUsd = {
+        providerId: "binance" as const,
+        collectedAt,
+        note: "Live Binance price multiplied by the total supply implied by the stored market-data record. Supply is unchanged from that record; only the price component is live.",
+      };
+    }
+
     // Vol / mcap is a server-calculated metric whose denominator just moved, so it must be
     // recomputed or the row would show a ratio that contradicts its own market-cap column.
     // The 24-hour volume is NOT touched: it is value actually traded over a window, which a
@@ -135,6 +153,7 @@ export function applyLivePrices(
       change24hPct: live.c,
       ...(live7d !== null ? { change7dPct: live7d } : {}),
       ...(liveMarketCap !== null ? { marketCapUsd: liveMarketCap } : {}),
+      ...(liveFdv !== null ? { fdvUsd: liveFdv } : {}),
       calculated,
       metricSources: sources,
     };

@@ -14,7 +14,8 @@ function token(id, overrides = {}) {
   return {
     id, name: id, symbol: "X", chain: "Ethereum", category: "DeFi",
     priceUsd: 100, change24hPct: 1, change7dPct: 7, marketCapUsd: 1000,
-    volume24hUsd: 50, calculated: { volume_to_market_cap: 0.05 }, fdvUsd: null, circulatingSupply: 10, maximumSupply: 20,
+    volume24hUsd: 50, calculated: { volume_to_market_cap: 0.05 },
+    fdvSupply: 20, fdvUsd: 2000, circulatingSupply: 10, maximumSupply: 20,
     tvlUsd: null, tvlChange30dPct: null, marketCapChange24hPct: null,
     volumeChange48hPct: null, volumeToMarketCapChange48hPct: null,
     fees24hUsd: null, revenue24hUsd: null, observedAt: fresh,
@@ -114,6 +115,29 @@ test("an unusable price or market cap leaves both the cap and the ratio alone", 
     }, NOW);
     assert.equal(row.marketCapUsd, overrides.marketCapUsd === null ? null : 1000, "no fabricated market cap");
     assert.equal(row.calculated.volume_to_market_cap, 0.05, "stored ratio survives");
+    assert.equal(row.priceUsd, 200, "the live price still applies");
+  }
+});
+
+test("FDV is recomputed from the live price and the implied total supply", () => {
+  // fdvSupply (20) is fdv/price from the SAME stored record, i.e. the total supply
+  // CoinGecko priced it on -- not circulating, and not maximum, which 68 of 182 tokens
+  // do not even have. Price doubles, so FDV doubles.
+  const [row] = applyLivePrices([token(MAPPED_ID)], {
+    asOf: fresh, prices: { [MAPPED_SYMBOL]: { p: 200, c: 5 } },
+  }, NOW);
+
+  assert.equal(row.fdvUsd, 4000, "200 x 20");
+  assert.equal(row.metricSources.fdvUsd.providerId, "binance");
+  assert.match(row.metricSources.fdvUsd.note, /Supply is unchanged/);
+});
+
+test("FDV without a derivable supply keeps the stored figure", () => {
+  for (const overrides of [{ fdvSupply: null }, { fdvSupply: 0 }, { fdvSupply: undefined }]) {
+    const [row] = applyLivePrices([token(MAPPED_ID, overrides)], {
+      asOf: fresh, prices: { [MAPPED_SYMBOL]: { p: 200, c: 5 } },
+    }, NOW);
+    assert.equal(row.fdvUsd, 2000, "no fabricated FDV");
     assert.equal(row.priceUsd, 200, "the live price still applies");
   }
 });

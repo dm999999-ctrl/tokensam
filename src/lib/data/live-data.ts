@@ -491,7 +491,7 @@ export function attachDashboardExtras(
   extras: {
     logos: Record<string, string>;
     calculated: Map<string, Partial<Record<DashboardCalculatedKey, number | null>>>;
-    fdv?: Record<string, { value: number; collectedAt: string }>;
+    fdv?: Record<string, { value: number; supply: number | null; collectedAt: string }>;
     /** 7D volume (sum of seven non-overlapping 24-hour observations); absent = unavailable. */
     volume7d?: Record<string, number>;
   },
@@ -512,6 +512,7 @@ export function attachDashboardExtras(
     return {
       ...token,
       fdvUsd: fdv?.value ?? null,
+      fdvSupply: fdv?.supply ?? null,
       volume7dUsd: extras.volume7d?.[token.id] ?? null,
       metricSources: fdv
         ? { ...token.metricSources, fdvUsd: { providerId: "coingecko", collectedAt: fdv.collectedAt, note: "Token-level FDV as reported in the stored market-data record." } }
@@ -568,7 +569,7 @@ async function readSevenDayVolumes(client: SupabaseAdminClient, latest: DbObserv
 }
 
 /** Token-level FDV from the latest stored /coins/markets payloads; optional, so a failed read leaves FDV unavailable. */
-async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]): Promise<Record<string, { value: number; collectedAt: string }>> {
+async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]): Promise<Record<string, { value: number; supply: number | null; collectedAt: string }>> {
   // Read directly from the indexed CoinGecko markets history instead of the latest_raw
   // view (same fix as readTokenLogos below, for the same reason): that view's DISTINCT ON
   // over the full raw_provider_records table has no matching index and was intermittently
@@ -584,7 +585,7 @@ async function readReportedFdv(client: SupabaseAdminClient, tokenIds: string[]):
     // the first hit), so within that bounded set the array is reversed to oldest-first:
     // the newest record for each token is then the last write and wins.
     const result = await client.from("raw_provider_records")
-      .select("token_id,collected_at,endpoint_label,payload_id:payload->>id,fdv:payload->fully_diluted_valuation")
+      .select("token_id,collected_at,endpoint_label,payload_id:payload->>id,fdv:payload->fully_diluted_valuation,price:payload->current_price")
       .eq("provider_id", "coingecko")
       .eq("endpoint_label", COINGECKO_MARKETS_ENDPOINT)
       .in("token_id", tokenIds)
@@ -774,7 +775,7 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
       }),
       () => latestRead.then((rows) => readSevenDayVolumes(client, rows)),
     ] satisfies Array<() => Promise<unknown>>) as [
-      DbObservation[], DbObservation[], Record<string, string>, Record<string, { value: number; collectedAt: string }>, DbCalculatedValue[], Record<string, number>,
+      DbObservation[], DbObservation[], Record<string, string>, Record<string, { value: number; supply: number | null; collectedAt: string }>, DbCalculatedValue[], Record<string, number>,
     ];
     const refreshStatus = await readRefreshStatus(client, latest);
     const baseTokens = buildDashboardTokens(tokens, (chainResult.data ?? []) as DbChain[], mergeById(latest, tvlHistory));
