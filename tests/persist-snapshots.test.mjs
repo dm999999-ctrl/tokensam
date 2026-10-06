@@ -33,6 +33,31 @@ function existingRow(id, tokenId, metricId, observedAtIso) {
   };
 }
 
+test("persistRawRecords: false stores observations but writes no raw_provider_records", async () => {
+  // Binance opts out (see run-binance-collection.ts): its ticker payload holds nothing the
+  // observations do not, and at 180 tokens per run the rows dominated a 500 MB plan.
+  const db = createFakeSupabase({ seed: {} });
+  const result = await persistProviderSnapshots(
+    db.client, [snapshot("bitcoin", observedAt(1))], undefined, undefined, { persistRawRecords: false },
+  );
+
+  assert.equal(result.rawRecords, 0, "the reported count must not claim rows it did not write");
+  assert.equal(db.rows("raw_provider_records").length, 0, "no raw rows may be written");
+  const observations = db.rows("token_metric_observations");
+  assert.equal(observations.length, 1, "observations are still persisted");
+  assert.equal(observations[0].raw_record_id, null, "the FK is left null, not dangling");
+  assert.equal(Number(observations[0].value), 1);
+});
+
+test("raw records are still written by default, so other providers are unaffected", async () => {
+  const db = createFakeSupabase({ seed: {} });
+  const result = await persistProviderSnapshots(db.client, [snapshot("bitcoin", observedAt(1))]);
+
+  assert.equal(result.rawRecords, 1);
+  assert.equal(db.rows("raw_provider_records").length, 1);
+  assert.equal(db.rows("token_metric_observations")[0].raw_record_id, db.rows("raw_provider_records")[0].id);
+});
+
 test("existingKeysLookup keyset pagination: dedup is exact across more than one page of pre-existing rows", async () => {
   // 1500 pre-existing rows across 1500 distinct tokens, all inside the observed_at window this
   // run's snapshots fall in — forces the existingKeys loop through 2 pages (limit 1000/page).

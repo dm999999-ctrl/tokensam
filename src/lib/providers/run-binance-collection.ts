@@ -140,7 +140,11 @@ export async function runBinanceCollection(
 
   const persistStart = Date.now();
   diagnostics.start("binance.persistProviderSnapshots");
-  const persisted = await persistProviderSnapshots(client, snapshots, diagnostics);
+  // No raw_provider_records for Binance. The ticker payload holds only the two fields the
+  // observations already carry (lastPrice, priceChangePercent) plus closeTime, which becomes
+  // observed_at, so a raw row adds no debugging value. At 180 tokens per run it was the
+  // largest single consumer of a 500 MB plan -- ~52,000 rows/day against CoinGecko's ~17,500.
+  const persisted = await persistProviderSnapshots(client, snapshots, diagnostics, undefined, { persistRawRecords: false });
   diagnostics.end("binance.persistProviderSnapshots");
   const persistMs = Date.now() - persistStart;
 
