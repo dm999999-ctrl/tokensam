@@ -23,7 +23,7 @@ const CONTEXT_COVERAGE_PERIODS = ["24H", "7D", "30D"] as const;
 /** History supplied to the model: one point per UTC day for this many days. */
 export const CONTEXT_HISTORY_DAYS = 30;
 const HOUR_MS = 60 * 60 * 1000;
-const PROVIDER_LABEL: Record<ProviderStep, string> = { coingecko: "CoinGecko", binance: "Binance", defillama: "DeFiLlama", dexscreener: "DEX Screener", defillama_coins: "DeFiLlama (token prices)" };
+const PROVIDER_LABEL: Record<ProviderStep, string> = { coingecko: "CoinGecko", defillama: "DeFiLlama", dexscreener: "DEX Screener", defillama_coins: "DeFiLlama (token prices)" };
 const HISTORY_SERIES = [
   { providerId: "coingecko", metricId: "price_usd" },
   { providerId: "coingecko", metricId: "market_cap_usd" },

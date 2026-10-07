@@ -83,7 +83,7 @@ test("1-2. a full refresh runs the real collectors, persists observations, then 
   });
 
   assert.equal(result.status, "succeeded");
-  assert.deepEqual(new Set(result.due), new Set(["coingecko", "binance", "dexscreener", "defillama", "defillama_coins"]));
+  assert.deepEqual(new Set(result.due), new Set(["coingecko", "dexscreener", "defillama", "defillama_coins"]));
   const byStep = Object.fromEntries(result.steps.map((step) => [step.step, step]));
   assert.equal(byStep.coingecko.status, "succeeded");
   assert.equal(byStep.coingecko.detail.returnedAssets, 238);
@@ -237,7 +237,6 @@ test("5. metrics run once after providers and are skipped when nothing is due", 
   const order = [];
   const collectors = {
     coingecko: { collect: async () => { order.push("coingecko"); return { observations: 1 }; } },
-    binance: { collect: async () => { order.push("binance"); return { observations: 1 }; } },
     dexscreener: { collect: async () => { order.push("dexscreener"); return { observations: 1 }; } },
     defillama: { collect: async () => { order.push("defillama"); return { observations: 1 }; } },
   };
@@ -275,7 +274,6 @@ test("cadence: force refresh behavior remains unchanged", async () => {
   const order = [];
   const collectors = {
     coingecko: { collect: async () => { order.push("coingecko"); return { observations: 1 }; } },
-    binance: { collect: async () => { order.push("binance"); return { observations: 1 }; } },
     dexscreener: { collect: async () => { order.push("dexscreener"); return { observations: 1 }; } },
     defillama: { collect: async () => { order.push("defillama"); return { observations: 1 }; } },
   };
@@ -289,7 +287,7 @@ test("cadence: force refresh behavior remains unchanged", async () => {
   order.length = 0;
   const forced = await runDataRefresh(db.client, store, { trigger: "manual", collectors, calculateMetrics, force: true });
   assert.equal(forced.status, "succeeded");
-  assert.deepEqual(new Set(order), new Set(["coingecko", "binance", "dexscreener", "defillama", "metrics"]));
+  assert.deepEqual(new Set(order), new Set(["coingecko", "dexscreener", "defillama", "metrics"]));
 });
 
 test("overall status distinguishes succeeded, partial, failed, and skipped", () => {

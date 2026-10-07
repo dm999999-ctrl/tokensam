@@ -11,7 +11,7 @@ import { getGeminiConfig, generateStructuredJson } from "../src/lib/analysis/gem
 import { ANALYSIS_HOURLY_LIMIT, generateTokenAnalysis, getAnalysisState } from "../src/lib/analysis/service.ts";
 import { createFakeSupabase } from "./support/fake-supabase.mjs";
 import { createProviderHealth } from "../src/lib/analysis/ai/health.ts";
-import { getLiveTokenProfile } from "../src/lib/data/live-data.ts";
+import { getLiveTokenProfileForAnalysis } from "../src/lib/data/live-data.ts";
 import { buildProfilePayload } from "../src/lib/analysis/profile-payload.ts";
 import { buildProfileResponseSchema } from "../src/lib/analysis/profile-contract.ts";
 
@@ -139,7 +139,12 @@ function dbSeed(extra = {}) {
  * The generation service analyses the Token Profile payload (what the page shows), built by the page's own
  * loader from the seeded database. A report that satisfies the evidence contract for that payload:
  */
-const seedPayload = buildProfilePayload(await getLiveTokenProfile(TOKEN, createFakeSupabase({ seed: dbSeed() }).client));
+// getLiveTokenProfileForAnalysis, not getLiveTokenProfile: this fixture's "golden"
+// payload must be built the same way generateTokenAnalysis itself builds its
+// profile (no live Binance fetch), or a validReport() citing payloadField(...) values
+// from a Binance-enriched fixture could disagree with what generation actually
+// produces from its own Binance-free profile.
+const seedPayload = buildProfilePayload(await getLiveTokenProfileForAnalysis(TOKEN, createFakeSupabase({ seed: dbSeed() }).client));
 function payloadField(id) {
   const field = seedPayload.fields.find((item) => item.id === id);
   if (!field) throw new Error(`The seeded profile payload has no field ${id}`);

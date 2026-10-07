@@ -10,8 +10,8 @@ import {
 import { binanceSymbols, binanceUnmapped } from "../src/data/binance-token-mappings.ts";
 import { canonicalTokens } from "../src/data/canonical-tokens.ts";
 import { tokenCoverage } from "../src/data/provider-coverage.ts";
-import { buildDashboardTokens } from "../src/lib/data/live-data.ts";
-import { PROVIDER_STEPS, REFRESH_POLICY } from "../src/lib/refresh/config.ts";
+import { BINANCE_PREFERRED_MAX_AGE_MS, buildDashboardTokens } from "../src/lib/data/live-data.ts";
+import { PROVIDER_STEPS } from "../src/lib/refresh/config.ts";
 
 const asset = { tokenId: "token-a", chainId: "chain-a", externalAssetId: "AAAUSDT" };
 
@@ -210,11 +210,13 @@ test("coverage reports Binance as live-price-only, and states why a gap exists",
   assert.equal(gap.detail, binanceUnmapped[gapId].detail);
 });
 
-test("binance is a refresh step whose UI staleness bound matches the read-layer preference", () => {
-  assert.ok(PROVIDER_STEPS.includes("binance"));
-  assert.equal(REFRESH_POLICY.binance.label, "Binance");
-  // The read layer prefers a Binance price only while it is younger than this.
-  assert.ok(REFRESH_POLICY.binance.staleAfterMs > REFRESH_POLICY.binance.intervalMs);
+test("binance is fetched live at render time, not as a refresh-pipeline step", () => {
+  // Binance is no longer collected on a schedule and written to Supabase (see
+  // fetchLiveBinanceObservations in live-data.ts) -- it is fetched live on every
+  // dashboard/profile render instead, the same way the client-side flashing ticker
+  // already worked. There is accordingly no refresh-cadence config for it to check.
+  assert.ok(!PROVIDER_STEPS.includes("binance"));
+  assert.ok(BINANCE_PREFERRED_MAX_AGE_MS > 0);
 });
 
 // ---- Read-layer preference and fallback ----
@@ -265,7 +267,7 @@ test("a fresh Binance price wins over CoinGecko, and is attributed to Binance", 
 });
 
 test("CoinGecko is used when Binance is stale, unavailable, or absent", () => {
-  const stale = new Date(now - REFRESH_POLICY.binance.staleAfterMs - 60_000).toISOString();
+  const stale = new Date(now - BINANCE_PREFERRED_MAX_AGE_MS - 60_000).toISOString();
 
   const staleCase = buildDashboardTokens([token], [], [
     row(1, "binance", "price_usd", "999", stale),
