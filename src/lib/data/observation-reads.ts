@@ -6,11 +6,11 @@ const PAGE_SIZE = 1000;
 // Providers whose observations the dashboard's "latest" read serves. "binance" must stay
 // listed: it supplies the preferred live price and 24h change (see livePriceRow in
 // live-data.ts), so omitting it here would silently fall every token back to CoinGecko.
-const PROVIDERS = ["coingecko", "binance", "defillama", "dexscreener", "defillama_coins"];
+export const PROVIDERS = ["coingecko", "binance", "defillama", "dexscreener", "defillama_coins"];
 // Dashboard latest reads only need a recent freshness window. Querying the
 // append-only history without a cutoff forces PostgreSQL to consider the full
 // table behind latest_token_metric_observations.
-const LATEST_READ_WINDOW_MS = 6 * 60 * 60 * 1000;
+export const LATEST_READ_WINDOW_MS = 6 * 60 * 60 * 1000;
 export const OBSERVATION_COLUMNS = "id,token_id,chain_id,metric_id,provider_id,raw_record_id,value,status,observed_at,collected_at,source_field,note";
 /** Provenance columns added by the token-centric scope migration (read when present). */
 export const SCOPE_COLUMNS = "scope,provider_asset_id,mapping_id";

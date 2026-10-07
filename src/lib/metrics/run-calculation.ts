@@ -1,5 +1,6 @@
 import { CALCULATED_METRICS, calculateAllMetrics, type ObservationInput, type RawRecordInput, type TokenInput } from "./engine.ts";
-import { mergeById, readLatestObservations, readLatestRawRecords, readObservationWindow } from "../data/observation-reads.ts";
+import { LATEST_READ_WINDOW_MS, PROVIDERS, mergeById, readLatestRawRecords } from "../data/observation-reads.ts";
+import { recordApproxRead } from "../monitoring/quota-tracker.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
@@ -45,12 +46,37 @@ async function readTokens(client: SupabaseAdminClient): Promise<TokenInput[]> {
   }
 }
 
+/**
+ * Both reads below call dedicated RPCs (20261007160000_metrics_calc_server_side_collapse)
+ * instead of observation-reads.ts's readLatestObservations/readObservationWindow: those
+ * fetch every row in a bounded window over the wire and collapse to the few rows actually
+ * needed in application memory, which was measured as this project's single largest
+ * Supabase-egress contributor (~25MB/run; metrics runs ~96 times/day). The RPCs do the
+ * identical collapse server side (latest-per-group; two-most-recent-points-per-series
+ * plus the one ~24h-prior point alignedCrossChange needs), so only the rows the engine
+ * actually reads cross the wire -- measured live at ~947KB/run for the same data, a ~97%
+ * reduction with no change to which rows feed the calculation.
+ */
 async function readObservations(client: SupabaseAdminClient, tokenIds: string[], now: Date): Promise<ObservationInput[]> {
-  const since = new Date(now.getTime() - SERIES_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
-  const [latest, history] = await Promise.all([
-    readLatestObservations<ObservationInput>(client, tokenIds),
-    readObservationWindow<ObservationInput>(client, tokenIds, SERIES_INPUTS, since),
+  const since = new Date(now.getTime() - LATEST_READ_WINDOW_MS).toISOString();
+  const [{ data: latestData, error: latestError }, { data: seriesData, error: seriesError }] = await Promise.all([
+    client.rpc("latest_observations_bounded", { p_token_ids: tokenIds, p_provider_ids: PROVIDERS, p_since: since }),
+    client.rpc("metrics_series_recent_points", {
+      p_token_ids: tokenIds,
+      p_providers: SERIES_INPUTS.map((series) => series.providerId),
+      p_metrics: SERIES_INPUTS.map((series) => series.metricId),
+      p_now: now.toISOString(),
+      p_horizon_hours: 24,
+      p_tolerance_hours: 6,
+      p_max_lookback_days: SERIES_LOOKBACK_DAYS,
+    }),
   ]);
+  throwOnError(latestError, "read latest observations (bounded rpc)");
+  throwOnError(seriesError, "read metrics series recent points (rpc)");
+  const latest = (latestData ?? []) as ObservationInput[];
+  const history = (seriesData ?? []) as ObservationInput[];
+  recordApproxRead(client, latest);
+  recordApproxRead(client, history);
   return mergeById(latest, history).sort((a, b) => Date.parse(a.observed_at) - Date.parse(b.observed_at) || a.id - b.id);
 }
 

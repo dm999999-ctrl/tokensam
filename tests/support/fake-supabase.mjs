@@ -151,8 +151,81 @@ export function createFakeSupabase({ seed = {}, views = true, missingTables = []
     }
   }
 
+  // Picks the "newest wins" row per group, mirroring `order by observed_at desc, id desc`.
+  function isNewer(a, b) {
+    const byTime = compare(a.observed_at, b.observed_at);
+    if (byTime !== 0) return byTime > 0;
+    return (a.id ?? 0) > (b.id ?? 0);
+  }
+
+  // Mirrors the SQL function of the same name (20261007160000): one row per
+  // (token_id, provider_id, metric_id) within [p_since, ) -- the newest observation wins.
+  function latestObservationsBounded({ p_token_ids, p_provider_ids, p_since }) {
+    const sinceMs = Date.parse(p_since);
+    const groups = new Map();
+    for (const row of rowsOf("token_metric_observations")) {
+      if (row.excluded_reason) continue;
+      if (!p_token_ids.includes(row.token_id)) continue;
+      if (!p_provider_ids.includes(row.provider_id)) continue;
+      if (Date.parse(row.observed_at) < sinceMs) continue;
+      const key = `${row.token_id}|${row.provider_id}|${row.metric_id}`;
+      const current = groups.get(key);
+      if (!current || isNewer(row, current)) groups.set(key, row);
+    }
+    return [...groups.values()].map((row) => ({ ...row }));
+  }
+
+  // Mirrors the SQL function of the same name (20261007160000): per (token_id, provider,
+  // metric) pair, the two most recent distinct observations within p_max_lookback_days of
+  // p_now, plus the observation nearest p_horizon_hours before the series' own latest
+  // point, within p_tolerance_hours.
+  function metricsSeriesRecentPoints(params) {
+    const { p_token_ids, p_providers, p_metrics, p_now, p_horizon_hours = 24, p_tolerance_hours = 6, p_max_lookback_days = 30 } = params;
+    const nowMs = Date.parse(p_now);
+    const lookbackMs = p_max_lookback_days * 24 * 60 * 60 * 1000;
+    const pairs = p_providers.map((providerId, index) => [providerId, p_metrics[index]]);
+    const result = [];
+    for (const tokenId of p_token_ids) {
+      for (const [providerId, metricId] of pairs) {
+        const candidates = rowsOf("token_metric_observations")
+          .filter((row) => row.token_id === tokenId && row.provider_id === providerId && row.metric_id === metricId
+            && !row.excluded_reason && nowMs - Date.parse(row.observed_at) <= lookbackMs)
+          .sort((a, b) => (isNewer(a, b) ? -1 : isNewer(b, a) ? 1 : 0));
+        const recent2 = candidates.slice(0, 2);
+        if (recent2.length === 0) continue;
+        result.push(...recent2);
+        const latestAtMs = Date.parse(recent2[0].observed_at);
+        const targetMs = latestAtMs - p_horizon_hours * 60 * 60 * 1000;
+        const toleranceMs = p_tolerance_hours * 60 * 60 * 1000;
+        let best = null;
+        let bestDiff = Infinity;
+        for (const row of candidates) {
+          const diff = Math.abs(Date.parse(row.observed_at) - targetMs);
+          if (diff <= toleranceMs && diff < bestDiff) { best = row; bestDiff = diff; }
+        }
+        if (best) result.push(best);
+      }
+    }
+    const byId = new Map();
+    for (const row of result) byId.set(row.id, row);
+    return [...byId.values()].map((row) => ({ ...row }));
+  }
+
+  const RPCS = {
+    latest_observations_bounded: latestObservationsBounded,
+    metrics_series_recent_points: metricsSeriesRecentPoints,
+    record_quota_usage: () => null,
+  };
+
+  function rpc(name, params = {}) {
+    calls.push({ table: name, op: "rpc" });
+    const handler = RPCS[name];
+    if (!handler) return Promise.resolve({ data: null, error: { message: `rpc '${name}' not implemented in the fake Supabase client` } });
+    return Promise.resolve({ data: handler(params), error: null });
+  }
+
   return {
-    client: { from: (table) => new Query(table) },
+    client: { from: (table) => new Query(table), rpc },
     rows: (table) => rowsOf(table),
     calls,
   };
