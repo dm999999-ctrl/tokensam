@@ -15,7 +15,20 @@ export const SERIES_INPUTS = [
   { providerId: "defillama", metricId: "revenue_24h_usd" },
   { providerId: "defillama", metricId: "fees_24h_usd" },
 ];
-export const SERIES_LOOKBACK_DAYS = 14;
+/**
+ * The engine never actually looks back this far: growthCalculation (engine.ts) only
+ * ever compares the two most recent distinct observations, and the cross-provider
+ * divergence/cross-change calculations only look for a point ~24h earlier, within a 6h
+ * tolerance (CROSS_CHANGE_HORIZON_HOURS/CROSS_CHANGE_TOLERANCE_HOURS) -- a 30-hour
+ * requirement at most. 14 days was over 11x more than that for every one of the 238
+ * canonical tokens x 5 series on every metrics run (which runs roughly as often as
+ * CoinGecko's own 15-minute refresh cadence), and was the single largest contributor to
+ * this project's Supabase egress: ~18.7MB average per recorded read in production
+ * (2026-10-07), almost entirely this one unbounded-relative-to-need window. 3 days
+ * keeps a comfortable margin above the real 30-hour requirement (a missed run, a
+ * weekend DeFiLlama collection drift) without reading 4x more than that margin needs.
+ */
+export const SERIES_LOOKBACK_DAYS = 3;
 
 function throwOnError(error: { message: string } | null, action: string): void {
   if (error) throw new Error(`Supabase ${action} failed: ${error.message}`);
