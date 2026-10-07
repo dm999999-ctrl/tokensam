@@ -3,6 +3,7 @@ import { isAuthorizedRefreshRequest } from "../../../../lib/refresh/auth.ts";
 import { PROVIDER_STEPS, type ProviderStep } from "../../../../lib/refresh/config.ts";
 import { runDataRefresh } from "../../../../lib/refresh/orchestrator.ts";
 import { SupabaseRefreshStore } from "../../../../lib/refresh/store.ts";
+import { evaluateQuotaLevel, writeThrottleState } from "../../../../lib/monitoring/quota-tracker.ts";
 
 export const dynamic = "force-dynamic";
 // Providers run concurrently within their own budgets (<= 120 s), then metrics (<= 90 s).
@@ -85,6 +86,35 @@ export async function GET(request: Request): Promise<Response> {
         }
       }
     }
+
+    // Egress and the two log metrics (Log Ingestion, Log Query) have no SQL-visible
+    // number the way database size does: evaluateQuotaLevel compares this app's own
+    // approximate daily request/byte tracking (quota-tracker.ts) plus the database
+    // size just read above against the free-plan budgets in quota-config.ts.
+    // Edge-triggered the same way as the database alert above: previousLevel is read
+    // before writeThrottleState overwrites it, so quotaAlert only fires on the
+    // transition into a worse level, not on every tick already at that level.
+    let quotaAlert = false;
+    let quota: Awaited<ReturnType<typeof evaluateQuotaLevel>> | null = null;
+    try {
+      const { data: previousState } = await client.from("quota_throttle_state").select("level").eq("id", true).maybeSingle();
+      const previousLevel = (previousState as { level?: string } | null)?.level ?? "none";
+      quota = await evaluateQuotaLevel(client, typeof databaseSizeBytes === "number" ? databaseSizeBytes : null);
+      await writeThrottleState(client, quota);
+      const severity = { none: 0, warn: 1, critical: 2 } as const;
+      if (quota.level !== "none" && severity[quota.level] > severity[previousLevel as keyof typeof severity]) {
+        quotaAlert = true;
+      }
+    } catch (error) {
+      console.error("Quota level evaluation failed:", error);
+    }
+    // Keeps quota_usage_counters from becoming an unbounded-growth contributor in its
+    // own right; cheap and a no-op on every call except the first one past midnight.
+    client.rpc("prune_quota_usage_counters").then(
+      ({ error }) => { if (error) console.error("Quota usage counter pruning failed:", error.message); },
+      (error: unknown) => console.error("Quota usage counter pruning failed:", error),
+    );
+
     // "lost_ownership" means this invocation's lease was reclaimed mid-run (see
     // runDataRefresh): its recorded steps are still committed, but it could not
     // finalize the run's own status row, so it is reported distinctly rather
@@ -101,6 +131,10 @@ export async function GET(request: Request): Promise<Response> {
       databaseSizeBytes: typeof databaseSizeBytes === "number" ? databaseSizeBytes : null,
       databaseSizeMb,
       databaseAlert,
+      quotaLevel: quota?.level ?? null,
+      quotaReasons: quota?.reasons ?? [],
+      quotaAlert,
+      quotaUsage: quota ? { todayRequests: quota.todayRequests, todayApproxBytes: quota.todayApproxBytes } : null,
       steps: result.steps.map(({ step, status: stepStatus, finishedAt, error }) => ({ step, status: stepStatus, finishedAt, error })),
     }, { status });
   } catch (error) {

@@ -21,7 +21,7 @@ import "server-only";
  */
 export function memoizeWithTtl<Args extends unknown[], T>(
   fn: (...args: Args) => Promise<T>,
-  ttlMs: number,
+  ttlMs: number | (() => number),
   keyFn: (...args: Args) => string = (...args) => JSON.stringify(args),
 ): (...args: Args) => Promise<T> {
   const entries = new Map<string, { at: number; value: Promise<T> }>();
@@ -29,7 +29,8 @@ export function memoizeWithTtl<Args extends unknown[], T>(
   return (...args: Args): Promise<T> => {
     const key = keyFn(...args);
     const cached = entries.get(key);
-    if (cached && Date.now() - cached.at < ttlMs) return cached.value;
+    const effectiveTtlMs = typeof ttlMs === "function" ? ttlMs() : ttlMs;
+    if (cached && Date.now() - cached.at < effectiveTtlMs) return cached.value;
 
     const value = fn(...args).catch((error: unknown) => {
       // A failed read must not poison the cache for the rest of the TTL window.

@@ -3,6 +3,7 @@ import "server-only";
 import { createSupabaseAdminClient } from "../supabase/admin.ts";
 import { OBSERVATION_COLUMNS, latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
 import { memoizeWithTtl } from "./ttl-cache.ts";
+import { getCacheTtlMultiplierSync, refreshThrottleLevelInBackground } from "../monitoring/quota-tracker.ts";
 import { selectMovers, type Movers } from "../ui/movers.ts";
 import { buildTechnicalIndicators, INDICATOR_METHOD, withExtraIndicators } from "../indicators/build.ts";
 import { buildConcentrationIndicators } from "../indicators/onchain-concentration.ts";
@@ -750,6 +751,7 @@ const DASHBOARD_CACHE_TTL_MS = 20_000;
 async function getLiveDashboardDataUncached(): Promise<{ tokens: DashboardToken[]; error: string | null; refreshStatus: RefreshStatusView | null }> {
   try {
     const client = createSupabaseAdminClient();
+    refreshThrottleLevelInBackground(client);
     const [tokenResult, chainResult] = await Promise.all([
       client.from("tokens").select("id,name,symbol,chain_id,contract_address,is_native,category,description").order("name"),
       client.from("chains").select("id,name"),
@@ -797,12 +799,17 @@ async function getLiveDashboardDataUncached(): Promise<{ tokens: DashboardToken[
   }
 }
 
-export const getLiveDashboardData = memoizeWithTtl(getLiveDashboardDataUncached, DASHBOARD_CACHE_TTL_MS, () => "dashboard");
+export const getLiveDashboardData = memoizeWithTtl(
+  getLiveDashboardDataUncached,
+  () => DASHBOARD_CACHE_TTL_MS * getCacheTtlMultiplierSync(),
+  () => "dashboard",
+);
 
 const PROFILE_CACHE_TTL_MS = 20_000;
 
 /** `client` is injectable so the AI analysis reads the same profile data through the caller's client. */
 async function getLiveTokenProfileUncached(tokenId: string, client: SupabaseAdminClient = createSupabaseAdminClient()): Promise<LiveTokenProfileData | null> {
+  refreshThrottleLevelInBackground(client);
   const { data: tokenData, error: tokenError } = await client.from("tokens")
     .select("id,name,symbol,chain_id,contract_address,is_native,category,description")
     .eq("id", tokenId).maybeSingle();
@@ -951,7 +958,7 @@ async function getLiveTokenProfileUncached(tokenId: string, client: SupabaseAdmi
  */
 export const getLiveTokenProfile = memoizeWithTtl<[tokenId: string, client?: SupabaseAdminClient], LiveTokenProfileData | null>(
   getLiveTokenProfileUncached,
-  PROFILE_CACHE_TTL_MS,
+  () => PROFILE_CACHE_TTL_MS * getCacheTtlMultiplierSync(),
   (tokenId) => tokenId,
 );
 
@@ -965,6 +972,7 @@ const MOVERS_CACHE_TTL_MS = 20_000;
 async function getSidebarMoversUncached(): Promise<Movers | null> {
   try {
     const client = createSupabaseAdminClient();
+    refreshThrottleLevelInBackground(client);
     const tokenResult = await client.from("tokens").select("id,name,symbol,chain_id,contract_address,is_native,category,description");
     if (tokenResult.error) throw tokenResult.error;
     const tokens = (tokenResult.data ?? []) as DbToken[];
@@ -983,7 +991,11 @@ async function getSidebarMoversUncached(): Promise<Movers | null> {
   }
 }
 
-export const getSidebarMovers = memoizeWithTtl(getSidebarMoversUncached, MOVERS_CACHE_TTL_MS, () => "movers");
+export const getSidebarMovers = memoizeWithTtl(
+  getSidebarMoversUncached,
+  () => MOVERS_CACHE_TTL_MS * getCacheTtlMultiplierSync(),
+  () => "movers",
+);
 
 export function latestDashboardUpdate(tokens: DashboardToken[]): string | null {
   return tokens.flatMap((token) => Object.values(token.metricSources ?? {}).map((source) => source?.collectedAt ?? ""))

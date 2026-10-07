@@ -187,9 +187,9 @@ type RouteResult = { path: string; status: number; body: string; error: string |
 const DATABASE_ALERT_RECIPIENT = "dm9381369@gmail.com";
 const DATABASE_ALERT_SENDER = "onboarding@resend.dev";
 
-async function sendDatabaseAlert(env: Env, databaseSizeMb: number): Promise<void> {
+async function sendResendAlert(env: Env, subject: string, html: string): Promise<void> {
   if (!env.RESEND_API_KEY) {
-    console.error("refresh-scheduler: RESEND_API_KEY is not configured; database alert email was not sent.");
+    console.error(`refresh-scheduler: RESEND_API_KEY is not configured; alert "${subject}" was not sent.`);
     return;
   }
 
@@ -199,30 +199,61 @@ async function sendDatabaseAlert(env: Env, databaseSizeMb: number): Promise<void
       authorization: `Bearer ${env.RESEND_API_KEY}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      from: DATABASE_ALERT_SENDER,
-      to: [DATABASE_ALERT_RECIPIENT],
-      subject: "Token Samurai — Supabase database storage alert",
-      html: `
-        <h2>Token Samurai database storage alert</h2>
-        <p>Supabase database storage has reached <strong>440 MiB</strong> or more.</p>
-        <ul>
-          <li><strong>Current size:</strong> ${databaseSizeMb.toFixed(1)} MiB</li>
-          <li><strong>Threshold:</strong> 440 MiB</li>
-          <li><strong>Checked:</strong> ${new Date().toISOString()}</li>
-        </ul>
-        <p>Please investigate database growth before the 500 MB Supabase Free Plan limit is reached.</p>
-      `,
-    }),
+    body: JSON.stringify({ from: DATABASE_ALERT_SENDER, to: [DATABASE_ALERT_RECIPIENT], subject, html }),
   });
 
   const body = await response.text();
   if (!response.ok) {
-    console.error("refresh-scheduler: Resend database alert failed:", response.status, body.slice(0, 500));
+    console.error("refresh-scheduler: Resend alert failed:", response.status, body.slice(0, 500));
     return;
   }
 
-  console.log("refresh-scheduler: database storage alert email sent.");
+  console.log(`refresh-scheduler: alert email sent ("${subject}").`);
+}
+
+async function sendDatabaseAlert(env: Env, databaseSizeMb: number): Promise<void> {
+  await sendResendAlert(
+    env,
+    "Token Samurai — Supabase database storage alert",
+    `
+      <h2>Token Samurai database storage alert</h2>
+      <p>Supabase database storage has reached <strong>440 MiB</strong> or more.</p>
+      <ul>
+        <li><strong>Current size:</strong> ${databaseSizeMb.toFixed(1)} MiB</li>
+        <li><strong>Threshold:</strong> 440 MiB</li>
+        <li><strong>Checked:</strong> ${new Date().toISOString()}</li>
+      </ul>
+      <p>Please investigate database growth before the 500 MB Supabase Free Plan limit is reached.</p>
+    `,
+  );
+}
+
+/**
+ * Egress and the two log metrics (Log Ingestion, Log Query) have no exact number the
+ * app can report the way database size does (see evaluateQuotaLevel in
+ * quota-tracker.ts) -- this reports the app's own approximate daily tracking plus
+ * whichever of db size/egress/log ingestion tripped the level, not an exact bytes figure.
+ */
+async function sendQuotaAlert(env: Env, level: string, reasons: string[], usage: { todayRequests?: unknown; todayApproxBytes?: unknown } | null): Promise<void> {
+  const requests = typeof usage?.todayRequests === "number" ? usage.todayRequests : null;
+  const bytes = typeof usage?.todayApproxBytes === "number" ? usage.todayApproxBytes : null;
+  await sendResendAlert(
+    env,
+    `Token Samurai — Supabase quota ${level === "critical" ? "critical" : "warning"}`,
+    `
+      <h2>Token Samurai Supabase quota ${level}</h2>
+      <p>The app's own quota tracking has reached the <strong>${level}</strong> level for: ${reasons.join(", ") || "(unspecified)"}.</p>
+      <ul>
+        <li><strong>Today's approximate requests:</strong> ${requests ?? "unknown"}</li>
+        <li><strong>Today's approximate read bytes:</strong> ${bytes !== null ? (bytes / (1024 * 1024)).toFixed(1) + " MiB" : "unknown"}</li>
+        <li><strong>Checked:</strong> ${new Date().toISOString()}</li>
+      </ul>
+      <p>${level === "critical"
+        ? "The app has automatically throttled itself (longer cache TTLs, optional gap-repair reads skipped) to pull back from the Supabase Free Plan's egress/log limits."
+        : "No automatic action beyond longer cache TTLs yet; check the Supabase usage dashboard."}</p>
+      <p>This is an approximation tracked by the app itself, not Supabase's own billing figure -- see the Supabase dashboard's Usage page for the exact numbers.</p>
+    `,
+  );
 }
 
 
@@ -305,9 +336,17 @@ async function run(env: Env): Promise<RouteResult[]> {
       const refreshBody = JSON.parse(refreshResult.body) as {
         databaseSizeMb?: unknown;
         databaseAlert?: unknown;
+        quotaLevel?: unknown;
+        quotaReasons?: unknown;
+        quotaAlert?: unknown;
+        quotaUsage?: { todayRequests?: unknown; todayApproxBytes?: unknown } | null;
       };
       if (refreshBody.databaseAlert === true && typeof refreshBody.databaseSizeMb === "number") {
         await sendDatabaseAlert(env, refreshBody.databaseSizeMb);
+      }
+      if (refreshBody.quotaAlert === true && typeof refreshBody.quotaLevel === "string") {
+        const reasons = Array.isArray(refreshBody.quotaReasons) ? refreshBody.quotaReasons.filter((item): item is string => typeof item === "string") : [];
+        await sendQuotaAlert(env, refreshBody.quotaLevel, reasons, refreshBody.quotaUsage ?? null);
       }
     } catch (error) {
       console.error("refresh-scheduler: could not parse refresh database monitoring result:", error);
