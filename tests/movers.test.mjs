@@ -91,7 +91,7 @@ test("6. no additional API calls: movers reuse dashboard rows or stored observat
     assert.doesNotMatch(source(path), /fetch\(|lib\/providers|supabase/i, path);
   }
   const liveData = source("src/lib/data/live-data.ts");
-  const body = liveData.slice(liveData.indexOf("export async function getSidebarMovers"), liveData.indexOf("export function latestDashboardUpdate"));
+  const body = liveData.slice(liveData.indexOf("async function getSidebarMoversUncached"), liveData.indexOf("export const getSidebarMovers"));
   assert.ok(body.includes("latest_token_metric_observations") && body.includes("readTokenLogos("));
   assert.doesNotMatch(body, /fetch\(|run[A-Z]\w*Collection|lib\/providers/);
   assert.match(source("src/app/page.tsx"), /selectMovers\(data\.tokens\)/);
@@ -159,7 +159,7 @@ test("sidebar: labels, neutral volume styling, profile links; Research navigatio
 
 test("10. profile pages read change and volume from the same latest-observation view; no API calls", () => {
   const liveData = source("src/lib/data/live-data.ts");
-  const body = liveData.slice(liveData.indexOf("export async function getSidebarMovers"), liveData.indexOf("export function latestDashboardUpdate"));
+  const body = liveData.slice(liveData.indexOf("async function getSidebarMoversUncached"), liveData.indexOf("export const getSidebarMovers"));
   assert.match(body, /\.in\("metric_id", \["price_change_24h_pct", "volume_24h_usd"\]\)/);
   assert.match(body, /from\("tokens"\)/, "same canonical token registry as the dashboard");
   assert.doesNotMatch(body, /fetch\(|lib\/providers/);

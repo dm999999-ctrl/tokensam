@@ -2,6 +2,7 @@ import "server-only";
 
 import { createSupabaseAdminClient } from "../supabase/admin.ts";
 import { OBSERVATION_COLUMNS, latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
+import { memoizeWithTtl } from "./ttl-cache.ts";
 import { selectMovers, type Movers } from "../ui/movers.ts";
 import { buildTechnicalIndicators, INDICATOR_METHOD, withExtraIndicators } from "../indicators/build.ts";
 import { buildConcentrationIndicators } from "../indicators/onchain-concentration.ts";
@@ -740,7 +741,13 @@ async function readRefreshStatus(client: SupabaseAdminClient, latestRows: DbObse
   return buildRefreshStatus({ lastSuccess, latestCollected, latestRunStatus, now });
 }
 
-export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]; error: string | null; refreshStatus: RefreshStatusView | null }> {
+// Collectors only refresh data every 5-15 minutes (see REFRESH_POLICY), so a short
+// per-process cache here costs no meaningful freshness but coalesces repeat page
+// views, crawlers, and concurrent requests on the same warm instance into one
+// Supabase read instead of one each (see ttl-cache.ts).
+const DASHBOARD_CACHE_TTL_MS = 20_000;
+
+async function getLiveDashboardDataUncached(): Promise<{ tokens: DashboardToken[]; error: string | null; refreshStatus: RefreshStatusView | null }> {
   try {
     const client = createSupabaseAdminClient();
     const [tokenResult, chainResult] = await Promise.all([
@@ -790,8 +797,12 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
   }
 }
 
+export const getLiveDashboardData = memoizeWithTtl(getLiveDashboardDataUncached, DASHBOARD_CACHE_TTL_MS, () => "dashboard");
+
+const PROFILE_CACHE_TTL_MS = 20_000;
+
 /** `client` is injectable so the AI analysis reads the same profile data through the caller's client. */
-export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdminClient = createSupabaseAdminClient()): Promise<LiveTokenProfileData | null> {
+async function getLiveTokenProfileUncached(tokenId: string, client: SupabaseAdminClient = createSupabaseAdminClient()): Promise<LiveTokenProfileData | null> {
   const { data: tokenData, error: tokenError } = await client.from("tokens")
     .select("id,name,symbol,chain_id,contract_address,is_native,category,description")
     .eq("id", tokenId).maybeSingle();
@@ -933,11 +944,25 @@ export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdmin
 }
 
 /**
+ * `client` is intentionally left out of the cache key: callers (the token profile
+ * page, the AI analysis services) pass interchangeable connections to the same
+ * database, so caching only on `tokenId` is correct and lets every caller share one
+ * read instead of each re-running the same per-token history window.
+ */
+export const getLiveTokenProfile = memoizeWithTtl<[tokenId: string, client?: SupabaseAdminClient], LiveTokenProfileData | null>(
+  getLiveTokenProfileUncached,
+  PROFILE_CACHE_TTL_MS,
+  (tokenId) => tokenId,
+);
+
+/**
  * Sidebar 24H Movers for pages without dashboard rows. Reads only stored data:
  * the latest CoinGecko 24h change per tracked token and stored logos. The
  * sidebar is optional, so any failure hides it instead of failing the page.
  */
-export async function getSidebarMovers(): Promise<Movers | null> {
+const MOVERS_CACHE_TTL_MS = 20_000;
+
+async function getSidebarMoversUncached(): Promise<Movers | null> {
   try {
     const client = createSupabaseAdminClient();
     const tokenResult = await client.from("tokens").select("id,name,symbol,chain_id,contract_address,is_native,category,description");
@@ -957,6 +982,8 @@ export async function getSidebarMovers(): Promise<Movers | null> {
     return null;
   }
 }
+
+export const getSidebarMovers = memoizeWithTtl(getSidebarMoversUncached, MOVERS_CACHE_TTL_MS, () => "movers");
 
 export function latestDashboardUpdate(tokens: DashboardToken[]): string | null {
   return tokens.flatMap((token) => Object.values(token.metricSources ?? {}).map((source) => source?.collectedAt ?? ""))
