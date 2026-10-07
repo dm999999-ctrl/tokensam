@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createSupabaseAdminClient } from "../supabase/admin.ts";
-import { OBSERVATION_COLUMNS, latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
+import { latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
 import { memoizeWithTtl } from "./ttl-cache.ts";
 import { getCacheTtlMultiplierSync, refreshThrottleLevelInBackground } from "../monitoring/quota-tracker.ts";
 import { selectMovers, type Movers } from "../ui/movers.ts";
@@ -742,11 +742,15 @@ async function readRefreshStatus(client: SupabaseAdminClient, latestRows: DbObse
   return buildRefreshStatus({ lastSuccess, latestCollected, latestRunStatus, now });
 }
 
-// Collectors only refresh data every 5-15 minutes (see REFRESH_POLICY), so a short
-// per-process cache here costs no meaningful freshness but coalesces repeat page
+// Collectors only refresh data every 5-15 minutes (see REFRESH_POLICY), so caching
+// for up to a minute here costs no meaningful freshness but coalesces repeat page
 // views, crawlers, and concurrent requests on the same warm instance into one
-// Supabase read instead of one each (see ttl-cache.ts).
-const DASHBOARD_CACHE_TTL_MS = 20_000;
+// Supabase read instead of one each (see ttl-cache.ts). Raised from 20s: Log
+// Ingestion/Egress are dominated by exactly this kind of duplicate read (see the
+// request-volume investigation this cache was built from), so the TTL is set as high
+// as the data's own refresh cadence allows rather than just high enough to deduplicate
+// bursts.
+const DASHBOARD_CACHE_TTL_MS = 60_000;
 
 async function getLiveDashboardDataUncached(): Promise<{ tokens: DashboardToken[]; error: string | null; refreshStatus: RefreshStatusView | null }> {
   try {
@@ -805,7 +809,7 @@ export const getLiveDashboardData = memoizeWithTtl(
   () => "dashboard",
 );
 
-const PROFILE_CACHE_TTL_MS = 20_000;
+const PROFILE_CACHE_TTL_MS = 60_000;
 
 /** `client` is injectable so the AI analysis reads the same profile data through the caller's client. */
 async function getLiveTokenProfileUncached(tokenId: string, client: SupabaseAdminClient = createSupabaseAdminClient()): Promise<LiveTokenProfileData | null> {
@@ -967,7 +971,7 @@ export const getLiveTokenProfile = memoizeWithTtl<[tokenId: string, client?: Sup
  * the latest CoinGecko 24h change per tracked token and stored logos. The
  * sidebar is optional, so any failure hides it instead of failing the page.
  */
-const MOVERS_CACHE_TTL_MS = 20_000;
+const MOVERS_CACHE_TTL_MS = 60_000;
 
 async function getSidebarMoversUncached(): Promise<Movers | null> {
   try {
@@ -978,7 +982,12 @@ async function getSidebarMoversUncached(): Promise<Movers | null> {
     const tokens = (tokenResult.data ?? []) as DbToken[];
     const tokenIds = tokens.map((token) => token.id);
     const [changeResult, logos] = await Promise.all([
-      client.from("latest_token_metric_observations").select(OBSERVATION_COLUMNS)
+      // Narrower than OBSERVATION_COLUMNS: selectMovers only ever reads change24hPct/
+      // volume24hUsd (plain numbers) off the rows this produces, never metricSources
+      // or any other provenance -- note/source_field/raw_record_id and all of
+      // SCOPE_COLUMNS are fetched by the shared OBSERVATION_COLUMNS set for the
+      // profile page's notes feature, which this path has no use for.
+      client.from("latest_token_metric_observations").select("id,token_id,provider_id,metric_id,value,status,observed_at,collected_at")
         .eq("provider_id", "coingecko").in("metric_id", ["price_change_24h_pct", "volume_24h_usd"]).in("token_id", tokenIds),
       readTokenLogos(client, tokenIds),
     ]);
