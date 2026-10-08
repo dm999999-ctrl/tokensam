@@ -1047,9 +1047,10 @@ export const getLiveTokenProfile = memoizeWithTtl<[tokenId: string, client?: Sup
  * than reusing it with a different cache key (an earlier version of this code tried
  * exactly that):
  *
- *  1. Report generation is already rate-limited to about once/hour per token, so
- *     there is no concurrent/duplicate-request problem for a cache to solve here the
- *     way there is for page views.
+ *  1. deterministic-service.ts's generation path is deliberately stateless and
+ *     uncached by design (each request recomputes a fresh report scoped to that one
+ *     browser, never shared or persisted), so there is no concurrent/duplicate-request
+ *     problem for a cache to solve here the way there is for page views.
  *  2. A shared cache keyed only by tokenId (client ignored, matching
  *     getLiveTokenProfile's own reasoning above) is unsafe whenever two callers with
  *     the SAME tokenId point at genuinely DIFFERENT underlying data -- which the

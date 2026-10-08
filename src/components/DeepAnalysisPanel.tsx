@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { requestTokenAnalysis } from "@/app/tokens/[id]/actions";
-import type { EngineAnalysisState } from "@/lib/analysis/deterministic-service";
 import { ENGINE_SECTION_KEYS, ENGINE_SECTION_TITLES, type EngineParagraph, type EngineSectionKey, type EngineTokenAnalysis } from "@/lib/analysis/engine/report-schema";
 import { buildFootnoteIndex, footnoteNumbersFor, type FootnoteIndex } from "@/lib/analysis/footnotes";
 import type { ProfilePayload } from "@/lib/analysis/profile-payload";
@@ -204,53 +203,222 @@ function AnalysisBody({ analysis, payload }: { analysis: EngineTokenAnalysis; pa
   );
 }
 
-export function deepAnalysisButtonHint(state: EngineAnalysisState): string {
-  if (state.status !== "ready") return "Unavailable";
-  return state.latest ? `Generated ${utc(state.latest.metadata.generatedAt)}` : `${state.model} · generate on request`;
+/**
+ * Every typeable text field in the report, flattened in the exact order AnalysisBody renders them
+ * (same visibleSectionKeys/numberedKeys derivation): one entry per paragraph, plus one "question"
+ * and one "rationale" entry per further-research-question item. A section/group with no paragraphs
+ * still gets one "empty" placeholder entry, so it is correctly counted as "reached" once the
+ * typewriter gets to it (matching Section's own zero-paragraph "No content..." fallback) rather
+ * than never appearing. Headings are NOT typed here at all -- Section/FurtherResearchQuestions
+ * compute and render their own heading text from props, so once a group is "reached" its heading
+ * renders instantly and correctly through those same, unmodified components.
+ */
+type FieldLocation =
+  | { group: "section"; sectionKey: EngineSectionKey; field: "paragraph"; index: number }
+  | { group: "section"; sectionKey: EngineSectionKey; field: "empty" }
+  | { group: "research"; field: "question" | "rationale"; index: number }
+  | { group: "research"; field: "empty" };
+
+type TypingField = { location: FieldLocation; text: string };
+
+function groupKeyOf(location: FieldLocation): EngineSectionKey | "research" {
+  return location.group === "section" ? location.sectionKey : "research";
 }
 
-export function DeepAnalysisPanel({ tokenId, initialState, hidden, payload }: { tokenId: string; initialState: EngineAnalysisState; hidden: boolean; payload: ProfilePayload }) {
-  const [state, setState] = useState(initialState);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
-
-  const generate = () => {
-    setError(null);
-    startTransition(async () => {
-      const result = await requestTokenAnalysis(tokenId);
-      if (result.ok) {
-        setState((current) => current.status === "ready" ? { ...current, latest: result.analysis, nextAllowedAt: result.nextAllowedAt } : current);
-      } else {
-        setError(result.message);
-        if (result.nextAllowedAt && state.status === "ready") setState({ ...state, nextAllowedAt: result.nextAllowedAt });
-      }
+function buildTypingFields(analysis: EngineTokenAnalysis): TypingField[] {
+  const visibleKeys = visibleSectionKeys(analysis);
+  const fields: TypingField[] = [];
+  for (const key of visibleKeys) {
+    const paragraphs = analysis[key].paragraphs;
+    if (paragraphs.length === 0) {
+      fields.push({ location: { group: "section", sectionKey: key, field: "empty" }, text: "" });
+    } else {
+      paragraphs.forEach((paragraph, index) => fields.push({ location: { group: "section", sectionKey: key, field: "paragraph", index }, text: paragraph.text }));
+    }
+  }
+  const questions = analysis.furtherResearchQuestions;
+  if (questions.length === 0) {
+    fields.push({ location: { group: "research", field: "empty" }, text: "" });
+  } else {
+    questions.forEach((item, index) => {
+      fields.push({ location: { group: "research", field: "question", index }, text: item.question });
+      fields.push({ location: { group: "research", field: "rationale", index }, text: item.rationale });
     });
-  };
+  }
+  return fields;
+}
 
-  const latest = state.status === "ready" ? state.latest : null;
-  // The server reports nextAllowedAt only while a cooldown is active (and enforces it again on request).
-  const coolingDown = state.status === "ready" && state.nextAllowedAt !== null;
+const TYPING_CHARS_PER_TICK = 3;
+const TYPING_TICK_MS = 10;
+/** Appended to the field currently being typed so the reused Paragraph/question rendering shows a
+ *  cursor with zero special-casing -- it is plain text, removed the instant typing finishes. */
+const TYPING_CURSOR = "▌";
+
+/**
+ * Builds a partial `EngineTokenAnalysis` -- structurally identical to the real one, just with less
+ * text revealed -- and renders it through the exact same Section/FurtherResearchQuestions/
+ * ReportHeader components AnalysisBody uses for the finished report. This is what guarantees the
+ * typed-out report and the finished report share pixel-identical formatting: it is not two
+ * separate renderers kept visually in sync, it is the same renderer fed a smaller version of the
+ * same data. Paragraph `sourceIds` are always left intact (only `.text` is truncated), so footnote
+ * marks and the Valuation Analysis table -- neither of which reads from paragraph text -- already
+ * look exactly as they will in the finished report the moment each section appears.
+ */
+function PartialAnalysisBody({ analysis, fields, fieldIndex, charIndex, payload }: {
+  analysis: EngineTokenAnalysis; fields: TypingField[]; fieldIndex: number; charIndex: number; payload: ProfilePayload;
+}) {
+  const footnoteIndex = buildFootnoteIndex(analysis);
+  const visibleKeys = visibleSectionKeys(analysis);
+  const numberedKeys: EngineSectionKey[] = visibleKeys.filter((key) => key !== "executiveAssessment");
+  const groupOrder: (EngineSectionKey | "research")[] = [...visibleKeys, "research"];
+  const currentGroup = fieldIndex < fields.length ? groupKeyOf(fields[fieldIndex].location) : null;
+  const currentGroupOrder = currentGroup === null ? groupOrder.length : groupOrder.indexOf(currentGroup);
+  const reached = new Set(groupOrder.slice(0, currentGroupOrder + 1));
+
+  const sectionParagraphs = new Map<EngineSectionKey, EngineParagraph[]>();
+  const questionDrafts = new Map<number, { question: string; rationale: string; sourceIds: string[] }>();
+  for (let i = 0; i <= fieldIndex && i < fields.length; i++) {
+    const { location } = fields[i];
+    const isCurrent = i === fieldIndex;
+    if (location.group === "section") {
+      if (location.field === "empty") { if (!sectionParagraphs.has(location.sectionKey)) sectionParagraphs.set(location.sectionKey, []); continue; }
+      const original = analysis[location.sectionKey].paragraphs[location.index];
+      const text = isCurrent ? original.text.slice(0, charIndex) + TYPING_CURSOR : original.text;
+      const list = sectionParagraphs.get(location.sectionKey) ?? [];
+      list.push({ ...original, text });
+      sectionParagraphs.set(location.sectionKey, list);
+    } else if (location.field !== "empty") {
+      const original = analysis.furtherResearchQuestions[location.index];
+      const draft = questionDrafts.get(location.index) ?? { question: "", rationale: "", sourceIds: original.sourceIds };
+      const full = original[location.field];
+      draft[location.field] = isCurrent ? full.slice(0, charIndex) + TYPING_CURSOR : full;
+      questionDrafts.set(location.index, draft);
+    }
+  }
+
+  const reachedSectionKeys = visibleKeys.filter((key) => reached.has(key));
+  const partialQuestions = reached.has("research") ? [...questionDrafts.entries()].sort((a, b) => a[0] - b[0]).map(([, draft]) => draft) : [];
 
   return (
-    <section className="ai-panel" id="deep-ai-analysis" aria-labelledby="deep-ai-title" hidden={hidden}>
+    <div className="report-body">
+      <ReportHeader payload={payload} analysis={analysis} />
+      {reachedSectionKeys.map((key) => (
+        <Section key={key} sectionKey={key} section={{ paragraphs: sectionParagraphs.get(key) ?? [] }} number={numberedKeys.indexOf(key)} footnoteIndex={footnoteIndex} sources={analysis.metadata.sources} />
+      ))}
+      {reached.has("research") && (
+        <FurtherResearchQuestions analysis={{ ...analysis, furtherResearchQuestions: partialQuestions }} footnoteIndex={footnoteIndex} number={numberedKeys.length + 1} />
+      )}
+    </div>
+  );
+}
+
+type GenerationStatus = "idle" | "pending" | "typing" | "done" | "error";
+
+/**
+ * Stateless, per-visitor generation: each call to requestTokenAnalysis recomputes the report fresh
+ * from the current live data and returns it straight to this component's own local state -- nothing
+ * is persisted server-side, so a report generated here is never visible to another visitor of the
+ * same token page, and a page refresh clears it (generating again produces a fresh computation, not
+ * a cached one). `autoGenerateSignal` is incremented by the header's own "Generate AI Research
+ * Report" art button (see TokenProfile.tsx); any change to it past the initial mount starts a fresh
+ * generation here even if a report is already showing, so the header button always works regardless
+ * of this panel's current state.
+ */
+export function DeepAnalysisPanel({ tokenId, payload, autoGenerateSignal, onBackToOverview }: { tokenId: string; payload: ProfilePayload; autoGenerateSignal: number; onBackToOverview: () => void }) {
+  const [status, setStatus] = useState<GenerationStatus>("idle");
+  const [analysis, setAnalysis] = useState<EngineTokenAnalysis | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [fields, setFields] = useState<TypingField[]>([]);
+  const [fieldIndex, setFieldIndex] = useState(0);
+  const [charIndex, setCharIndex] = useState(0);
+  const pendingRef = useRef(false);
+
+  const generate = useCallback(() => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setStatus("pending");
+    setError(null);
+    (async () => {
+      try {
+        const result = await requestTokenAnalysis(tokenId);
+        if (result.ok) {
+          setAnalysis(result.analysis);
+          setFields(buildTypingFields(result.analysis));
+          setFieldIndex(0);
+          setCharIndex(0);
+          setStatus("typing");
+        } else {
+          setError(result.message);
+          setStatus("error");
+        }
+      } catch {
+        setError("The AI report could not be generated. Please try again later.");
+        setStatus("error");
+      } finally {
+        pendingRef.current = false;
+      }
+    })();
+  }, [tokenId]);
+
+  const lastSignal = useRef(autoGenerateSignal);
+  useEffect(() => {
+    if (autoGenerateSignal === lastSignal.current) return;
+    lastSignal.current = autoGenerateSignal;
+    generate();
+  }, [autoGenerateSignal, generate]);
+
+  // Typewriter: a few characters per tick, paused whenever status leaves "typing" (e.g. a fresh
+  // generate() call resets status to "pending" first, which this effect no-ops on).
+  useEffect(() => {
+    if (status !== "typing") return;
+    const timer = setTimeout(() => {
+      if (fieldIndex >= fields.length) { setStatus("done"); return; }
+      const field = fields[fieldIndex];
+      if (charIndex >= field.text.length) {
+        setFieldIndex((index) => index + 1);
+        setCharIndex(0);
+      } else {
+        setCharIndex((count) => Math.min(field.text.length, count + TYPING_CHARS_PER_TICK));
+      }
+    }, TYPING_TICK_MS);
+    return () => clearTimeout(timer);
+  }, [status, fieldIndex, charIndex, fields]);
+
+  return (
+    <section className="ai-panel" id="deep-ai-analysis" aria-labelledby="deep-ai-title">
       <header className="section-head ai-head">
         <div><p className="eyebrow">Research report · institutional-style analysis</p><h2 id="deep-ai-title">Deep AI Analysis</h2></div>
       </header>
 
-      {state.status !== "ready" ? (
-        <div className="ai-state" role="status"><strong>AI analysis unavailable</strong><p>{state.message}</p></div>
-      ) : (
-        <>
-          <div className="ai-toolbar">
-            {!latest && <p className="ai-empty">No analysis has been generated for this token yet. Generation uses the current stored evidence and runs only when requested.</p>}
-            <button className="ai-generate-button" type="button" onClick={generate} disabled={pending || coolingDown}>
-              {pending ? "Generating…" : latest ? "Regenerate analysis" : "Generate analysis"}
-            </button>
+      {status === "idle" && (
+        <div className="analysis-invite">
+          <div>
+            <p className="muted-copy">An evidence-labelled reading of this profile&apos;s current data, generated fresh for you on request. Not investment advice.</p>
           </div>
-          {coolingDown && !pending && <p className="ai-note">Regeneration is available after {utc(state.nextAllowedAt)}.</p>}
-          {pending && <div className="ai-state" role="status"><strong>Generating analysis…</strong><p>Building the report from the current data snapshot. This is a local computation and typically finishes in under a second.</p></div>}
-          {error && !pending && <div className="ai-state error" role="alert"><strong>Analysis not updated</strong><p>{error}</p></div>}
-          {latest && <AnalysisBody analysis={latest} payload={payload} />}
+          <button className="blade-button" type="button" onClick={generate}>
+            <span className="blade-copy"><strong>Generate AI Research Report</strong></span>
+            <span className="blade-edge" aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
+      {status === "error" && (
+        <div className="ai-state error" role="alert">
+          <strong>Analysis not generated</strong>
+          <p>{error}</p>
+          <button className="ai-generate-button" type="button" onClick={generate}>Try again</button>
+        </div>
+      )}
+
+      {status === "typing" && analysis && <PartialAnalysisBody analysis={analysis} fields={fields} fieldIndex={fieldIndex} charIndex={charIndex} payload={payload} />}
+
+      {status === "done" && analysis && (
+        <>
+          <AnalysisBody analysis={analysis} payload={payload} />
+          <button className="blade-button back-to-overview" type="button" onClick={onBackToOverview}>
+            <span className="blade-copy"><strong>↑ Back to Token Overview</strong></span>
+            <span className="blade-edge" aria-hidden="true" />
+          </button>
         </>
       )}
     </section>
