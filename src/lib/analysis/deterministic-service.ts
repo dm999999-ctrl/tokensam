@@ -20,7 +20,7 @@ import "server-only";
  * own contract are fully independent of it), so nothing here can reach a provider.
  */
 
-import { getLiveTokenProfile } from "../data/live-data.ts";
+import { getLiveTokenProfileForAnalysis } from "../data/live-data.ts";
 import type { LiveTokenProfileData } from "../../types/token.ts";
 import { ANALYSIS_VERSION, ENGINE_VERSION, buildEngineReport } from "./engine/report.ts";
 import type { EngineTokenAnalysis } from "./engine/report-schema.ts";
@@ -55,7 +55,10 @@ export async function generateDeterministicAnalysis(
 
   // The engine's input is the data the Token Profile page shows: the same loader and the same
   // display functions produce one canonical payload (also used by the page's "Copy data").
-  const profile = await (options.loadProfile ?? ((id: string) => getLiveTokenProfile(id, client)))(tokenId);
+  // getLiveTokenProfileForAnalysis, not getLiveTokenProfile: this engine is
+  // deterministic and must never make an external network call of any kind, and must
+  // not share the page-render cache either (see that function's doc comment).
+  const profile = await (options.loadProfile ?? ((id: string) => getLiveTokenProfileForAnalysis(id, client)))(tokenId);
   if (!profile) return { ok: false, reason: "invalid_token", message: "Unknown token." };
   const payload = buildProfilePayload(profile);
 

@@ -2,14 +2,6 @@ type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createS
 
 const BATCH_SIZE = 1000;
 const MAX_BATCHES_PER_FUNCTION = 1000;
-// retention_collapse_non_chart_daily_batch's batch_size counts token/metric/provider
-// GROUPS, not rows (see 20261005050000_bound_non_chart_collapse_by_groups.sql): each
-// group can carry up to a few dozen excess rows/day, so a smaller group count keeps a
-// single call's row-level work (and its DELETE's index maintenance) comfortably inside
-// the ~8s statement_timeout that PostgREST's connection actually enforces in production
-// (see pg_roles.rolconfig for 'authenticator') -- well below the 120s this was
-// originally sized against.
-const NON_CHART_COLLAPSE_BATCH_SIZE = 80;
 
 // Retention policy:
 // - 0–30 days: preserve all granular observations for the 30D-chart-required
@@ -47,8 +39,21 @@ const NON_CHART_COLLAPSE_BATCH_SIZE = 80;
 // The database trigger trg_protect_30d_chart_observations is the final guard
 // against deleting protected chart observations inside their granular window
 // (30 days, or 37 for coingecko price_usd).
+//
+// retention_collapse_non_chart_daily_batch is NOT listed here any more: it ran through
+// this route's client.rpc(...) over PostgREST, whose `authenticator` role has an ~8s
+// statement_timeout (pg_roles.rolconfig) -- fine while the table was small, but by
+// 2026-10-08 (647K rows) even its existence-check probe alone took ~6s under the planner
+// plan Postgres was actually choosing, and the real GROUP BY/DELETE work pushed it over
+// 8s on every call, so the cursor-based retry (20261007110000) never advanced: the same
+// day kept getting re-probed and re-failing every ~8-12 minutes indefinitely, letting a
+// full day's worth of non-chart observations accumulate ungated and pushing the database
+// past the 500MB free-plan hard cap. Run directly outside PostgREST instead (pg_cron,
+// 20261008000000_non_chart_collapse_pg_cron.sql), the same fix already proven for
+// VACUUM FULL (20261006090000/20261007120000): a session's default statement_timeout is
+// far longer, and the same query that timed out every time here completed in well under
+// a second once not bound by PostgREST's connection.
 const RETENTION_FUNCTIONS = [
-  "retention_collapse_non_chart_daily_batch",
   "retention_collapse_daily_batch",
   "retention_expire_observations_batch",
   "retention_expire_raw_provider_records_batch",
@@ -78,8 +83,7 @@ export async function runRetentionBatches(client: SupabaseAdminClient, deadlineA
         stoppedEarly.push(fn);
         break;
       }
-      const batchSize = fn === "retention_collapse_non_chart_daily_batch" ? NON_CHART_COLLAPSE_BATCH_SIZE : BATCH_SIZE;
-      const { data, error } = await client.rpc(fn, { batch_size: batchSize });
+      const { data, error } = await client.rpc(fn, { batch_size: BATCH_SIZE });
       if (error) {
         failed[fn] = error.message;
         break;

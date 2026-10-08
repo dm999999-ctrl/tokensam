@@ -12,7 +12,7 @@ import { attachEvidencePeriods, buildProfileResponseSchema, buildProfileValidati
 import { buildProfileEvidenceIndex, measureProfilePayload, profilePayloadHash, profileSourceLabels } from "./profile-evidence.ts";
 import { emitDiagnostic, newRunId, type ContextSizeDiagnostic, type DiagnosticSink, type GenerationDiagnostic } from "./diagnostics.ts";
 import { canonicalTokens } from "../../data/canonical-tokens.ts";
-import { getLiveTokenProfile } from "../data/live-data.ts";
+import { getLiveTokenProfileForAnalysis } from "../data/live-data.ts";
 import type { LiveTokenProfileData } from "../../types/token.ts";
 import {
   ANALYSIS_SCHEMA_VERSION,
@@ -182,7 +182,10 @@ export async function generateTokenAnalysis(
 
   // The AI input is the data the Token Profile page shows: the same loader and the same
   // display functions produce one canonical payload (also used by the page's "Copy data").
-  const profile = await (options.loadProfile ?? ((id: string) => getLiveTokenProfile(id, client)))(tokenId);
+  // getLiveTokenProfileForAnalysis, not getLiveTokenProfile: the AI's evidence should
+  // be stable, stored data, not an ephemeral live tick, and must not share the
+  // page-render cache either (see that function's doc comment).
+  const profile = await (options.loadProfile ?? ((id: string) => getLiveTokenProfileForAnalysis(id, client)))(tokenId);
   if (!profile) return { ok: false, reason: "invalid_token", message: "Unknown token." };
   const payload = buildProfilePayload(profile);
   contextBuildMs = Math.round(performance.now() - startedClock);

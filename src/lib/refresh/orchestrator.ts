@@ -1,5 +1,4 @@
 import { getDefiLlamaConfig } from "../providers/defillama.ts";
-import { runBinanceCollection } from "../providers/run-binance-collection.ts";
 import { runCoinGeckoCollection } from "../providers/run-coingecko-collection.ts";
 import { repairCoinGeckoDailyGaps } from "../providers/repair-coingecko-daily-gaps.ts";
 import { repairDefiLlamaDailyGaps } from "../providers/repair-defillama-daily-gaps.ts";
@@ -7,6 +6,7 @@ import { runDefiLlamaCollection } from "../providers/run-defillama-collection.ts
 import { runDexScreenerCollection } from "../providers/run-dexscreener-collection.ts";
 import { runDefiLlamaCoinsCollection } from "../providers/run-defillama-coins-collection.ts";
 import { runMetricsCalculation } from "../metrics/run-calculation.ts";
+import { getThrottleLevel } from "../monitoring/quota-tracker.ts";
 import {
   DUE_TOLERANCE_MS,
   METRICS_TIMEOUT_MS,
@@ -39,6 +39,13 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
   coingecko: {
     collect: async (client, options) => {
       const collected = await runCoinGeckoCollection(client, options);
+      // Gap repair is optional recovery work, not the live refresh itself: at
+      // "critical" quota throttle (see quota-tracker.ts) it is skipped so a project
+      // already near a Supabase free-plan limit is not pushed further over it by its
+      // own self-healing. The live price/market-data collection above always runs.
+      if (await getThrottleLevel(client) === "critical") {
+        return { ...collected, gapRepairSkipped: "quota throttle: critical" };
+      }
       // Historical repair is deliberately best-effort: a repair failure must not turn an
       // otherwise successful live refresh into a provider failure. The next successful
       // CoinGecko refresh will retry the bounded repair.
@@ -54,9 +61,6 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
       }
     },
   },
-  // Live price and 24h change only; no gap repair, because Binance is never the
-  // history provider (see docs/binance-integration.md).
-  binance: { collect: (client, options) => runBinanceCollection(client, options) },
   dexscreener: { collect: (client, options) => runDexScreenerCollection(client, options) },
   defillama: {
     // The written-permission gate is enforced, never bypassed: without it the step is skipped.
@@ -70,6 +74,9 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
     },
     collect: async (client, options) => {
       const collected = await runDefiLlamaCollection(client, options);
+      if (await getThrottleLevel(client) === "critical") {
+        return { ...collected, gapRepairSkipped: "quota throttle: critical" };
+      }
       // Historical repair is best-effort. A repair failure cannot turn a successful
       // live DeFiLlama refresh into a provider failure; the next successful run retries it.
       try {
@@ -97,6 +104,9 @@ export const defaultCollectors: Record<ProviderStep, CollectorDefinition> = {
     },
     collect: async (client, options) => {
       const collected = await runDefiLlamaCoinsCollection(client, options);
+      if (await getThrottleLevel(client) === "critical") {
+        return { ...collected, gapRepairSkipped: "quota throttle: critical" };
+      }
       try {
         const repaired = await repairDefiLlamaDailyGaps(client, {
           fetchImpl: options.fetchImpl,

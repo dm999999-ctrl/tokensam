@@ -1,5 +1,6 @@
 import { CALCULATED_METRICS, calculateAllMetrics, type ObservationInput, type RawRecordInput, type TokenInput } from "./engine.ts";
-import { mergeById, readLatestObservations, readLatestRawRecords, readObservationWindow } from "../data/observation-reads.ts";
+import { LATEST_READ_WINDOW_MS, PROVIDERS, mergeById, readLatestRawRecords } from "../data/observation-reads.ts";
+import { recordApproxRead } from "../monitoring/quota-tracker.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
@@ -15,7 +16,20 @@ export const SERIES_INPUTS = [
   { providerId: "defillama", metricId: "revenue_24h_usd" },
   { providerId: "defillama", metricId: "fees_24h_usd" },
 ];
-export const SERIES_LOOKBACK_DAYS = 14;
+/**
+ * The engine never actually looks back this far: growthCalculation (engine.ts) only
+ * ever compares the two most recent distinct observations, and the cross-provider
+ * divergence/cross-change calculations only look for a point ~24h earlier, within a 6h
+ * tolerance (CROSS_CHANGE_HORIZON_HOURS/CROSS_CHANGE_TOLERANCE_HOURS) -- a 30-hour
+ * requirement at most. 14 days was over 11x more than that for every one of the 238
+ * canonical tokens x 5 series on every metrics run (which runs roughly as often as
+ * CoinGecko's own 15-minute refresh cadence), and was the single largest contributor to
+ * this project's Supabase egress: ~18.7MB average per recorded read in production
+ * (2026-10-07), almost entirely this one unbounded-relative-to-need window. 3 days
+ * keeps a comfortable margin above the real 30-hour requirement (a missed run, a
+ * weekend DeFiLlama collection drift) without reading 4x more than that margin needs.
+ */
+export const SERIES_LOOKBACK_DAYS = 3;
 
 function throwOnError(error: { message: string } | null, action: string): void {
   if (error) throw new Error(`Supabase ${action} failed: ${error.message}`);
@@ -32,12 +46,37 @@ async function readTokens(client: SupabaseAdminClient): Promise<TokenInput[]> {
   }
 }
 
+/**
+ * Both reads below call dedicated RPCs (20261007160000_metrics_calc_server_side_collapse)
+ * instead of observation-reads.ts's readLatestObservations/readObservationWindow: those
+ * fetch every row in a bounded window over the wire and collapse to the few rows actually
+ * needed in application memory, which was measured as this project's single largest
+ * Supabase-egress contributor (~25MB/run; metrics runs ~96 times/day). The RPCs do the
+ * identical collapse server side (latest-per-group; two-most-recent-points-per-series
+ * plus the one ~24h-prior point alignedCrossChange needs), so only the rows the engine
+ * actually reads cross the wire -- measured live at ~947KB/run for the same data, a ~97%
+ * reduction with no change to which rows feed the calculation.
+ */
 async function readObservations(client: SupabaseAdminClient, tokenIds: string[], now: Date): Promise<ObservationInput[]> {
-  const since = new Date(now.getTime() - SERIES_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
-  const [latest, history] = await Promise.all([
-    readLatestObservations<ObservationInput>(client, tokenIds),
-    readObservationWindow<ObservationInput>(client, tokenIds, SERIES_INPUTS, since),
+  const since = new Date(now.getTime() - LATEST_READ_WINDOW_MS).toISOString();
+  const [{ data: latestData, error: latestError }, { data: seriesData, error: seriesError }] = await Promise.all([
+    client.rpc("latest_observations_bounded", { p_token_ids: tokenIds, p_provider_ids: PROVIDERS, p_since: since }),
+    client.rpc("metrics_series_recent_points", {
+      p_token_ids: tokenIds,
+      p_providers: SERIES_INPUTS.map((series) => series.providerId),
+      p_metrics: SERIES_INPUTS.map((series) => series.metricId),
+      p_now: now.toISOString(),
+      p_horizon_hours: 24,
+      p_tolerance_hours: 6,
+      p_max_lookback_days: SERIES_LOOKBACK_DAYS,
+    }),
   ]);
+  throwOnError(latestError, "read latest observations (bounded rpc)");
+  throwOnError(seriesError, "read metrics series recent points (rpc)");
+  const latest = (latestData ?? []) as ObservationInput[];
+  const history = (seriesData ?? []) as ObservationInput[];
+  recordApproxRead(client, latest);
+  recordApproxRead(client, history);
   return mergeById(latest, history).sort((a, b) => Date.parse(a.observed_at) - Date.parse(b.observed_at) || a.id - b.id);
 }
 

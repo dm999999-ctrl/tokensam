@@ -41,15 +41,19 @@ test("1. a Phase 16 token with no stored observations yet still resolves (never 
 });
 
 test("2. a Phase 16 token with a stored CoinGecko observation shows real, non-fabricated market data", async () => {
+  // ethereum-stg has no Binance mapping (see binance-token-mappings.ts), so the live Binance
+  // read in getLiveTokenProfile contributes nothing here and the stored CoinGecko value is what
+  // the profile reports -- a token with a Binance mapping would legitimately prefer that live
+  // price over this stored one, which is exactly the live-fetch architecture working as intended.
   const observedAt = "2026-09-26T00:00:00.000Z";
-  const profile = await profileFor("ethereum-snx", {
+  const profile = await profileFor("ethereum-stg", {
     token_metric_observations: [
-      { id: 1, token_id: "ethereum-snx", chain_id: "ethereum", metric_id: "price_usd", provider_id: "coingecko", value: 1.23, status: "available", observed_at: observedAt, collected_at: observedAt, source_field: "current_price", note: null },
+      { id: 1, token_id: "ethereum-stg", chain_id: "ethereum", metric_id: "price_usd", provider_id: "coingecko", value: 1.23, status: "available", observed_at: observedAt, collected_at: observedAt, source_field: "current_price", note: null },
     ],
   });
   assert.ok(profile);
   assert.equal(profile.token.priceUsd, 1.23);
-  assert.equal(profile.token.symbol, "SNX");
+  assert.equal(profile.token.symbol, "STG");
   assert.equal(profile.isNative, false);
 });
 

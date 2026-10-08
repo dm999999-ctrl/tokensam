@@ -1,12 +1,17 @@
 import "server-only";
 
 import { createSupabaseAdminClient } from "../supabase/admin.ts";
-import { OBSERVATION_COLUMNS, latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
+import { latestPerMetric, mergeById, readLatestObservations, readObservationWindow } from "./observation-reads.ts";
+import { binanceSymbols } from "../../data/binance-token-mappings.ts";
+import { BinanceMarketDataProvider, getBinanceConfig } from "../providers/binance.ts";
+import type { ProviderAsset } from "../providers/types.ts";
+import { memoizeWithTtl } from "./ttl-cache.ts";
+import { getCacheTtlMultiplierSync, refreshThrottleLevelInBackground } from "../monitoring/quota-tracker.ts";
 import { selectMovers, type Movers } from "../ui/movers.ts";
 import { buildTechnicalIndicators, INDICATOR_METHOD, withExtraIndicators } from "../indicators/build.ts";
 import { buildConcentrationIndicators } from "../indicators/onchain-concentration.ts";
 import type { TechnicalIndicatorsView } from "../../types/technical-indicators.ts";
-import { PROVIDER_STEPS, REFRESH_POLICY, type ProviderStep, type RefreshStep } from "../refresh/config.ts";
+import { PROVIDER_STEPS, type ProviderStep, type RefreshStep } from "../refresh/config.ts";
 import { buildDatasetFreshness, buildRefreshStatus, type RefreshStatusView } from "../refresh/freshness.ts";
 import { buildHistoricalSeries } from "./historical-series.ts";
 import { sevenDayVolume, sevenDayVolumeBands, type VolumePoint } from "./seven-day-volume.ts";
@@ -91,6 +96,55 @@ type DbObservation = {
   source_field: string | null;
   note: string | null;
 };
+
+/**
+ * Live price + 24h change from Binance, fetched at render time instead of read back
+ * from stored history. Binance observations were previously written to
+ * token_metric_observations on every refresh cycle purely so this same "latest row"
+ * read pattern could serve them -- ~13K rows/day, 100% of it falling into the
+ * non-chart retention bucket (Binance has no protected chart-metric exception the way
+ * CoinGecko's price_usd/volume_24h_usd do), making it the second-largest contributor
+ * to the database-size pressure investigated in this session. The client-side flashing
+ * ticker (src/app/api/live-prices/route.ts) already proved a live, unpersisted fetch
+ * works fine for this exact data; this does the same for the server-rendered price
+ * instead of reading a row the app no longer writes.
+ *
+ * Returns the same DbObservation shape a stored read would have produced so
+ * buildDashboardTokens/buildTokenHistory/livePriceRow need no change -- only where
+ * these rows come from changes, not how anything downstream consumes them. A fetch
+ * failure (Binance down, geo-blocked, network error) returns [] rather than throwing:
+ * the existing CoinGecko fallback in livePriceRow already covers "no current Binance
+ * price available" for a stale stored row, and an empty live fetch is the same case.
+ */
+async function fetchLiveBinanceObservations(tokenIds: string[]): Promise<DbObservation[]> {
+  const assets: ProviderAsset[] = canonicalTokens
+    .filter((token) => tokenIds.includes(token.id) && binanceSymbols[token.id])
+    .map((token) => ({ tokenId: token.id, chainId: token.chainId, externalAssetId: binanceSymbols[token.id] }));
+  if (assets.length === 0) return [];
+
+  try {
+    const provider = new BinanceMarketDataProvider(getBinanceConfig());
+    const snapshots = await provider.fetchSnapshots(assets);
+    let syntheticId = -1;
+    return snapshots.flatMap((snapshot) => snapshot.observations.map((observation) => ({
+      id: syntheticId--,
+      token_id: observation.tokenId,
+      chain_id: observation.chainId,
+      metric_id: observation.metricId,
+      provider_id: "binance" as const,
+      value: observation.value,
+      status: observation.status,
+      observed_at: observation.observedAt,
+      collected_at: observation.collectedAt,
+      source_field: observation.sourceField,
+      note: observation.note,
+    })));
+  } catch (error) {
+    console.error("Live Binance fetch failed (price falls back to CoinGecko):", error);
+    return [];
+  }
+}
+
 type DbCalculatedMetric = {
   id: number;
   token_id: string;
@@ -136,11 +190,14 @@ function sourceFor(row: DbObservation | undefined): MetricSource | undefined {
 /**
  * How long a Binance observation may be before the live price falls back to CoinGecko.
  *
- * Kept equal to REFRESH_POLICY.binance.staleAfterMs so there is one definition of
- * "a Binance price is no longer current" rather than a UI rule and a refresh rule
- * that can drift apart.
+ * Binance is now fetched live at render time (see fetchLiveBinanceObservations), so a
+ * fresh fetch's collected_at is always "just now" -- this is a sanity check against an
+ * unusual collected_at (e.g. clock skew) rather than a real staleness gate against a
+ * periodically-collected row the way it was when this provider was refresh-cron driven.
+ * A failed fetch already falls back to CoinGecko on its own (fetchLiveBinanceObservations
+ * returns [] rather than a stale row), so this check rarely does real work either way.
  */
-const BINANCE_PREFERRED_MAX_AGE_MS = REFRESH_POLICY.binance.staleAfterMs;
+export const BINANCE_PREFERRED_MAX_AGE_MS = 10 * 60 * 1000;
 
 /**
  * The live price and 24-hour change prefer Binance and fall back to CoinGecko.
@@ -740,9 +797,20 @@ async function readRefreshStatus(client: SupabaseAdminClient, latestRows: DbObse
   return buildRefreshStatus({ lastSuccess, latestCollected, latestRunStatus, now });
 }
 
-export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]; error: string | null; refreshStatus: RefreshStatusView | null }> {
+// Collectors only refresh data every 5-15 minutes (see REFRESH_POLICY), so caching
+// for up to a minute here costs no meaningful freshness but coalesces repeat page
+// views, crawlers, and concurrent requests on the same warm instance into one
+// Supabase read instead of one each (see ttl-cache.ts). Raised from 20s: Log
+// Ingestion/Egress are dominated by exactly this kind of duplicate read (see the
+// request-volume investigation this cache was built from), so the TTL is set as high
+// as the data's own refresh cadence allows rather than just high enough to deduplicate
+// bursts.
+const DASHBOARD_CACHE_TTL_MS = 60_000;
+
+async function getLiveDashboardDataUncached(): Promise<{ tokens: DashboardToken[]; error: string | null; refreshStatus: RefreshStatusView | null }> {
   try {
     const client = createSupabaseAdminClient();
+    refreshThrottleLevelInBackground(client);
     const [tokenResult, chainResult] = await Promise.all([
       client.from("tokens").select("id,name,symbol,chain_id,contract_address,is_native,category,description").order("name"),
       client.from("chains").select("id,name"),
@@ -755,6 +823,11 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
     // 30-day TVL change needs DeFiLlama TVL around 30 days ago (plus baseline tolerance).
     const tvlSince = new Date(Date.now() - (TVL_CHANGE_DAYS + TVL_BASELINE_TOLERANCE_DAYS + 1) * DAY_MS);
     const latestRead = readLatest(client, tokenIds);
+    // Binance is fetched live (not read from Supabase) -- see fetchLiveBinanceObservations.
+    // Runs alongside the Supabase reads below rather than counting against their
+    // concurrency limit, since it is a direct Binance HTTP call, not another
+    // statement-timeout-sensitive Postgres query.
+    const binanceLiveRead = fetchLiveBinanceObservations(tokenIds);
     // Bounded to 2 concurrent Supabase reads at a time: these six each hit PostgreSQL
     // independently (latest observations, TVL history, logos, FDV, calculated metrics,
     // 7D volume), and firing all of them at once was adding to the statement-timeout
@@ -777,8 +850,9 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
     ] satisfies Array<() => Promise<unknown>>) as [
       DbObservation[], DbObservation[], Record<string, string>, Record<string, { value: number; supply: number | null; collectedAt: string }>, DbCalculatedValue[], Record<string, number>,
     ];
+    const binanceLive = await binanceLiveRead;
     const refreshStatus = await readRefreshStatus(client, latest);
-    const baseTokens = buildDashboardTokens(tokens, (chainResult.data ?? []) as DbChain[], mergeById(latest, tvlHistory));
+    const baseTokens = buildDashboardTokens(tokens, (chainResult.data ?? []) as DbChain[], mergeById(latest, tvlHistory, binanceLive));
     return {
       tokens: attachDashboardExtras(baseTokens, { logos, calculated: latestCalculatedValues(calculatedRows), fdv, volume7d }),
       error: null,
@@ -790,8 +864,27 @@ export async function getLiveDashboardData(): Promise<{ tokens: DashboardToken[]
   }
 }
 
+export const getLiveDashboardData = memoizeWithTtl(
+  getLiveDashboardDataUncached,
+  () => DASHBOARD_CACHE_TTL_MS * getCacheTtlMultiplierSync(),
+  () => "dashboard",
+);
+
+const PROFILE_CACHE_TTL_MS = 60_000;
+
 /** `client` is injectable so the AI analysis reads the same profile data through the caller's client. */
-export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdminClient = createSupabaseAdminClient()): Promise<LiveTokenProfileData | null> {
+async function getLiveTokenProfileUncached(
+  tokenId: string,
+  client: SupabaseAdminClient = createSupabaseAdminClient(),
+  options: { includeLiveBinance?: boolean } = {},
+): Promise<LiveTokenProfileData | null> {
+  // The deterministic AI analysis engine (deterministic-service.ts, analysis/service.ts)
+  // reuses this same profile read and must never make an external network call of any
+  // kind -- that is a hard invariant enforced by its own tests, for reproducibility.
+  // Those callers pass includeLiveBinance: false to skip the live Binance fetch below;
+  // every other caller (the profile page itself) wants it, so it defaults on.
+  const includeLiveBinance = options.includeLiveBinance ?? true;
+  refreshThrottleLevelInBackground(client);
   const { data: tokenData, error: tokenError } = await client.from("tokens")
     .select("id,name,symbol,chain_id,contract_address,is_native,category,description")
     .eq("id", tokenId).maybeSingle();
@@ -805,6 +898,9 @@ export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdmin
       await readObservationWindow<DbObservation>(client, [tokenId], HISTORY_SERIES, new Date(Date.now() - HISTORY_DAYS * DAY_MS)),
       // GeckoTerminal's own aggregates (market scope); a separate provider, read the same way as history series.
       await readObservationWindow<DbObservation>(client, [tokenId], GECKO_TERMINAL_SERIES, new Date(Date.now() - HISTORY_DAYS * DAY_MS)),
+      // Binance's live price + 24h change (see fetchLiveBinanceObservations) -- fetched
+      // live, not read from Supabase.
+      includeLiveBinance ? await fetchLiveBinanceObservations([tokenId]) : [],
     )),
     client.from("calculated_metric_observations")
       .select("id,token_id,chain_id,metric_id,metric_name,unit,value,status,formula,calculated_at,period_start_at,period_end_at,unavailable_reason:provenance->>unavailable_reason")
@@ -933,19 +1029,69 @@ export async function getLiveTokenProfile(tokenId: string, client: SupabaseAdmin
 }
 
 /**
+ * `client` is intentionally left out of the cache key: the token profile page is this
+ * function's only caller (see getLiveTokenProfileForAnalysis below for the AI
+ * services' own, deliberately uncached, path), and every page request passes an
+ * interchangeable connection to the same real database, so caching only on `tokenId`
+ * is correct and lets concurrent/repeat page views share one read.
+ */
+export const getLiveTokenProfile = memoizeWithTtl<[tokenId: string, client?: SupabaseAdminClient], LiveTokenProfileData | null>(
+  getLiveTokenProfileUncached,
+  () => PROFILE_CACHE_TTL_MS * getCacheTtlMultiplierSync(),
+  (tokenId) => tokenId,
+);
+
+/**
+ * Uncached entry point for the AI analysis services (deterministic-service.ts,
+ * analysis/service.ts). Two reasons this bypasses getLiveTokenProfile's cache rather
+ * than reusing it with a different cache key (an earlier version of this code tried
+ * exactly that):
+ *
+ *  1. Report generation is already rate-limited to about once/hour per token, so
+ *     there is no concurrent/duplicate-request problem for a cache to solve here the
+ *     way there is for page views.
+ *  2. A shared cache keyed only by tokenId (client ignored, matching
+ *     getLiveTokenProfile's own reasoning above) is unsafe whenever two callers with
+ *     the SAME tokenId point at genuinely DIFFERENT underlying data -- which the
+ *     production AI services never do (same real database as the page), but their own
+ *     tests do, every time: many test cases in tests/analysis.test.mjs reuse one
+ *     constant token id across fresh, independently-seeded fake Supabase clients, and
+ *     were silently all served the first test's cached profile, because the fetch was
+ *     a Promise the memoizer would return again, uncalled, for every id+includeLiveBinance
+ *     combination that collided. The result: unrelated test scenarios validating
+ *     against stale, wrong profile data, until the evidence-contract and provider-
+ *     routing assertions downstream started failing for reasons that had nothing to do
+ *     with what each test actually changed.
+ *
+ * includeLiveBinance is always false here: see getLiveTokenProfileUncached's own doc
+ * comment for why the AI services must never make a live network call.
+ */
+export function getLiveTokenProfileForAnalysis(tokenId: string, client: SupabaseAdminClient): Promise<LiveTokenProfileData | null> {
+  return getLiveTokenProfileUncached(tokenId, client, { includeLiveBinance: false });
+}
+
+/**
  * Sidebar 24H Movers for pages without dashboard rows. Reads only stored data:
  * the latest CoinGecko 24h change per tracked token and stored logos. The
  * sidebar is optional, so any failure hides it instead of failing the page.
  */
-export async function getSidebarMovers(): Promise<Movers | null> {
+const MOVERS_CACHE_TTL_MS = 60_000;
+
+async function getSidebarMoversUncached(): Promise<Movers | null> {
   try {
     const client = createSupabaseAdminClient();
+    refreshThrottleLevelInBackground(client);
     const tokenResult = await client.from("tokens").select("id,name,symbol,chain_id,contract_address,is_native,category,description");
     if (tokenResult.error) throw tokenResult.error;
     const tokens = (tokenResult.data ?? []) as DbToken[];
     const tokenIds = tokens.map((token) => token.id);
     const [changeResult, logos] = await Promise.all([
-      client.from("latest_token_metric_observations").select(OBSERVATION_COLUMNS)
+      // Narrower than OBSERVATION_COLUMNS: selectMovers only ever reads change24hPct/
+      // volume24hUsd (plain numbers) off the rows this produces, never metricSources
+      // or any other provenance -- note/source_field/raw_record_id and all of
+      // SCOPE_COLUMNS are fetched by the shared OBSERVATION_COLUMNS set for the
+      // profile page's notes feature, which this path has no use for.
+      client.from("latest_token_metric_observations").select("id,token_id,provider_id,metric_id,value,status,observed_at,collected_at")
         .eq("provider_id", "coingecko").in("metric_id", ["price_change_24h_pct", "volume_24h_usd"]).in("token_id", tokenIds),
       readTokenLogos(client, tokenIds),
     ]);
@@ -957,6 +1103,12 @@ export async function getSidebarMovers(): Promise<Movers | null> {
     return null;
   }
 }
+
+export const getSidebarMovers = memoizeWithTtl(
+  getSidebarMoversUncached,
+  () => MOVERS_CACHE_TTL_MS * getCacheTtlMultiplierSync(),
+  () => "movers",
+);
 
 export function latestDashboardUpdate(tokens: DashboardToken[]): string | null {
   return tokens.flatMap((token) => Object.values(token.metricSources ?? {}).map((source) => source?.collectedAt ?? ""))

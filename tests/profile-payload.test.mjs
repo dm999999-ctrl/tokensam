@@ -60,9 +60,17 @@ const BITCOIN = seed("bitcoin-btc", "bitcoin", [
   ["coingecko", "maximum_supply", 21_000_000],
 ]);
 
+// getLiveTokenProfile also does a live Binance fetch for any token with a Binance mapping
+// (uniswap-uni and bitcoin-btc both have one); block it here so this file stays "no network" and
+// deterministic regardless of the test sandbox's actual connectivity. fetchLiveBinanceObservations
+// already treats a failed fetch as "no live Binance data" (falls back to the stored provider data),
+// so a rejected fetch here is the correct, already-handled way to disable it.
+const realFetch = globalThis.fetch;
+globalThis.fetch = () => Promise.reject(new Error("network disabled in profile-payload.test.mjs"));
 const profile = (tokenId, data) => getLiveTokenProfile(tokenId, createFakeSupabase({ seed: data }).client);
 const uniswap = await profile("uniswap-uni", UNISWAP);
 const bitcoin = await profile("bitcoin-btc", BITCOIN);
+globalThis.fetch = realFetch;
 const uniPayload = buildProfilePayload(uniswap);
 const btcPayload = buildProfilePayload(bitcoin);
 const field = (payload, id) => payload.fields.find((item) => item.id === id);
