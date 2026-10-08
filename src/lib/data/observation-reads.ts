@@ -138,41 +138,31 @@ export function mergeById<T extends { id: number }>(...sets: T[][]): T[] {
 }
 
 /**
- * Read the latest observation view in bounded token batches. The view is backed
- * by a DISTINCT ON query over a growing history table; keeping each request to
- * a small token set prevents one large PostgREST query from hitting Supabase's
- * statement timeout as the universe grows.
+ * Read the latest observation per (token, provider, metric) within a recent window.
+ *
+ * Previously: bounded token batches of 50, each doing its own keyset-paginated read of
+ * every matching row in the window, collapsed to the newest row per group in application
+ * memory (latestPerMetric). That shipped every row in the window over the wire only to
+ * discard all but the newest per group, and request count scaled with token count (one
+ * batch of requests per 50 tokens, each potentially several keyset pages). Now calls
+ * latest_observations_bounded (20261007160000_metrics_calc_server_side_collapse), the
+ * same RPC built for the metrics-calculation read path: one call with every token id as
+ * a single array parameter (not URL-length-bounded like a GET .in() filter, so no
+ * batching needed), doing the newest-row-per-group collapse server side via a window
+ * function. One request regardless of token count, in place of what was previously
+ * ceil(tokenIds.length / 50) batches of potentially several pages each.
  */
 export async function readLatestObservations<T extends Row>(client: SupabaseAdminClient, tokenIds: string[]): Promise<T[]> {
   if (tokenIds.length === 0) return [];
-  const TOKEN_BATCH_SIZE = 50;
-  const batches = Array.from({ length: Math.ceil(tokenIds.length / TOKEN_BATCH_SIZE) }, (_, index) =>
-    tokenIds.slice(index * TOKEN_BATCH_SIZE, (index + 1) * TOKEN_BATCH_SIZE));
-
-  const readBatch = async (batch: string[]): Promise<T[]> => {
-    // Read the base table directly instead of the DISTINCT ON view. The view
-    // can force PostgreSQL to plan against the entire append-only history even
-    // when only 50 dashboard tokens are requested. The dashboard only needs
-    // current data, so bound the read to the recent window and collapse to the
-    // newest row per token/provider/metric in application memory.
-    const since = new Date(Date.now() - LATEST_READ_WINDOW_MS).toISOString();
-    const all = await readKeyset<T>((fromObservedAt) => client.from("token_metric_observations")
-      .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS).is("excluded_reason", null)
-      .gte("observed_at", fromObservedAt ?? since)
-      .order("observed_at", { ascending: true }).order("id", { ascending: true })
-      .limit(PAGE_SIZE), "read recent observations");
-    return latestPerMetric(all.rows);
-  };
-
-  const results = await Promise.allSettled(batches.map(readBatch));
-  const successful: T[][] = [];
-  for (const [index, result] of results.entries()) {
-    if (result.status === "fulfilled") successful.push(result.value);
-    else console.error("Latest observation batch " + (index + 1) + "/" + batches.length + " failed:", result.reason);
-  }
-  const merged = mergeById(...successful);
-  recordApproxRead(client, merged);
-  return merged;
+  const since = new Date(Date.now() - LATEST_READ_WINDOW_MS).toISOString();
+  const { data, error } = await client.rpc("latest_observations_bounded", {
+    p_token_ids: tokenIds, p_provider_ids: PROVIDERS, p_since: since,
+  });
+  if (isMissingRelation(error)) return [];
+  fail(error, "read latest observations (bounded rpc)");
+  const rows = (data ?? []) as T[];
+  recordApproxRead(client, rows);
+  return rows;
 }
 /** Observations for specific provider metrics since a cutoff (bounded history for series). */
 export async function readObservationWindow<T extends Row>(
