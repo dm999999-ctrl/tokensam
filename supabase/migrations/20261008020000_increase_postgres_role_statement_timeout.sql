@@ -1,0 +1,22 @@
+-- VACUUM FULL (tokensam-retention-vacuum-full, jobid 4) started failing intermittently
+-- with "canceling statement due to statement timeout" as token_metric_observations grew
+-- (confirmed live, 2026-10-08: attempt_count reached 4 of the 6-attempt exhaustion limit
+-- in manage_retention_full_vacuum() before this fix). The pg_cron job runs as the
+-- postgres role, whose effective statement_timeout was the database default of 2
+-- minutes -- workable while the table was smaller, but a full table+index rewrite
+-- (plus any lock-wait time contending with the non-chart-collapse job, which now also
+-- runs every 2 minutes on the same table) can exceed that budget as data volume grows.
+--
+-- Raising it to 5 minutes gives VACUUM FULL real headroom without touching the job's
+-- command (still the single plain statement proven safe all session) or needing to wrap
+-- VACUUM in a function to SET a per-call timeout, which is not viable here -- VACUUM
+-- cannot be executed from a function/procedure (confirmed earlier this session,
+-- 20261007120000). A role-level ALTER ROLE ... SET is the correct mechanism: it changes
+-- the default for new sessions connecting as postgres (including pg_cron job runs)
+-- without needing VACUUM itself to be anything but a bare top-level statement.
+--
+-- Applied directly against veyvdpypbuguydldhnwq (ALTER ROLE, not a schema change, so
+-- there is nothing to verify via pg_catalog beyond pg_roles.rolconfig) and confirmed via:
+--   select rolname, rolconfig from pg_roles where rolname = 'postgres';
+-- -> rolconfig now includes "statement_timeout=5min".
+alter role postgres set statement_timeout = '5min';
