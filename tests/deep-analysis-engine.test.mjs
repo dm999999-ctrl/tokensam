@@ -14,7 +14,7 @@ import { extractFindings } from "../src/lib/analysis/engine/findings.ts";
 import { synthesize } from "../src/lib/analysis/engine/synthesis.ts";
 import { buildEngineReport, ENGINE_VERSION, ANALYSIS_VERSION } from "../src/lib/analysis/engine/report.ts";
 import { ENGINE_SECTION_KEYS } from "../src/lib/analysis/engine/report-schema.ts";
-import { generateDeterministicAnalysis, getDeterministicAnalysisState, DETERMINISTIC_ENGINE_NAME } from "../src/lib/analysis/deterministic-service.ts";
+import { generateDeterministicAnalysis, DETERMINISTIC_ENGINE_NAME } from "../src/lib/analysis/deterministic-service.ts";
 import { AnalysisValidationError, findProhibitedLanguage } from "../src/lib/analysis/schema.ts";
 import { findCausalLanguage, findDirectionalLanguage, findExternalConcept, findLeakedEvidenceMarker } from "../src/lib/analysis/evidence-rules.ts";
 
@@ -376,16 +376,14 @@ test("F3. generation succeeds with every AI-provider environment variable absent
     const db = createFakeSupabase({ seed: seed("algorand-algo", "algorand", [["coingecko", "price_usd", 2], ["coingecko", "market_cap_usd", 9_000_000]], [], true) });
     const result = await generateDeterministicAnalysis(db.client, "algorand-algo", { now: () => MIDNIGHT });
     assert.equal(result.ok, true);
-    const state = await getDeterministicAnalysisState(db.client, "algorand-algo", MIDNIGHT);
-    assert.equal(state.status, "ready");
-    assert.equal(state.model, DETERMINISTIC_ENGINE_NAME);
+    assert.equal(result.analysis.metadata.model, DETERMINISTIC_ENGINE_NAME);
   } finally {
     process.env = cleared;
   }
 });
 
 // =====================================================================================
-// G. buildEngineReport never throws a plain Error; persistence round-trips
+// G. buildEngineReport never throws a plain Error; generation is stateless (no persistence)
 // =====================================================================================
 
 test("G1. buildEngineReport itself never throws a plain Error for any real fixture — only AnalysisValidationError is a recognized failure mode", () => {
@@ -402,42 +400,35 @@ test("G1. buildEngineReport itself never throws a plain Error for any real fixtu
   }
 });
 
-test("G2. persists engineVersion/analysisVersion/dataSnapshotAt, and the stored row round-trips through the state reader", async () => {
-  const db = createFakeSupabase({ seed: seed("akash-akt", "akash", [["coingecko", "price_usd", 4], ["coingecko", "market_cap_usd", 3_000_000]], [], true) });
-  const result = await generateDeterministicAnalysis(db.client, "akash-akt", { now: () => MIDNIGHT });
+test("G2. generateDeterministicAnalysis returns engineVersion/analysisVersion/dataSnapshotAt directly on its result, and never writes to token_ai_analyses", async () => {
+  const db = createFakeSupabase({ seed: seed("near-near", "near", [["coingecko", "price_usd", 4], ["coingecko", "market_cap_usd", 3_000_000]], [], true) });
+  const result = await generateDeterministicAnalysis(db.client, "near-near", { now: () => MIDNIGHT });
   assert.equal(result.ok, true);
   assert.equal(result.analysis.metadata.engineVersion, ENGINE_VERSION);
   assert.equal(result.analysis.metadata.analysisVersion, ANALYSIS_VERSION);
   assert.equal(result.analysis.metadata.provider, DETERMINISTIC_ENGINE_NAME);
   assert.ok("dataSnapshotAt" in result.analysis.metadata);
-  const state = await getDeterministicAnalysisState(db.client, "akash-akt", new Date(MIDNIGHT.getTime() + 5 * 60 * 1000));
-  assert.equal(state.status, "ready");
-  assert.equal(state.latest?.metadata.engineVersion, ENGINE_VERSION);
-  for (const key of ENGINE_SECTION_KEYS) assert.ok(Array.isArray(state.latest[key].paragraphs), `round-tripped analysis still has section ${key}`);
+  for (const key of ENGINE_SECTION_KEYS) assert.ok(Array.isArray(result.analysis[key].paragraphs), `generated analysis has section ${key}`);
+  // Nothing is persisted: generation never touches token_ai_analyses, so it still succeeds even
+  // when that table does not exist -- the exact opposite of the old storage-backed path.
+  const noTable = createFakeSupabase({ seed: seed("near-near", "near", [["coingecko", "price_usd", 4], ["coingecko", "market_cap_usd", 3_000_000]], [], true), missingTables: ["token_ai_analyses"] });
+  const withoutStorage = await generateDeterministicAnalysis(noTable.client, "near-near", { now: () => MIDNIGHT });
+  assert.equal(withoutStorage.ok, true);
 });
 
-test("G3. invalid token IDs and an unmigrated storage table are handled without throwing", async () => {
+test("G3. an invalid token ID is handled without throwing", async () => {
   const db = createFakeSupabase({ seed: seed("dash-dash", "dash", [["coingecko", "price_usd", 1]], [], true) });
   const badToken = await generateDeterministicAnalysis(db.client, "not-a-real-token", { now: () => MIDNIGHT });
   assert.equal(badToken.ok, false);
   assert.equal(badToken.reason, "invalid_token");
-
-  const noTable = createFakeSupabase({ seed: seed("dash-dash", "dash", [["coingecko", "price_usd", 1]], [], true), missingTables: ["token_ai_analyses"] });
-  const state = await getDeterministicAnalysisState(noTable.client, "dash-dash", MIDNIGHT);
-  assert.equal(state.status, "storage_unavailable");
-  const failed = await generateDeterministicAnalysis(noTable.client, "dash-dash", { now: () => MIDNIGHT });
-  assert.equal(failed.reason, "storage_unavailable");
 });
 
-test("G4. cooldown blocks an immediate second regeneration; it clears after the configured window", async () => {
+test("G4. two consecutive calls for the same token both succeed immediately -- no cooldown, since nothing is persisted to rate-limit", async () => {
   const db = createFakeSupabase({ seed: seed("celo-celo", "celo", [["coingecko", "price_usd", 1], ["coingecko", "market_cap_usd", 2_000_000]], [], true) });
   const first = await generateDeterministicAnalysis(db.client, "celo-celo", { now: () => MIDNIGHT });
   assert.equal(first.ok, true);
   const immediate = await generateDeterministicAnalysis(db.client, "celo-celo", { now: () => new Date(MIDNIGHT.getTime() + 1000) });
-  assert.equal(immediate.ok, false);
-  assert.equal(immediate.reason, "cooldown");
-  const later = await generateDeterministicAnalysis(db.client, "celo-celo", { now: () => new Date(MIDNIGHT.getTime() + 2 * 60 * 1000) });
-  assert.equal(later.ok, true);
+  assert.equal(immediate.ok, true);
 });
 
 // ---- H. Research-report redesign: confidence/analyticalType classification, regime, versioning ----
@@ -490,16 +481,14 @@ test("H4. the report's regime is read directly off the same multi-horizon moment
   }
 });
 
-test("H5. confidence/analyticalType survive a stored-row round-trip unchanged (parseStoredEngineAnalysis does not silently strip the new fields)", async () => {
-  const db = createFakeSupabase({ seed: seed("op-roundtrip", "optimism", [["coingecko", "price_usd", 2.5], ["coingecko", "market_cap_usd", 900_000_000]], [], true) });
-  const generated = await generateDeterministicAnalysis(db.client, "op-roundtrip", { now: () => MIDNIGHT });
+test("H5. confidence/analyticalType are present on generateDeterministicAnalysis's own result, not just on buildEngineReport's -- the live request path never strips them", async () => {
+  const db = createFakeSupabase({ seed: seed("polkadot-dot", "polkadot", [["coingecko", "price_usd", 2.5], ["coingecko", "market_cap_usd", 900_000_000]], [], true) });
+  const generated = await generateDeterministicAnalysis(db.client, "polkadot-dot", { now: () => MIDNIGHT });
   assert.equal(generated.ok, true);
-  const state = await getDeterministicAnalysisState(db.client, "op-roundtrip");
-  assert.equal(state.status, "ready");
   for (const key of ENGINE_SECTION_KEYS) {
-    for (const paragraph of state.latest[key].paragraphs) {
-      assert.ok(paragraph.confidence, `${key}: confidence must survive the store/reload round-trip`);
-      assert.ok(paragraph.analyticalType, `${key}: analyticalType must survive the store/reload round-trip`);
+    for (const paragraph of generated.analysis[key].paragraphs) {
+      assert.ok(paragraph.confidence, `${key}: confidence must be present on the generated result`);
+      assert.ok(paragraph.analyticalType, `${key}: analyticalType must be present on the generated result`);
     }
   }
 });

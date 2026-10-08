@@ -45,7 +45,26 @@ test("4. every rendered section and the research-questions list route citations 
 
 test("5. footnote numbering is resolved once per report, from a single shared index, not recomputed ad hoc per section", () => {
   assert.match(source, /const footnoteIndex = buildFootnoteIndex\(analysis\);/, "AnalysisBody builds exactly one footnote index for the whole report and threads it down");
-  assert.doesNotMatch(source, /buildFootnoteIndex\(analysis\)[\s\S]*buildFootnoteIndex\(analysis\)/, "buildFootnoteIndex is called at most once per render");
+  // AnalysisBody (the finished report) and PartialAnalysisBody (the report mid-typewriter) are two
+  // mutually exclusive render paths -- DeepAnalysisPanel mounts exactly one of them at a time, never
+  // both -- so the file legitimately contains two call sites. The invariant that must still hold is
+  // per render path: neither function computes it more than once within its own body.
+  const analysisBodyFn = source.slice(source.indexOf("function AnalysisBody("), source.indexOf("\n}\n", source.indexOf("function AnalysisBody(")) + 2);
+  const partialAnalysisBodyFn = source.slice(source.indexOf("function PartialAnalysisBody("), source.indexOf("\n}\n", source.indexOf("function PartialAnalysisBody(")) + 2);
+  for (const [name, fn] of [["AnalysisBody", analysisBodyFn], ["PartialAnalysisBody", partialAnalysisBodyFn]]) {
+    const occurrences = fn.match(/buildFootnoteIndex\(/g) ?? [];
+    assert.equal(occurrences.length, 1, `${name} must call buildFootnoteIndex exactly once, not recompute it ad hoc`);
+  }
+});
+
+test("9. the report mid-typewriter (PartialAnalysisBody) renders through the exact same Section/FurtherResearchQuestions/ReportHeader components as the finished report (AnalysisBody) -- not a separate renderer kept visually in sync by hand", () => {
+  const partialAnalysisBodyFn = source.slice(source.indexOf("function PartialAnalysisBody("), source.indexOf("\n}\n", source.indexOf("function PartialAnalysisBody(")) + 2);
+  for (const jsx of ["<ReportHeader ", "<Section ", "<FurtherResearchQuestions "]) {
+    assert.ok(partialAnalysisBodyFn.includes(jsx), `PartialAnalysisBody must render via ${jsx.trim()}, the same component AnalysisBody uses`);
+  }
+  // Only paragraph text is ever truncated -- sourceIds (and therefore footnote marks and the
+  // Valuation Analysis table, neither of which reads from paragraph text) are always left intact.
+  assert.doesNotMatch(partialAnalysisBodyFn, /sourceIds:\s*\[\]/, "PartialAnalysisBody must never empty out a paragraph's sourceIds while typing");
 });
 
 test("6. a section can only be hidden when it is empty of real evidence (every paragraph cites only the bare 'token' placeholder) -- never based on a hardcoded token/section name", () => {
