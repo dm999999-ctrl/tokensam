@@ -9,11 +9,24 @@
 -- cannot address at all -- only retention can.
 --
 -- Gate the actual run on estimated dead-tuple bloat, not just size: the job arms at
--- 450MB as before, but only activates once a cheap, scan-free estimate of reclaimable
--- bytes (n_dead_tup x average live row width, from pg_stat_user_tables -- no table scan,
--- just catalog stats) crosses a meaningful floor. A safety override still forces a run
--- regardless of bloat if size gets close to the 500MB hard cap, so this can never wait
--- indefinitely while genuinely running out of room.
+-- 450MB as before, but only activates once a cheap estimate of reclaimable bytes
+-- (n_dead_tup x average live row width) crosses a meaningful floor. A safety override
+-- still forces a run regardless of bloat if size gets close to the 500MB hard cap, so
+-- this can never wait indefinitely while genuinely running out of room.
+--
+-- Two deliberate choices to keep this safe to call while a VACUUM FULL is already
+-- running (manage_retention_full_vacuum is invoked every 5 minutes by the retention
+-- cron route regardless of job state):
+--   - The bloat estimate is computed from pg_class.relpages (a plain catalog column,
+--     last updated by ANALYZE) rather than pg_relation_size(), which needs a lock
+--     compatibility check against the table and was confirmed live to hang while VACUUM
+--     FULL holds its ACCESS EXCLUSIVE lock -- an earlier version of this migration used
+--     pg_relation_size() and blocked this function's own routine calls while a vacuum
+--     was in progress, discovered applying it live.
+--   - The whole bloat computation only happens in the branch that actually needs it
+--     (db_bytes >= threshold and the job isn't already active), not unconditionally at
+--     the top of the function, so a call made while VACUUM FULL is running never touches
+--     table-dependent catalog state it doesn't need.
 begin;
 
 create or replace function public.manage_retention_full_vacuum()
@@ -67,20 +80,6 @@ begin
     perform cron.alter_job(full_job_id, null, expected_command, null, null, null);
   end if;
 
-  -- Cheap, scan-free bloat estimate: dead row count x average live row width (heap only,
-  -- not indexes -- a conservative, understated estimate, which is fine for a floor check).
-  select coalesce(s.n_live_tup, 0), coalesce(s.n_dead_tup, 0), pg_relation_size(c.oid)
-  into n_live, n_dead, heap_bytes
-  from pg_class c
-  left join pg_stat_user_tables s on s.relid = c.oid
-  where c.oid = 'public.token_metric_observations'::regclass;
-
-  bloat_bytes := case when n_live + n_dead > 0
-    then (n_dead::numeric / (n_live + n_dead) * heap_bytes)::bigint
-    else 0
-  end;
-  should_run := bloat_bytes >= bloat_floor_bytes or db_bytes >= safety_bytes;
-
   select start_time, status, return_message
   into latest_run, latest_status, latest_message
   from cron.job_run_details
@@ -110,6 +109,21 @@ begin
 
   else
     if not job_active then
+      -- Only computed here: a plain catalog read (pg_class.relpages, last updated by
+      -- ANALYZE), never pg_relation_size(), so this never needs to wait on the table's
+      -- own lock -- safe even if called while a VACUUM FULL on it happens to be running.
+      select coalesce(s.n_live_tup, 0), coalesce(s.n_dead_tup, 0), c.relpages::bigint * current_setting('block_size')::bigint
+      into n_live, n_dead, heap_bytes
+      from pg_class c
+      left join pg_stat_user_tables s on s.relid = c.oid
+      where c.oid = 'public.token_metric_observations'::regclass;
+
+      bloat_bytes := case when n_live + n_dead > 0
+        then (n_dead::numeric / (n_live + n_dead) * heap_bytes)::bigint
+        else 0
+      end;
+      should_run := bloat_bytes >= bloat_floor_bytes or db_bytes >= safety_bytes;
+
       if should_run then
         perform cron.alter_job(full_job_id, null, null, null, null, true);
         update public.retention_vacuum_state
@@ -176,7 +190,7 @@ begin
     'threshold_bytes', threshold_bytes,
     'threshold', pg_size_pretty(threshold_bytes),
     'bloat_bytes', bloat_bytes,
-    'bloat_size', pg_size_pretty(bloat_bytes),
+    'bloat_size', case when bloat_bytes is not null then pg_size_pretty(bloat_bytes) else null end,
     'bloat_floor_bytes', bloat_floor_bytes,
     'bloat_floor', pg_size_pretty(bloat_floor_bytes),
     'safety_bytes', safety_bytes,
@@ -206,4 +220,6 @@ commit;
 --   select public.manage_retention_full_vacuum();
 -- action should read "armed_waiting_for_bloat" while db_bytes >= 450MB but bloat_bytes
 -- stays under bloat_floor_bytes (25MB), and "activated:bloat_floor_met" or
--- "activated:safety_override" once it actually starts the job.
+-- "activated:safety_override" once it actually starts the job. bloat_size/bloat_bytes
+-- are null in the response whenever the job is already active, since that branch never
+-- computes them (by design -- see the migration header).
