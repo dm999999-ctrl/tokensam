@@ -9,8 +9,10 @@ export type HistoricalPeriod = "24H" | "7D" | "30D";
 export type HistoricalPoint = {
   timestamp: string;
   valueUsd: number;
-  /** Provenance: the observation row, e.g. "obs:123". */
+  /** Provenance: a source observation or daily aggregate row, e.g. "obs:123" or "daily-average:45". */
   sourceId: string;
+  /** Present when retention compacted source observations into a derived daily mean. */
+  aggregation?: { method: "arithmetic_mean"; sampleCount: number };
 };
 
 /**

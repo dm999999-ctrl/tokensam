@@ -20,7 +20,7 @@ import { defillamaProtocolMappings } from "../../data/defillama-protocol-mapping
 import { tokenCoverage } from "../../data/provider-coverage.ts";
 import { SupabaseRefreshStore } from "../refresh/store.ts";
 import { COINGECKO_MARKETS_ENDPOINT, logosFromRecords, reportedFdvFromRecords, type LogoRecord, type MarketFieldRecord } from "./token-logos.ts";
-import type { HistoricalMetric, TokenHistoricalData } from "../../types/historical-data.ts";
+import type { HistoricalMetric, HistoricalPoint, TokenHistoricalData } from "../../types/historical-data.ts";
 import {
   DASHBOARD_CALCULATED_METRICS,
   type CalculatedMetricView,
@@ -95,6 +95,8 @@ type DbObservation = {
   collected_at: string;
   source_field: string | null;
   note: string | null;
+  daily_sample_count?: number;
+  daily_valid_value_count?: number;
 };
 
 /**
@@ -271,12 +273,10 @@ function thirtyDayTvlChange(rows: DbObservation[], tokenId: string): number | nu
 
 const CHANGE_TOLERANCE_HOURS = 3;
 const HOUR_MS = 60 * 60 * 1000;
-const MARKET_CAP_CHANGE_HOURS = 24;
 /** The latest volume_24h_usd reading is already "the past 24 hours"; comparing it against the
  *  closest reading ~24h earlier (that tick's own trailing 24h window) gives a day-over-day change
- *  in the rolling-24h figure, labeled "24h" like marketCapChange24hPct's identical comparison. */
+ *  in the rolling-24h figure. */
 const VOLUME_CHANGE_TARGET_HOURS = 24;
-const VOLUME_TO_MARKET_CAP_CHANGE_HOURS = 24;
 
 /** % change in a single metric's value vs the closest stored observation `hoursAgo` before the latest one. */
 function changeOverHorizon(
@@ -301,44 +301,57 @@ function changeOverHorizon(
   return Number.isFinite(change) ? change : null;
 }
 
-/**
- * % change in the volume_24h_usd / market_cap_usd ratio vs its value ~hoursAgo earlier.
- * CoinGecko writes price_usd/market_cap_usd/volume_24h_usd from the same /coins/markets
- * response row with one shared observed_at per tick (see coingecko.ts), so matching by exact
- * observed_at pairs each volume reading with its same-tick market cap without a separate join tolerance.
- */
-function volumeToMarketCapChangeOverHorizon(
+/** Daily means for the completed UTC days, using the stored mean when retention has rolled a day up. */
+function dailyAverageSeries(
   rows: DbObservation[],
   tokenId: string,
-  hoursAgo: number,
-  toleranceHours = CHANGE_TOLERANCE_HOURS,
-): number | null {
-  const volumeByTime = new Map<number, number>();
-  const marketCapByTime = new Map<number, number>();
+  metricId: "market_cap_usd" | "volume_24h_usd",
+  aggregatesOnly = false,
+  asOfMs = Date.now(),
+): { day: number; value: number; collectedAt: string }[] {
+  const todayUtc = Math.floor(asOfMs / DAY_MS) * DAY_MS;
+  const dailyMeans = new Map<number, { sum: number; count: number; aggregate: number | null; collectedAt: string }>();
   for (const row of rows) {
-    if (row.token_id !== tokenId || row.provider_id !== "coingecko" || row.status !== "available") continue;
+    if (row.token_id !== tokenId || row.provider_id !== "coingecko" || row.metric_id !== metricId || row.status !== "available") continue;
     const value = numberValue(row.value);
     if (value === null) continue;
-    const time = Date.parse(row.observed_at);
-    if (row.metric_id === "volume_24h_usd") volumeByTime.set(time, value);
-    else if (row.metric_id === "market_cap_usd") marketCapByTime.set(time, value);
+    const observedAt = Date.parse(row.observed_at);
+    const day = Math.floor(observedAt / DAY_MS) * DAY_MS;
+    if (!Number.isFinite(observedAt) || day >= todayUtc || (metricId === "market_cap_usd" ? value <= 0 : value < 0)) continue;
+    const isAggregate = row.source_field === "daily_average";
+    if (aggregatesOnly && !isAggregate) continue;
+    const entry = dailyMeans.get(day) ?? { sum: 0, count: 0, aggregate: null, collectedAt: row.collected_at };
+    if (isAggregate) {
+      entry.aggregate = value;
+      entry.collectedAt = row.collected_at;
+    } else if (entry.aggregate === null) {
+      entry.sum += value;
+      entry.count += 1;
+      if (Date.parse(row.collected_at) > Date.parse(entry.collectedAt)) entry.collectedAt = row.collected_at;
+    }
+    dailyMeans.set(day, entry);
   }
-  const series = [...volumeByTime.entries()]
-    .filter(([time]) => marketCapByTime.has(time))
-    .map(([time, volume]) => {
-      const marketCap = marketCapByTime.get(time)!;
-      return { time, ratio: marketCap > 0 ? volume / marketCap : null };
-    })
-    .filter((point): point is { time: number; ratio: number } => point.ratio !== null)
-    .sort((a, b) => a.time - b.time);
-  if (series.length < 2) return null;
-  const latest = series.at(-1)!;
-  const target = latest.time - hoursAgo * HOUR_MS;
-  const tolerance = toleranceHours * HOUR_MS;
-  const baseline = series.filter((point) => point.time <= target && target - point.time <= tolerance).at(-1);
-  if (!baseline || baseline.ratio <= 0) return null;
-  const change = ((latest.ratio / baseline.ratio) - 1) * 100;
+  return [...dailyMeans.entries()].map(([day, entry]) => ({
+    day,
+    value: entry.aggregate ?? (entry.count > 0 ? entry.sum / entry.count : NaN),
+    collectedAt: entry.collectedAt,
+  })).filter((point) => Number.isFinite(point.value)).sort((a, b) => a.day - b.day);
+}
+
+function latestConsecutiveDailyChange(points: { day: number; value: number }[]): number | null {
+  const latest = points.at(-1);
+  const previous = points.at(-2);
+  if (!latest || !previous || latest.day - previous.day !== DAY_MS || previous.value <= 0) return null;
+  const change = (latest.value / previous.value - 1) * 100;
   return Number.isFinite(change) ? change : null;
+}
+
+function volumeToMarketCapDailyAverageChange(rows: DbObservation[], tokenId: string, asOfMs: number): number | null {
+  const marketCaps = new Map(dailyAverageSeries(rows, tokenId, "market_cap_usd", true, asOfMs).map((point) => [point.day, point.value]));
+  const ratios = dailyAverageSeries(rows, tokenId, "volume_24h_usd", false, asOfMs)
+    .filter((point) => marketCaps.has(point.day))
+    .map((point) => ({ day: point.day, value: point.value / marketCaps.get(point.day)! }));
+  return latestConsecutiveDailyChange(ratios);
 }
 
 export function buildDashboardTokens(
@@ -371,14 +384,14 @@ export function buildDashboardTokens(
       collectedAt: latestTvl.collected_at,
       note: "Calculated server-side from DeFiLlama TVL observations approximately 30 days apart.",
     };
-    const marketCapChange24hPct = changeOverHorizon(observations, token.id, "coingecko", "market_cap_usd", MARKET_CAP_CHANGE_HOURS);
+    const marketCapDailyAverages = dailyAverageSeries(observations, token.id, "market_cap_usd", true, now);
+    const marketCapChangeDailyAveragePct = latestConsecutiveDailyChange(marketCapDailyAverages);
     const volumeChange24hPct = changeOverHorizon(observations, token.id, "coingecko", "volume_24h_usd", VOLUME_CHANGE_TARGET_HOURS);
-    const volumeToMarketCapChange24hPct = volumeToMarketCapChangeOverHorizon(observations, token.id, VOLUME_TO_MARKET_CAP_CHANGE_HOURS);
-    const latestMarketCap = observationFor(observations, token.id, "coingecko", "market_cap_usd");
-    if (latestMarketCap) metricSources.marketCapChange24hPct = {
+    const volumeToMarketCapChangeDailyAveragePct = volumeToMarketCapDailyAverageChange(observations, token.id, now);
+    if (marketCapChangeDailyAveragePct !== null) metricSources.marketCapChangeDailyAveragePct = {
       providerId: "calculated",
-      collectedAt: latestMarketCap.collected_at,
-      note: "Calculated server-side from CoinGecko market cap observations approximately 24 hours apart.",
+      collectedAt: marketCapDailyAverages.at(-1)!.collectedAt,
+      note: "Calculated as the change between consecutive completed UTC-day CoinGecko market-cap arithmetic means.",
     };
     const latestVolume = observationFor(observations, token.id, "coingecko", "volume_24h_usd");
     if (latestVolume) metricSources.volumeChange24hPct = {
@@ -386,10 +399,10 @@ export function buildDashboardTokens(
       collectedAt: latestVolume.collected_at,
       note: "The latest stored 24h volume (itself already a trailing 24-hour figure) vs. the closest stored 24h volume observation approximately 24 hours before that -- i.e. the past 24 hours' volume vs. the preceding 24 hours', a day-over-day change in the rolling-24h figure.",
     };
-    if (latestVolume) metricSources.volumeToMarketCapChange24hPct = {
+    if (volumeToMarketCapChangeDailyAveragePct !== null) metricSources.volumeToMarketCapChangeDailyAveragePct = {
       providerId: "calculated",
-      collectedAt: latestVolume.collected_at,
-      note: "Calculated server-side from the volume_24h_usd / market_cap_usd ratio at matching CoinGecko collection timestamps approximately 24 hours apart, the same day-over-day comparison as volumeChange24hPct.",
+      collectedAt: marketCapDailyAverages.at(-1)!.collectedAt,
+      note: "Calculated as the day-over-day change in daily-average CoinGecko 24-hour volume divided by daily-average market capitalization.",
     };
     const tokenRows = observations.filter((row) => row.token_id === token.id);
     const observedAt = tokenRows.map((row) => row.collected_at).sort().at(-1) ?? "";
@@ -409,9 +422,9 @@ export function buildDashboardTokens(
       maximumSupply: valueFor("maximum_supply", "coingecko", "maximumSupply"),
       tvlUsd: valueFor("tvl_usd", "defillama", "tvlUsd"),
       tvlChange30dPct,
-      marketCapChange24hPct,
       volumeChange24hPct,
-      volumeToMarketCapChange24hPct,
+      marketCapChangeDailyAveragePct,
+      volumeToMarketCapChangeDailyAveragePct,
       fees24hUsd: valueFor("fees_24h_usd", "defillama", "fees24hUsd"),
       revenue24hUsd: valueFor("revenue_24h_usd", "defillama", "revenue24hUsd"),
       observedAt,
@@ -421,7 +434,8 @@ export function buildDashboardTokens(
 }
 
 /**
- * Chart series from actual stored observations only. Each series carries
+ * Chart series from stored provider observations and explicitly labeled daily
+ * aggregates. Each series carries
  * per-period coverage (24H/7D/30D/90D windows ending at `now`), so the UI
  * reports what exists instead of implying a full period. Nothing is
  * interpolated, zero-filled, or synthesized.
@@ -449,8 +463,22 @@ export function buildTokenHistory(
       .sort((a, b) => Date.parse(a.observed_at) - Date.parse(b.observed_at) || a.id - b.id);
     const source = sourceFor(rows.at(-1));
     if (source) sources[key] = source;
-    const points = rows.map((row) => ({ timestamp: new Date(row.observed_at).toISOString(), valueUsd: numberValue(row.value), sourceId: `obs:${row.id}` }))
-      .filter((point): point is { timestamp: string; valueUsd: number; sourceId: string } => point.valueUsd !== null);
+    const points = rows.flatMap((row): HistoricalPoint[] => {
+      const valueUsd = numberValue(row.value);
+      if (valueUsd === null) return [];
+      const point: HistoricalPoint = {
+        timestamp: new Date(row.observed_at).toISOString(),
+        valueUsd,
+        sourceId: row.source_field === "daily_average" ? `daily-average:${Math.abs(row.id)}` : `obs:${row.id}`,
+      };
+      if (row.source_field === "daily_average") {
+        point.aggregation = {
+          method: "arithmetic_mean",
+          sampleCount: row.daily_valid_value_count ?? row.daily_sample_count ?? 0,
+        };
+      }
+      return [point];
+    });
     const reason = providerId === "defillama" && options.defiLlamaMapped === false && unmappedReason
       ? unmappedReason
       : `No stored ${providerId === "coingecko" ? "CoinGecko" : "DeFiLlama"} observations in the last ${HISTORY_DAYS} days.`;

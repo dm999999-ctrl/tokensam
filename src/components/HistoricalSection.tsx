@@ -6,7 +6,7 @@ import type { HistoricalMetric, HistoricalPeriod, HistoryChartKey, TokenHistoric
 import { HISTORICAL_PERIODS, coverageChangePct, pointsInPeriod, riskProfile } from "@/lib/data/historical-series";
 import { formatChange, formatDuration, formatUsd } from "@/lib/ui/format";
 
-// Charts connect actual stored observations only; below this count each point is also drawn.
+// Charts connect stored observations and derived daily means; below this count each point is drawn.
 const MAX_POINTS_WITH_DOTS = 40;
 const SERIES: Record<HistoricalMetric, { label: string; color: string }> = {
   priceUsd: { label: "Price", color: "#d0443b" },
@@ -22,17 +22,20 @@ function utcLabel(time: number, withTime = true) {
     : { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
-type TooltipProps = { active?: boolean; label?: number | string; payload?: { value?: number | string }[]; seriesLabel: string };
+type TooltipProps = { active?: boolean; label?: number | string; payload?: { value?: number | string; payload?: { aggregation?: { method: "arithmetic_mean"; sampleCount: number } } }[]; seriesLabel: string };
 
 /** Date/time, series name, and value only; provenance IDs are never shown here. */
 function ChartTooltip({ active, label, payload, seriesLabel }: TooltipProps) {
   if (!active || !payload?.length) return null;
   const value = Number(payload[0]?.value);
+  const aggregation = payload[0]?.payload?.aggregation;
   return (
     <div className="chart-tooltip">
       <span>{utcLabel(Number(label))} UTC</span>
       <strong>{formatUsd(value)}</strong>
-      <small>{seriesLabel}</small>
+      <small>{aggregation
+        ? `UTC daily average · ${aggregation.sampleCount} source ${aggregation.sampleCount === 1 ? "value" : "values"}`
+        : seriesLabel}</small>
     </div>
   );
 }
@@ -43,7 +46,7 @@ function ChartCard({ metric, data, period, wide = false }: { metric: HistoricalM
   const coverage = series.periods[period];
   const points = pointsInPeriod(series.points, period, new Date(data.asOf));
   // A numeric time axis keeps spacing proportional to time when daily and hourly points are mixed.
-  const chartPoints = points.map((item) => ({ time: Date.parse(item.timestamp), valueUsd: item.valueUsd }));
+  const chartPoints = points.map((item) => ({ time: Date.parse(item.timestamp), valueUsd: item.valueUsd, aggregation: item.aggregation }));
   const latest = points.at(-1);
   const hasTrend = coverage.status === "available";
   const change = hasTrend ? formatChange(coverageChangePct(points)) : null;

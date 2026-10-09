@@ -102,6 +102,12 @@ Assessment: CoinMarketCap is a realistic paid backup for history, and unlike Coi
 
 ## Storage implications
 
+### Daily retention averages
+
+After each UTC day completes, non-chart provider observations are compacted to a separate `token_metric_daily_aggregates` row containing the arithmetic mean of valid numeric values, the source provider and metric, the count and time bounds of source observations, and their observation IDs. CoinGecko price remains granular for 37 days to preserve the risk-profile lookback; CoinGecko 24-hour volume and DeFiLlama TVL remain granular for 30 days. Once those windows expire, each full UTC day is averaged the same way. Daily aggregates expire after 90 days.
+
+These values are derived data, not original provider facts. In particular, a mean of rolling 24-hour volume snapshots is **not** a sum of daily volume. Existing dates had already been reduced to a single near-midnight sample before this change; those historical means cannot be reconstructed, so their aggregate sample count will be one. New daily means are shown in historical chart tooltips with their source sample count.
+
 Measured on 24 Sep 2026 with this database. Monthly figures assume hourly CoinGecko and DEX Screener, DeFiLlama every 6 hours and metrics hourly.
 
 | Store | Per run | Per month (hourly) |

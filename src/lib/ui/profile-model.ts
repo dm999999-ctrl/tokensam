@@ -128,21 +128,16 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
   // A. Market snapshot: token scope only. On-chain trading conditions live in their own
   // Trading & Liquidity section (see D below) rather than being echoed here too.
   //
-  // Each card pairs with its own horizon-pinned change directly beneath it (market cap/its 24h
-  // change, volume/its 24h change, volume-market-cap ratio/its 24h change), computed server-side
-  // in buildDashboardTokens from matched-timestamp CoinGecko observations -- not the opportunistic
-  // "latest vs previous stored point" the calculated-metrics engine's growth_pct metrics use,
-  // which is why these carry a fixed, labeled horizon instead of a variable snapshot interval.
-  // All three changes compare the latest reading to the closest stored reading ~24 hours earlier
-  // (a day-over-day change), so all three are labeled "24h" -- consistent with each other and with
-  // how every other change metric in this app (price 24H/7D) names its lookback.
+  // Market-cap changes and volume/market-cap changes compare consecutive completed
+  // UTC-day averages because retention compacts market cap by UTC day. Volume change
+  // remains a rolling 24-hour comparison using the latest and prior provider readings.
   const volumeToMcap = metric("volume_to_market_cap");
   const marketCapCard = card("market_cap", "Market cap", formatUsd(token.marketCapUsd, true));
   const volumeCard = card("volume_24h", "Volume · 24h", formatUsd(token.volume24hUsd, true));
   const volumeToMcapCard = volumeToMcap ? fromMetric(volumeToMcap) : null;
-  const marketCapChange = changeCard("market_cap_change_24h", "Market cap change · 24h", token.marketCapChange24hPct);
+  const marketCapChange = changeCard("market_cap_change_daily_average", "Market cap change · daily average", token.marketCapChangeDailyAveragePct);
   const volumeChange = changeCard("volume_change_24h", "Volume change · 24h", token.volumeChange24hPct);
-  const volumeToMcapChange = changeCard("volume_to_market_cap_change_24h", "Volume / market cap change · 24h", token.volumeToMarketCapChange24hPct);
+  const volumeToMcapChange = changeCard("volume_to_market_cap_change_daily_average", "Volume / market cap change · daily average", token.volumeToMarketCapChangeDailyAveragePct);
   const snapshot = {
     cards: present([marketCapCard, volumeCard, volumeToMcapCard]),
     changes: present([marketCapChange, volumeChange, volumeToMcapChange]),

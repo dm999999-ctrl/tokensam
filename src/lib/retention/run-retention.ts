@@ -2,40 +2,29 @@ type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createS
 
 const BATCH_SIZE = 1000;
 const MAX_BATCHES_PER_FUNCTION = 1000;
+// Daily aggregation batch_size counts token/metric/provider groups rather than
+// source rows. Keeping the group limit at 80 bounds each RPC's aggregation and
+// deletion work under the PostgREST statement timeout.
+const DAILY_AGGREGATION_GROUP_BATCH_SIZE = 80;
 
 // Retention policy:
-// - 0–30 days: preserve all granular observations for the 30D-chart-required
+// - Keep granular observations for the chart-required
 //   metrics only (coingecko price_usd, coingecko volume_24h_usd, defillama
 //   tvl_usd -- see SERIES_RULES in src/lib/indicators/series.ts and
-//   MARKET_HISTORY in src/lib/ui/profile-model.ts). Every other metric
-//   (market_cap_usd, supply fields, price_change_*_pct, defillama_coins
-//   price_usd, all dexscreener/geckoterminal metrics, defillama fees/revenue)
-//   is collapsed to one observation per UTC day as soon as that day
-//   completes, since nothing reads it at finer resolution: technical
-//   indicators already sample once/day via dailySamples(), and every "current
-//   value" read (dashboard, Tokenomics, Market Structure, on-chain markets)
-//   uses only the single latest observation, which the same-day exclusion
-//   below never touches.
-//   Exception: coingecko market_cap_usd stays granular through 48 hours, not
-//   just "before today" -- the Market Snapshot's "Market cap change · 24h"
-//   and "Volume / market cap change · 24h" cards (live-data.ts:
-//   changeOverHorizon, volumeToMarketCapChangeOverHorizon) need a market_cap_usd
-//   observation within 3 hours of exactly 24 hours ago, which a same-day-only
-//   collapse (leaving "yesterday" as a single near-midnight point) usually
-//   can't satisfy. 48 hours is just enough margin for that lookback.
-// - >30–<90 days: retain exactly one daily historical observation per
-//   token/metric/provider/UTC calendar day: the observation closest to 00:00 UTC;
-//   delete every other granular observation immediately after it crosses 30 days.
-//   Exception: coingecko price_usd stays fully granular through day 37, not
+//   MARKET_HISTORY in src/lib/ui/profile-model.ts). Every completed UTC day is
+//   represented by an arithmetic-mean aggregate before its source observations
+//   are removed; the current incomplete day remains available for live snapshots.
+//   Aggregate retention is metric-specific: market_cap_usd 46 days, circulating
+//   supply 11 days, total/maximum supply latest day only, and other aggregates
+//   up to 90 days. The live profile reads aggregates as historical indicator inputs.
+// - coingecko price_usd stays fully granular through day 37, not
 //   30 -- the risk profile's volatility is a rolling 7-day window of hourly
 //   returns (RISK_VOLATILITY_WINDOW_DAYS in src/lib/indicators/series.ts)
 //   ending at each displayed point, so a correct 30D volatility curve needs
 //   hourly price data a further 7 days before the window it displays.
-//   Collapsing at day 30 would degrade the first ~week of that curve to
-//   warm-up noise. volume_24h_usd and tvl_usd need no such extension:
-//   nothing reads beyond their own display window.
-// - >=90 days: delete all observations.
-// Raw provider records are retained for 7 days.
+// - Observations and aggregates expire after their metric-specific windows;
+//   non-special daily aggregates expire after 90 days. Raw provider records
+//   follow the provider-record expiry function in the database.
 // The database trigger trg_protect_30d_chart_observations is the final guard
 // against deleting protected chart observations inside their granular window
 // (30 days, or 37 for coingecko price_usd).
@@ -56,6 +45,7 @@ const MAX_BATCHES_PER_FUNCTION = 1000;
 const RETENTION_FUNCTIONS = [
   "retention_collapse_daily_batch",
   "retention_expire_observations_batch",
+  "retention_expire_daily_aggregates_batch",
   "retention_expire_raw_provider_records_batch",
 ] as const;
 
@@ -83,7 +73,10 @@ export async function runRetentionBatches(client: SupabaseAdminClient, deadlineA
         stoppedEarly.push(fn);
         break;
       }
-      const { data, error } = await client.rpc(fn, { batch_size: BATCH_SIZE });
+      const batchSize = fn === "retention_collapse_non_chart_daily_batch" || fn === "retention_collapse_daily_batch"
+        ? DAILY_AGGREGATION_GROUP_BATCH_SIZE
+        : BATCH_SIZE;
+      const { data, error } = await client.rpc(fn, { batch_size: batchSize });
       if (error) {
         failed[fn] = error.message;
         break;

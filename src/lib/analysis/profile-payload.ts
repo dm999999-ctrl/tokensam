@@ -90,9 +90,9 @@ export type ProfilePayload = {
 const PERIOD_24H = "24H (rolling 24 hours, as reported by the provider)";
 const PERIOD_7D = "7D (rolling 7 days, as reported by the provider)";
 const PERIOD_30D_TVL = "30D (TVL observations about 30 days apart)";
-const PERIOD_MARKET_CAP_CHANGE_24H = "24H (market cap observations about 24 hours apart)";
+const PERIOD_MARKET_CAP_CHANGE_DAILY_AVERAGE = "Consecutive completed UTC days (daily-average market cap)";
 const PERIOD_VOLUME_CHANGE_24H = "24H (the past 24h volume vs. the preceding 24h volume)";
-const PERIOD_VOLUME_TO_MARKET_CAP_CHANGE_24H = "24H (volume/market cap ratio observations about 24 hours apart)";
+const PERIOD_VOLUME_TO_MARKET_CAP_CHANGE_DAILY_AVERAGE = "Consecutive completed UTC days (daily-average 24h volume / daily-average market cap)";
 
 function field(input: Omit<PayloadField, "status" | "period" | "periodRequired" | "note" | "asOf" | "raw" | "intervalHours" | "technicalState" | "technicalReadings"> & Partial<Pick<PayloadField, "period" | "note" | "asOf" | "raw" | "intervalHours" | "technicalState" | "technicalReadings">>): PayloadField {
   const period = input.period ?? null;
@@ -155,12 +155,12 @@ export function buildProfilePayload(data: LiveTokenProfileData): ProfilePayload 
   const marketObserved = {
     market_cap: { id: "obs:market_cap", raw: token.marketCapUsd, asOfKey: "marketCapUsd" },
     volume_24h: { id: "obs:volume_24h", raw: token.volume24hUsd, period: PERIOD_24H, asOfKey: "volume24hUsd" },
-    // Horizon-pinned changes computed directly in buildDashboardTokens (not the calculated-metrics
+    // Presentation changes computed directly in buildDashboardTokens (not the calculated-metrics
     // engine), so they are never in `calculated` -- given explicit raw values here instead of
     // falling through fromCard's calculated.get(card.id) lookup (which would leave them ungrounded).
-    market_cap_change_24h: { id: "calc:market_cap_change_24h", raw: token.marketCapChange24hPct, period: PERIOD_MARKET_CAP_CHANGE_24H, asOfKey: "marketCapChange24hPct" },
+    market_cap_change_daily_average: { id: "calc:market_cap_change_daily_average", raw: token.marketCapChangeDailyAveragePct, period: PERIOD_MARKET_CAP_CHANGE_DAILY_AVERAGE, asOfKey: "marketCapChangeDailyAveragePct" },
     volume_change_24h: { id: "calc:volume_change_24h", raw: token.volumeChange24hPct, period: PERIOD_VOLUME_CHANGE_24H, asOfKey: "volumeChange24hPct" },
-    volume_to_market_cap_change_24h: { id: "calc:volume_to_market_cap_change_24h", raw: token.volumeToMarketCapChange24hPct, period: PERIOD_VOLUME_TO_MARKET_CAP_CHANGE_24H, asOfKey: "volumeToMarketCapChange24hPct" },
+    volume_to_market_cap_change_daily_average: { id: "calc:volume_to_market_cap_change_daily_average", raw: token.volumeToMarketCapChangeDailyAveragePct, period: PERIOD_VOLUME_TO_MARKET_CAP_CHANGE_DAILY_AVERAGE, asOfKey: "volumeToMarketCapChangeDailyAveragePct" },
   };
   for (const card of [...model.snapshot.cards, ...model.snapshot.changes]) fields.push(fromCard(card, market, "token", marketObserved));
   if (!model.snapshot.cards.some((card) => card.id === "market_cap")) fields.push(notReported("obs:market_cap", market, "Market cap", "token"));

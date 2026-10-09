@@ -6,9 +6,8 @@ import { runRetentionBatches } from "../../../../lib/retention/run-retention.ts"
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Retention windows are day-granular (see supabase/migrations/20260930130000_retention_framework.sql).
-// The Cloudflare Worker ticks every 5 minutes like the other cron routes, so the retention pass
-// now runs on every refresh tick while preserving exactly the same retention rules and windows.
+// The Cloudflare Worker ticks every 5 minutes like the other cron routes. Per-metric daily-average
+// retention windows are defined in the current Supabase migration and applied on each due pass.
 const DEFAULT_RUN_INTERVAL_MS = 5 * 60 * 1000;
 // Leaves headroom below maxDuration for lock finalization + response construction.
 const PROCESSING_BUDGET_MS = 280_000;
@@ -23,7 +22,7 @@ function positiveNumber(value: string | undefined): number | null {
  * Scheduled data-retention pass. Requires `Authorization: Bearer <CRON_SECRET>`, the
  * same convention as /api/cron/refresh and /api/cron/geckoterminal. Deletes/downsamples
  * token_metric_observations and raw_provider_records per the windows documented in
- * supabase/migrations/20260930130000_retention_framework.sql — without this route
+ * the current Supabase retention migrations — without this route
  * running regularly, token_metric_observations alone regrows past the Supabase Free
  * Plan's 0.5 GB quota within about two weeks at the current refresh cadence.
  *

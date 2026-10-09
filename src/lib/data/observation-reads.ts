@@ -25,6 +25,20 @@ type Row = {
   collected_at: string;
 };
 
+type DailyAggregateRow = {
+  id: number;
+  token_id: string;
+  chain_id: string;
+  metric_id: string;
+  provider_id: string;
+  utc_day: string;
+  value: number | string | null;
+  status: string;
+  source_observation_count: number;
+  valid_value_count: number;
+  aggregated_at: string;
+};
+
 // PostgREST reports a missing relation as PGRST205 (schema cache) or 42P01 (Postgres).
 function isMissingRelation(error: { code?: string } | null): boolean {
   return error?.code === "PGRST205" || error?.code === "42P01";
@@ -172,14 +186,46 @@ export async function readObservationWindow<T extends Row>(
   since: Date,
 ): Promise<T[]> {
   if (tokenIds.length === 0) return [];
-  const results = await Promise.all(series.map(({ providerId, metricId }) => readKeyset<T>((fromObservedAt) => client
-    .from("token_metric_observations")
-    .select(COLUMNS).in("token_id", tokenIds).eq("provider_id", providerId).eq("metric_id", metricId)
-    .is("excluded_reason", null)
-    .gte("observed_at", fromObservedAt ?? since.toISOString())
-    .order("observed_at", { ascending: true }).order("id", { ascending: true })
-    .limit(PAGE_SIZE), `read ${providerId} ${metricId} history`)));
-  const rows = results.flatMap((result) => result.rows);
+  const results = await Promise.all(series.map(async ({ providerId, metricId }) => {
+    const [observations, aggregates] = await Promise.all([
+      readKeyset<T>((fromObservedAt) => client.from("token_metric_observations")
+        .select(COLUMNS).in("token_id", tokenIds).eq("provider_id", providerId).eq("metric_id", metricId)
+        .is("excluded_reason", null)
+        .gte("observed_at", fromObservedAt ?? since.toISOString())
+        .order("observed_at", { ascending: true }).order("id", { ascending: true })
+        .limit(PAGE_SIZE), `read ${providerId} ${metricId} history`),
+      readPages<DailyAggregateRow>((from, to) => client.from("token_metric_daily_aggregates")
+        .select("id,token_id,chain_id,metric_id,provider_id,utc_day,value,status,source_observation_count,valid_value_count,aggregated_at")
+        .in("token_id", tokenIds).eq("provider_id", providerId).eq("metric_id", metricId)
+        .gte("utc_day", since.toISOString().slice(0, 10))
+        .order("utc_day", { ascending: true }).order("id", { ascending: true })
+        .range(from, to), `read ${providerId} ${metricId} daily averages`),
+    ]);
+
+    // Keep the live app compatible with environments where the migration has
+    // not been applied yet; the original observation history remains readable.
+    if (aggregates.missing) return observations.rows;
+    const dailyRows = aggregates.rows.map((row) => ({
+      // Negative IDs keep aggregate provenance IDs distinct from observation IDs
+      // when callers merge the two result sets by ID.
+      id: -Math.abs(row.id),
+      token_id: row.token_id,
+      chain_id: row.chain_id,
+      metric_id: row.metric_id,
+      provider_id: row.provider_id,
+      raw_record_id: null,
+      value: row.value,
+      status: row.status,
+      observed_at: new Date(`${row.utc_day}T00:00:00.000Z`).toISOString(),
+      collected_at: row.aggregated_at,
+      source_field: "daily_average",
+      note: `UTC daily arithmetic mean from ${row.valid_value_count} valid values across ${row.source_observation_count} provider observations.`,
+      daily_sample_count: row.source_observation_count,
+      daily_valid_value_count: row.valid_value_count,
+    })) as unknown as T[];
+    return [...observations.rows, ...dailyRows];
+  }));
+  const rows = results.flat();
   recordApproxRead(client, rows);
   return rows;
 }

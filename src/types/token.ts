@@ -17,9 +17,9 @@ export type DashboardMetricKey =
   | "maximumSupply"
   | "tvlUsd"
   | "tvlChange30dPct"
-  | "marketCapChange24hPct"
+  | "marketCapChangeDailyAveragePct"
   | "volumeChange24hPct"
-  | "volumeToMarketCapChange24hPct"
+  | "volumeToMarketCapChangeDailyAveragePct"
   | "fees24hUsd"
   | "revenue24hUsd";
 
@@ -53,15 +53,14 @@ export type DashboardToken = {
   maximumSupply?: number | null;
   tvlUsd: number | null;
   tvlChange30dPct: number | null;
-  /** % change in market_cap_usd vs the closest stored observation ~24h earlier. Absent/null = unavailable. */
-  marketCapChange24hPct?: number | null;
+  /** % change between the latest two completed UTC-day CoinGecko market-cap averages. */
+  marketCapChangeDailyAveragePct?: number | null;
   /** % change between the latest stored 24h volume (volume_24h_usd, itself already a trailing 24h figure) and the
    *  closest stored volume_24h_usd observation ~24h before that -- i.e. "today's 24h volume" vs "the preceding 24h
    *  volume", a day-over-day change in the rolling-24h figure. Absent/null = unavailable. */
   volumeChange24hPct?: number | null;
-  /** % change in the volume_24h_usd / market_cap_usd ratio vs its closest matched-timestamp value ~24h earlier --
-   *  same day-over-day comparison as volumeChange24hPct. Absent/null = unavailable. */
-  volumeToMarketCapChange24hPct?: number | null;
+  /** % change in daily-average volume_24h_usd / daily-average market cap across consecutive UTC days. */
+  volumeToMarketCapChangeDailyAveragePct?: number | null;
   fees24hUsd: number | null;
   revenue24hUsd: number | null;
   observedAt: string;
