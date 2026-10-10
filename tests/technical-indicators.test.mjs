@@ -369,7 +369,7 @@ test("research order: overview → market → fundamentals → tokenomics → hi
   assert.match(buildProfileModel({ ...data, calculatedMetrics: [stored(720)] }).divergence.comparisons[0].label, /· 30D$/, "a stored 30-day interval may say 30D");
   assert.ok(model.divergence.indicators.every((i) => /· 30D$/.test(i.name)), "indicator-layer comparisons are genuine 30D");
   const profileSource = readFileSync(new URL("../src/components/TokenProfile.tsx", import.meta.url), "utf8");
-  assert.match(profileSource, /Divergence flags · \$\{divergence\.signalsHorizon \?\? "Snapshot"\}/);
+  assert.match(profileSource, /Divergence flags · \$\{divergence\.signalsHorizon \?\? "24h"\}/);
   assert.ok(model.history.available && model.history.tvl, "TVL history lives in Market history");
   assert.ok(model.tokenomics.available);
   assert.deepEqual(model.tokenomics.items.map((i) => i.id), ["circulating_supply", "total_supply", "maximum_supply", "fdv", "market_cap_of_fdv"]);

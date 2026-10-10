@@ -285,9 +285,9 @@ export function TokenProfile({ data }: { data: LiveTokenProfileData }) {
                 <div className="indicator-grid">{divergence.indicators.map((indicator) => <IndicatorCard key={indicator.id} indicator={indicator} />)}</div>
               ) : null}
               {divergence.comparisons.length > 0 ? (
-                <div className="split-lists"><MetricList title="Comparisons · measured interval" items={divergence.comparisons} /></div>
+                <div className="split-lists"><MetricList title="Comparisons · 24h" items={divergence.comparisons} /></div>
               ) : null}
-              <Signals items={divergence.signals} title={`Divergence flags · ${divergence.signalsHorizon ?? "Snapshot"}`} />
+              <Signals items={divergence.signals} title={`Divergence flags · ${divergence.signalsHorizon ?? "24h"}`} />
             </div>
           ) : null}
         </section>

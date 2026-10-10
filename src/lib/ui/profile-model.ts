@@ -44,7 +44,7 @@ export type ProfileModel = {
    * Cross-metric divergence: stored cross-scope comparisons and divergence flags from the metrics engine,
    * and the 30-day relationships from the indicator layer. Rendered only when at least one exists.
    */
-  divergence: { comparisons: Card[]; signals: Card[]; signalsHorizon: Horizon | null; indicators: TechnicalIndicator[] };
+  divergence: { comparisons: Card[]; signals: Card[]; signalsHorizon: "24h" | Exclude<Horizon, "24H"> | null; indicators: TechnicalIndicator[] };
   sections: { id: SectionId; label: string }[];
   methodology: Methodology;
 };
@@ -299,18 +299,22 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
   // F. Technical indicators and G. cross-metric divergence. Availability is decided server-side; this only places groups.
   const groups = data.technicalIndicators?.groups ?? [];
   const technical = groups.filter((group) => group.category !== "divergence");
-  // Stored comparisons and flags cover the metrics engine's actual interval (often hours): their horizon
-  // comes from that interval, so a short one reads "Snapshot" and is never labelled 7D or 30D.
+  // The metrics engine normalizes comparisons and flags to a compounded 24-hour
+  // equivalent despite modest provider timestamp drift; source times remain in provenance.
+  const crossMetricHorizon = (hours: number | undefined): "24h" | Exclude<Horizon, "24H"> => {
+    const horizon = horizonLabel(hours);
+    return horizon === "24H" ? "24h" : horizon;
+  };
   const withHorizon = (item: Card): Card => ({
     ...item,
-    label: `${item.label} · ${horizonLabel(item.interval?.hours)}`,
-    note: item.interval ? `Measured ${item.interval.label}` : item.note,
+    label: `${item.label} · ${crossMetricHorizon(item.interval?.hours)}`,
+    note: item.interval?.hours === 24 ? "Compounded 24h-equivalent changes; provider timestamps may differ by up to 6h." : item.interval ? `Measured ${item.interval.label}` : item.note,
   });
   const signals = protocolMapped ? inSection("fundamentals", "divergence") : [];
   const divergence: ProfileModel["divergence"] = {
     comparisons: protocolMapped ? inSection("fundamentals", "growth").filter((item) => isComparison(item.id)).map(withHorizon) : [],
     signals,
-    signalsHorizon: signals.length > 0 ? horizonLabel(signals.find((item) => item.interval)?.interval?.hours) : null,
+    signalsHorizon: signals.length > 0 ? crossMetricHorizon(signals.find((item) => item.interval)?.interval?.hours) : null,
     indicators: groups.find((group) => group.category === "divergence")?.indicators ?? [],
   };
   const hasCrossMetric = divergence.comparisons.length + divergence.signals.length + divergence.indicators.length > 0;

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { addressEquals } from "../providers/dexscreener.ts";
 
 /** v2: source-scope enforcement and scope-explicit metric names (token-centric architecture). */
-export const CALCULATION_VERSION = "4";
+export const CALCULATION_VERSION = "5";
 
 /**
  * The scope each provider input must have. A row with any other scope (for
@@ -92,10 +92,10 @@ export const CALCULATED_METRICS: MetricDefinition[] = [
   { id: "fees_growth_pct", name: "Associated protocol fees growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "(latest DeFiLlama fees_24h_usd / previous DeFiLlama fees_24h_usd - 1) * 100" },
   { id: "price_growth_pct", name: "Price growth", sourceScopes: "token", category: "growth", unit: "percent", formula: "(latest CoinGecko price_usd / previous CoinGecko price_usd - 1) * 100" },
   { id: "market_cap_growth_pct", name: "Market cap growth", sourceScopes: "token", category: "growth", unit: "percent", formula: "(latest CoinGecko market_cap_usd / previous CoinGecko market_cap_usd - 1) * 100" },
-  { id: "price_change_vs_tvl_growth_pct_points", name: "Price change vs associated protocol TVL growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "price growth percent - TVL growth percent over timestamp-aligned start/end pairs" },
-  { id: "price_change_vs_revenue_growth_pct_points", name: "Price change vs associated protocol revenue growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "price growth percent - protocol revenue growth percent over timestamp-aligned start/end pairs" },
-  { id: "market_cap_change_vs_tvl_growth_pct_points", name: "Market-cap change vs associated protocol TVL growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "market-cap growth percent - TVL growth percent over timestamp-aligned start/end pairs" },
-  { id: "market_cap_change_vs_revenue_growth_pct_points", name: "Market-cap change vs associated protocol revenue growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "market-cap growth percent - protocol revenue growth percent over timestamp-aligned start/end pairs" },
+  { id: "price_change_vs_tvl_growth_pct_points", name: "Price change vs associated protocol TVL growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "price 24h-normalized percent change - TVL 24h-normalized percent change; changes are compounded from latest observations within ±6h of 24h apart" },
+  { id: "price_change_vs_revenue_growth_pct_points", name: "Price change vs associated protocol revenue growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "price 24h-normalized percent change - revenue 24h-normalized percent change; changes are compounded from latest observations within ±6h of 24h apart" },
+  { id: "market_cap_change_vs_tvl_growth_pct_points", name: "Market-cap change vs associated protocol TVL growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "market-cap 24h-normalized percent change - TVL 24h-normalized percent change; changes are compounded from latest observations within ±6h of 24h apart" },
+  { id: "market_cap_change_vs_revenue_growth_pct_points", name: "Market-cap change vs associated protocol revenue growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "market-cap 24h-normalized percent change - revenue 24h-normalized percent change; changes are compounded from latest observations within ±6h of 24h apart" },
   { id: "dex_aggregate_volume_24h_usd", name: "Aggregate DEX volume (24h)", sourceScopes: "market", category: "market_structure", unit: "USD", formula: "sum exact-address DEX pair volume.h24" },
   { id: "dex_aggregate_liquidity_usd", name: "Aggregate DEX liquidity", sourceScopes: "market", category: "market_structure", unit: "USD", formula: "sum exact-address DEX pair liquidity.usd" },
   { id: "dex_primary_pair_liquidity_usd", name: "Primary-pair liquidity", sourceScopes: "market", category: "market_structure", unit: "USD", formula: "liquidity.usd for primary exact-address pair" },
@@ -104,12 +104,12 @@ export const CALCULATED_METRICS: MetricDefinition[] = [
   { id: "dex_aggregate_liquidity_to_market_cap_pct", name: "Aggregate DEX liquidity / market cap", sourceScopes: "market/token", category: "market_structure", unit: "percent", formula: "aggregate DEX liquidity / CoinGecko market_cap_usd * 100" },
   { id: "dex_volume_to_liquidity", name: "DEX volume / liquidity", sourceScopes: "market", category: "market_structure", unit: "ratio", formula: "aggregate exact-address DEX volume.h24 / aggregate exact-address DEX liquidity.usd" },
   { id: "dex_buy_sell_ratio", name: "DEX buy / sell transaction ratio", sourceScopes: "market", category: "market_structure", unit: "ratio", formula: "exact-address DEX buys_24h_count / sells_24h_count" },
-  { id: "divergence_price_up_tvl_down", name: "Price up, associated protocol TVL down", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "price growth > 0 AND TVL growth < 0 on aligned intervals" },
-  { id: "divergence_price_down_tvl_up", name: "Price down, associated protocol TVL up", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "price growth < 0 AND TVL growth > 0 on aligned intervals" },
-  { id: "divergence_market_cap_up_faster_tvl", name: "Market cap grew faster than associated protocol TVL", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "market-cap growth > TVL growth on aligned intervals" },
-  { id: "divergence_tvl_up_faster_market_cap", name: "Associated protocol TVL grew faster than market cap", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "TVL growth > market-cap growth on aligned intervals" },
-  { id: "divergence_revenue_up_market_cap_down", name: "Associated protocol revenue up, market cap down", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "protocol revenue growth > 0 AND market-cap growth < 0 on aligned intervals" },
-  { id: "divergence_revenue_down_market_cap_up", name: "Associated protocol revenue down, market cap up", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "protocol revenue growth < 0 AND market-cap growth > 0 on aligned intervals" },
+  { id: "divergence_price_up_tvl_down", name: "Price up, associated protocol TVL down", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "24h-normalized price growth > 0 AND 24h-normalized TVL growth < 0" },
+  { id: "divergence_price_down_tvl_up", name: "Price down, associated protocol TVL up", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "24h-normalized price growth < 0 AND 24h-normalized TVL growth > 0" },
+  { id: "divergence_market_cap_up_faster_tvl", name: "Market cap grew faster than associated protocol TVL", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "24h-normalized market-cap growth > 24h-normalized TVL growth" },
+  { id: "divergence_tvl_up_faster_market_cap", name: "Associated protocol TVL grew faster than market cap", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "24h-normalized TVL growth > 24h-normalized market-cap growth" },
+  { id: "divergence_revenue_up_market_cap_down", name: "Associated protocol revenue up, market cap down", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "24h-normalized protocol revenue growth > 0 AND 24h-normalized market-cap growth < 0" },
+  { id: "divergence_revenue_down_market_cap_up", name: "Associated protocol revenue down, market cap up", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "24h-normalized protocol revenue growth < 0 AND 24h-normalized market-cap growth > 0" },
 ];
 
 type SourceRef = Record<string, unknown> & { id: number; source_kind: "observation" | "daily_aggregate" | "raw_record"; raw_record_id?: number | null };
@@ -238,12 +238,11 @@ function growthCalculation(points: SeriesPoint[], label: string): Calculation {
   return valid(((current.value / previous.value) - 1) * 100, sources, { startAt: previous.observation.observed_at, endAt: current.observation.observed_at });
 }
 
-type CrossChange = { a: number; b: number; sources: SourceRef[]; startAt: string; endAt: string };
+type CrossChange = { a: number; b: number; sources: SourceRef[]; startAt: string; endAt: string; details: Record<string, unknown> };
 
 const CROSS_CHANGE_HORIZON_HOURS = 24;
-// DeFiLlama's revenue_24h_usd/tvl_usd only actually update roughly once a day, at a
-// collection time that drifts by several hours day to day, so a tight tolerance around
-// "exactly 24h ago" would often miss a real, same-day-cycle baseline entirely.
+// Once-daily DeFiLlama values have collection-time drift, so accept the closest
+// baseline within six hours and normalize the resulting change to a 24h rate.
 const CROSS_CHANGE_TOLERANCE_HOURS = 6;
 
 function nearestBefore(points: SeriesPoint[], targetTime: number, toleranceMs: number): SeriesPoint | undefined {
@@ -253,14 +252,10 @@ function nearestBefore(points: SeriesPoint[], targetTime: number, toleranceMs: n
 }
 
 /**
- * Each series' own ~24h-ago change, computed independently (not opportunistically
- * paired by nearest shared timestamp): the latest point vs. the point closest to
- * horizonHours earlier, within toleranceHours. Standardizes every cross-metric
- * comparison to the same real-world interval regardless of how densely each side is
- * actually sampled -- previously, pairing by nearest-shared-timestamp let a sparse,
- * once-daily series (revenue, TVL) get aligned against a densely-sampled one (price,
- * market cap) over an arbitrarily short window, which could make one real day-over-day
- * data update look like an extreme move within minutes.
+ * Compute each series' compounded 24-hour-equivalent change from its latest value
+ * and a point closest to 24 hours earlier (within ±6h). Normalize for the actual
+ * elapsed time so collection-time drift does not create a misleading 29–34 hour
+ * display window. Source timestamps and measured intervals remain in provenance.
  */
 function alignedCrossChange(
   aPoints: SeriesPoint[],
@@ -284,12 +279,29 @@ function alignedCrossChange(
     return invalid("Aligned history includes a negative value.", sources);
   }
   if (aPrior.value === 0 || bPrior.value === 0) return unavailable("A previous aligned value is zero, so percentage change is undefined.", sources);
+  const aElapsedHours = (aEnd.time - aPrior.time) / (60 * 60 * 1000);
+  const bElapsedHours = (bEnd.time - bPrior.time) / (60 * 60 * 1000);
+  if (aElapsedHours <= 0 || bElapsedHours <= 0) return unavailable("A previous observation is not earlier than its current value.", sources);
+  const normalizeTo24h = (previous: number, current: number, elapsedHours: number) =>
+    (Math.pow(current / previous, horizonHours / elapsedHours) - 1) * 100;
+  const aChange = normalizeTo24h(aPrior.value, aEnd.value, aElapsedHours);
+  const bChange = normalizeTo24h(bPrior.value, bEnd.value, bElapsedHours);
+  if (!Number.isFinite(aChange) || !Number.isFinite(bChange)) return invalid("24h normalization produced a non-finite result.", sources);
+  const endTime = Math.max(aEnd.time, bEnd.time);
   return {
-    a: ((aEnd.value / aPrior.value) - 1) * 100,
-    b: ((bEnd.value / bPrior.value) - 1) * 100,
+    a: aChange,
+    b: bChange,
     sources,
-    startAt: new Date(Math.min(aPrior.time, bPrior.time)).toISOString(),
-    endAt: new Date(Math.max(aEnd.time, bEnd.time)).toISOString(),
+    startAt: new Date(endTime - horizonMs).toISOString(),
+    endAt: new Date(endTime).toISOString(),
+    details: {
+      comparison_window: "24h normalized",
+      normalization: "((current / previous) ^ (24 / measured_hours) - 1) * 100",
+      first_series_measured_hours: aElapsedHours,
+      second_series_measured_hours: bElapsedHours,
+      first_series_observation_times: [aPrior.observation.observed_at, aEnd.observation.observed_at],
+      second_series_observation_times: [bPrior.observation.observed_at, bEnd.observation.observed_at],
+    },
   };
 }
 
@@ -358,8 +370,8 @@ function metricSource(rows: ObservationInput[], provider: string, metric: string
 
 function valueOf(row: ObservationInput | undefined): number | null { return availableValue(row); }
 
-function divFlag(condition: boolean, sources: SourceRef[], startAt?: string, endAt?: string): Calculation {
-  return valid(condition ? 1 : 0, sources, { startAt, endAt, details: { interpretation: condition ? "observed" : "not_observed_for_comparable_period" } });
+function divFlag(condition: boolean, sources: SourceRef[], startAt?: string, endAt?: string, details: Record<string, unknown> = {}): Calculation {
+  return valid(condition ? 1 : 0, sources, { startAt, endAt, details: { ...details, interpretation: condition ? "observed" : "not_observed_for_comparable_period" } });
 }
 
 function hashInput(token: TokenInput, metricId: string, calc: Calculation): string {
@@ -465,7 +477,7 @@ export function calculateTokenMetrics(
   const capVsRevenue = alignedCrossChange(marketCapSeries, revenueSeries, "market cap", "protocol revenue");
   const spread = (cross: CrossChange | Calculation): Calculation => {
     if (!("a" in cross)) return cross;
-    return valid(cross.a - cross.b, cross.sources, { startAt: cross.startAt, endAt: cross.endAt, details: { first_series_change_pct: cross.a, second_series_change_pct: cross.b } });
+    return valid(cross.a - cross.b, cross.sources, { startAt: cross.startAt, endAt: cross.endAt, details: { ...cross.details, first_series_change_pct: cross.a, second_series_change_pct: cross.b } });
   };
   const crossSpread = { priceVsTvl: spread(priceVsTvl), priceVsRevenue: spread(priceVsRevenue), capVsTvl: spread(capVsTvl), capVsRevenue: spread(capVsRevenue) };
 
@@ -482,7 +494,7 @@ export function calculateTokenMetrics(
 
   const flag = (cross: CrossChange | Calculation, condition: (a: number, b: number) => boolean): Calculation => {
     if (!("a" in cross)) return cross;
-    return divFlag(condition(cross.a, cross.b), cross.sources, cross.startAt, cross.endAt);
+    return divFlag(condition(cross.a, cross.b), cross.sources, cross.startAt, cross.endAt, "details" in cross ? cross.details : {});
   };
 
   const calculations: Record<string, Calculation> = {
