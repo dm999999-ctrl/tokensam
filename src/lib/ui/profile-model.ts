@@ -129,15 +129,15 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
   // Trading & Liquidity section (see D below) rather than being echoed here too.
   //
   // Market-cap changes and volume/market-cap changes compare consecutive completed
-  // UTC-day averages because retention compacts market cap by UTC day. Volume change
-  // remains a rolling 24-hour comparison using the latest and prior provider readings.
+  // UTC-day market-cap values. Recent days may be point-in-time snapshots after retention
+  // switched from daily averages. Volume change remains a rolling 24-hour comparison.
   const volumeToMcap = metric("volume_to_market_cap");
   const marketCapCard = card("market_cap", "Market cap", formatUsd(token.marketCapUsd, true));
   const volumeCard = card("volume_24h", "Volume · 24h", formatUsd(token.volume24hUsd, true));
   const volumeToMcapCard = volumeToMcap ? fromMetric(volumeToMcap) : null;
-  const marketCapChange = changeCard("market_cap_change_daily_average", "Market cap change · daily average", token.marketCapChangeDailyAveragePct);
+  const marketCapChange = changeCard("market_cap_change_daily_average", "Market cap change · daily", token.marketCapChangeDailyAveragePct);
   const volumeChange = changeCard("volume_change_24h", "Volume change · 24h", token.volumeChange24hPct);
-  const volumeToMcapChange = changeCard("volume_to_market_cap_change_daily_average", "Volume / market cap change · daily average", token.volumeToMarketCapChangeDailyAveragePct);
+  const volumeToMcapChange = changeCard("volume_to_market_cap_change_daily_average", "Volume / market cap change · daily", token.volumeToMarketCapChangeDailyAveragePct);
   const snapshot = {
     cards: present([marketCapCard, volumeCard, volumeToMcapCard]),
     changes: present([marketCapChange, volumeChange, volumeToMcapChange]),

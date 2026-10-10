@@ -73,7 +73,7 @@ export async function runRetentionBatches(client: SupabaseAdminClient, deadlineA
         stoppedEarly.push(fn);
         break;
       }
-      const batchSize = fn === "retention_collapse_non_chart_daily_batch" || fn === "retention_collapse_daily_batch"
+      const batchSize = fn === "retention_collapse_daily_batch"
         ? DAILY_AGGREGATION_GROUP_BATCH_SIZE
         : BATCH_SIZE;
       const { data, error } = await client.rpc(fn, { batch_size: batchSize });

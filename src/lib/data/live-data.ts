@@ -301,7 +301,7 @@ function changeOverHorizon(
   return Number.isFinite(change) ? change : null;
 }
 
-/** Daily means for the completed UTC days, using the stored mean when retention has rolled a day up. */
+/** Completed UTC-day values, using stored means or point-in-time snapshots after retention rolls a day up. */
 function dailyAverageSeries(
   rows: DbObservation[],
   tokenId: string,
@@ -318,7 +318,7 @@ function dailyAverageSeries(
     const observedAt = Date.parse(row.observed_at);
     const day = Math.floor(observedAt / DAY_MS) * DAY_MS;
     if (!Number.isFinite(observedAt) || day >= todayUtc || (metricId === "market_cap_usd" ? value <= 0 : value < 0)) continue;
-    const isAggregate = row.source_field === "daily_average";
+    const isAggregate = row.source_field === "daily_average" || row.source_field === "daily_snapshot";
     if (aggregatesOnly && !isAggregate) continue;
     const entry = dailyMeans.get(day) ?? { sum: 0, count: 0, aggregate: null, collectedAt: row.collected_at };
     if (isAggregate) {
@@ -391,7 +391,7 @@ export function buildDashboardTokens(
     if (marketCapChangeDailyAveragePct !== null) metricSources.marketCapChangeDailyAveragePct = {
       providerId: "calculated",
       collectedAt: marketCapDailyAverages.at(-1)!.collectedAt,
-      note: "Calculated as the change between consecutive completed UTC-day CoinGecko market-cap arithmetic means.",
+      note: "Calculated between consecutive completed UTC-day CoinGecko market-cap values; recent days may use a point-in-time snapshot and earlier retained days may use arithmetic means.",
     };
     const latestVolume = observationFor(observations, token.id, "coingecko", "volume_24h_usd");
     if (latestVolume) metricSources.volumeChange24hPct = {
@@ -402,7 +402,7 @@ export function buildDashboardTokens(
     if (volumeToMarketCapChangeDailyAveragePct !== null) metricSources.volumeToMarketCapChangeDailyAveragePct = {
       providerId: "calculated",
       collectedAt: marketCapDailyAverages.at(-1)!.collectedAt,
-      note: "Calculated as the day-over-day change in daily-average CoinGecko 24-hour volume divided by daily-average market capitalization.",
+      note: "Calculated as the day-over-day change in daily-average CoinGecko 24-hour volume divided by completed UTC-day market-cap values.",
     };
     const tokenRows = observations.filter((row) => row.token_id === token.id);
     const observedAt = tokenRows.map((row) => row.collected_at).sort().at(-1) ?? "";
