@@ -1114,18 +1114,35 @@ async function getSidebarMoversUncached(): Promise<Movers | null> {
     if (tokenResult.error) throw tokenResult.error;
     const tokens = (tokenResult.data ?? []) as DbToken[];
     const tokenIds = tokens.map((token) => token.id);
-    const [changeResult, logos] = await Promise.all([
-      // Narrower than OBSERVATION_COLUMNS: selectMovers only ever reads change24hPct/
-      // volume24hUsd (plain numbers) off the rows this produces, never metricSources
-      // or any other provenance -- note/source_field/raw_record_id and all of
-      // SCOPE_COLUMNS are fetched by the shared OBSERVATION_COLUMNS set for the
-      // profile page's notes feature, which this path has no use for.
-      client.from("latest_token_metric_observations").select("id,token_id,provider_id,metric_id,value,status,observed_at,collected_at")
-        .eq("provider_id", "coingecko").in("metric_id", ["price_change_24h_pct", "volume_24h_usd"]).in("token_id", tokenIds),
-      readTokenLogos(client, tokenIds),
-    ]);
-    if (changeResult.error) throw changeResult.error;
-    const rows = buildDashboardTokens(tokens, [], (changeResult.data ?? []) as unknown as DbObservation[]);
+    if (tokenIds.length === 0) return selectMovers([]);
+
+    // Avoid latest_token_metric_observations here: its DISTINCT ON view can
+    // scan the full append-only history under production load. CoinGecko refreshes
+    // every 15 minutes, so a six-hour window spans many refresh cycles while
+    // keeping this optional sidebar query bounded. The base-table index serves
+    // the token/provider/metric/time filters; selectMovers needs only these fields.
+    const sidebarSince = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    const recentRows: DbObservation[] = [];
+    const pageSize = 1000;
+    for (let offset = 0; ; offset += pageSize) {
+      const result = await client.from("token_metric_observations")
+        .select("id,token_id,provider_id,metric_id,value,status,observed_at,collected_at")
+        .in("token_id", tokenIds)
+        .eq("provider_id", "coingecko")
+        .in("metric_id", ["price_change_24h_pct", "volume_24h_usd"])
+        .is("excluded_reason", null)
+        .gte("observed_at", sidebarSince)
+        .order("token_id").order("provider_id").order("metric_id")
+        .order("observed_at", { ascending: false }).order("collected_at", { ascending: false }).order("id", { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (result.error) throw result.error;
+      const page = (result.data ?? []) as unknown as DbObservation[];
+      recentRows.push(...page);
+      if (page.length < pageSize) break;
+    }
+
+    const logos = await readTokenLogos(client, tokenIds);
+    const rows = buildDashboardTokens(tokens, [], latestPerMetric(recentRows));
     return selectMovers(rows.map((token) => ({ ...token, logoUrl: logos[token.id] ?? null })));
   } catch (error) {
     console.error("Sidebar movers read failed (section hidden):", error);
