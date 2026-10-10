@@ -82,9 +82,12 @@ function changeCard(id: string, label: string, value: number | null | undefined)
   return change ? { id, label, value: change.text, tone: change.tone } : null;
 }
 
-/** Changes always carry their actual interval; short ones are labelled as snapshot changes, not trends. */
+/** Changes carry their interval; protocol growth metrics use a normalized 24h comparison window. */
 function intervalNote(display: MetricDisplay): string | undefined {
   if (!display.interval) return undefined;
+  if (["tvl_growth_pct", "fees_growth_pct", "revenue_growth_pct"].includes(display.id)) {
+    return "24h-equivalent change; baseline selected within ±6h of 24h earlier.";
+  }
   if (display.kind === "flag") return `Evaluated ${display.interval.label}${display.interval.isShort ? " (snapshot interval, not a trend)" : ""}`;
   if (display.kind === "change" || display.kind === "points") return `${display.interval.isShort ? "Snapshot change " : ""}${display.interval.label}`;
   return undefined;

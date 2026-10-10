@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { addressEquals } from "../providers/dexscreener.ts";
 
 /** v2: source-scope enforcement and scope-explicit metric names (token-centric architecture). */
-export const CALCULATION_VERSION = "5";
+export const CALCULATION_VERSION = "6";
 
 /**
  * The scope each provider input must have. A row with any other scope (for
@@ -87,9 +87,9 @@ export const CALCULATED_METRICS: MetricDefinition[] = [
   { id: "market_cap_to_revenue_24h", name: "Market cap / associated protocol 24h revenue", sourceScopes: "token/protocol", category: "valuation", unit: "ratio", formula: "CoinGecko market_cap_usd / DeFiLlama revenue_24h_usd" },
   { id: "fdv_to_revenue_24h", name: "DEX-reported FDV / associated protocol 24h revenue", sourceScopes: "market/protocol", category: "valuation", unit: "ratio", formula: "DEX Screener primary-pair fdv_usd / DeFiLlama revenue_24h_usd" },
   { id: "volume_to_market_cap", name: "Volume / market cap", sourceScopes: "token", category: "valuation", unit: "ratio", formula: "CoinGecko volume_24h_usd / CoinGecko market_cap_usd" },
-  { id: "tvl_growth_pct", name: "Associated protocol TVL growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "(latest DeFiLlama tvl_usd / previous DeFiLlama tvl_usd - 1) * 100" },
-  { id: "revenue_growth_pct", name: "Associated protocol revenue growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "(latest DeFiLlama revenue_24h_usd / previous DeFiLlama revenue_24h_usd - 1) * 100" },
-  { id: "fees_growth_pct", name: "Associated protocol fees growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "(latest DeFiLlama fees_24h_usd / previous DeFiLlama fees_24h_usd - 1) * 100" },
+  { id: "tvl_growth_pct", name: "Associated protocol TVL growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "24h-normalized change: ((latest DeFiLlama tvl_usd / nearest available value around 24h earlier) ^ (24 / measured_hours) - 1) * 100; baseline tolerance ±6h" },
+  { id: "revenue_growth_pct", name: "Associated protocol revenue growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "24h-normalized change: ((latest DeFiLlama revenue_24h_usd / nearest available value around 24h earlier) ^ (24 / measured_hours) - 1) * 100; baseline tolerance ±6h" },
+  { id: "fees_growth_pct", name: "Associated protocol fees growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "24h-normalized change: ((latest DeFiLlama fees_24h_usd / nearest available value around 24h earlier) ^ (24 / measured_hours) - 1) * 100; baseline tolerance ±6h" },
   { id: "price_growth_pct", name: "Price growth", sourceScopes: "token", category: "growth", unit: "percent", formula: "(latest CoinGecko price_usd / previous CoinGecko price_usd - 1) * 100" },
   { id: "market_cap_growth_pct", name: "Market cap growth", sourceScopes: "token", category: "growth", unit: "percent", formula: "(latest CoinGecko market_cap_usd / previous CoinGecko market_cap_usd - 1) * 100" },
   { id: "price_change_vs_tvl_growth_pct_points", name: "Price change vs associated protocol TVL growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "price 24h-normalized percent change - TVL 24h-normalized percent change; changes are compounded from latest observations within ±6h of 24h apart" },
@@ -236,6 +236,43 @@ function growthCalculation(points: SeriesPoint[], label: string): Calculation {
   if (previous.value < 0 || current.value < 0) return invalid(`${label} history includes a negative value.`, sources);
   if (previous.value === 0) return unavailable(`Previous ${label} value is zero, so percentage growth is undefined.`, sources);
   return valid(((current.value / previous.value) - 1) * 100, sources, { startAt: previous.observation.observed_at, endAt: current.observation.observed_at });
+}
+
+const FUNDAMENTAL_CHANGE_HORIZON_HOURS = 24;
+const FUNDAMENTAL_CHANGE_TOLERANCE_HOURS = 6;
+
+/**
+ * Normalize protocol TVL, fees, and revenue changes to a 24-hour equivalent.
+ * DeFiLlama collection times can drift and TVL may arrive several times a day,
+ * so use the nearest available baseline within ±6h of the 24h target.
+ */
+function fundamentalGrowthCalculation(points: SeriesPoint[], label: string): Calculation {
+  const current = points.at(-1);
+  if (!current) return unavailable(`No available history for ${label}.`);
+  const targetTime = current.time - FUNDAMENTAL_CHANGE_HORIZON_HOURS * 60 * 60 * 1000;
+  const toleranceMs = FUNDAMENTAL_CHANGE_TOLERANCE_HOURS * 60 * 60 * 1000;
+  const previous = nearestBefore(points.filter((point) => point.time < current.time), targetTime, toleranceMs);
+  if (!previous) {
+    return unavailable(`Insufficient history for ${label}; no observation is available within ±${FUNDAMENTAL_CHANGE_TOLERANCE_HOURS}h of 24h before the latest value.`, points.map((point) => observationRef(point.observation)));
+  }
+  const sources = [observationRef(previous.observation), observationRef(current.observation)];
+  if (previous.value < 0 || current.value < 0) return invalid(`${label} history includes a negative value.`, sources);
+  if (previous.value === 0) return unavailable(`Previous ${label} value is zero, so percentage change is undefined.`, sources);
+  const measuredHours = (current.time - previous.time) / (60 * 60 * 1000);
+  if (!(measuredHours > 0)) return unavailable(`A previous ${label} observation is not earlier than its current value.`, sources);
+  const change = (Math.pow(current.value / previous.value, FUNDAMENTAL_CHANGE_HORIZON_HOURS / measuredHours) - 1) * 100;
+  if (!Number.isFinite(change)) return invalid(`24h normalization produced a non-finite ${label} change.`, sources);
+  return valid(change, sources, {
+    startAt: new Date(current.time - FUNDAMENTAL_CHANGE_HORIZON_HOURS * 60 * 60 * 1000).toISOString(),
+    endAt: current.observation.observed_at,
+    details: {
+      comparison_window: "24h normalized",
+      normalization: "((current / previous) ^ (24 / measured_hours) - 1) * 100",
+      measured_hours: measuredHours,
+      baseline_tolerance_hours: FUNDAMENTAL_CHANGE_TOLERANCE_HOURS,
+      observation_times: [previous.observation.observed_at, current.observation.observed_at],
+    },
+  });
 }
 
 type CrossChange = { a: number; b: number; sources: SourceRef[]; startAt: string; endAt: string; details: Record<string, unknown> };
@@ -467,9 +504,9 @@ export function calculateTokenMetrics(
   const historicalGrowth = {
     price: growthCalculation(priceSeries, "CoinGecko price"),
     marketCap: growthCalculation(marketCapSeries, "CoinGecko market capitalization"),
-    tvl: growthCalculation(tvlSeries, "DeFiLlama protocol TVL"),
-    revenue: growthCalculation(revenueSeries, "DeFiLlama protocol revenue"),
-    fees: growthCalculation(feesSeries, "DeFiLlama protocol fees"),
+    tvl: fundamentalGrowthCalculation(tvlSeries, "DeFiLlama protocol TVL"),
+    revenue: fundamentalGrowthCalculation(revenueSeries, "DeFiLlama protocol revenue"),
+    fees: fundamentalGrowthCalculation(feesSeries, "DeFiLlama protocol fees"),
   };
   const priceVsTvl = alignedCrossChange(priceSeries, tvlSeries, "price", "TVL");
   const priceVsRevenue = alignedCrossChange(priceSeries, revenueSeries, "price", "protocol revenue");
