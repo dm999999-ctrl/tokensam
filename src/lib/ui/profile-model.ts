@@ -314,8 +314,30 @@ export function buildProfileModel(data: LiveTokenProfileData): ProfileModel {
     note: item.interval?.hours === 24 ? "Compounded 24h-equivalent changes; provider timestamps may differ by up to 6h." : item.interval ? `Measured ${item.interval.label}` : item.note,
   });
   const signals = protocolMapped ? inSection("fundamentals", "divergence") : [];
+  const comparisons = protocolMapped
+    ? inSection("fundamentals", "growth").filter((item) => isComparison(item.id)).map(withHorizon)
+    : [];
+  if (protocolMapped) {
+    for (const id of ["price_change_vs_revenue_growth_pct_points", "market_cap_change_vs_revenue_growth_pct_points"]) {
+      if (comparisons.some((item) => item.id === id)) continue;
+      const stored = calculatedMetrics.find((item) => item.id === id);
+      if (!stored) continue;
+      const display = presentMetric(stored);
+      if (display) {
+        comparisons.push(withHorizon(fromMetric(display)));
+      } else {
+        comparisons.push({
+          id,
+          label: `${metricLabel(stored)} · 24h`,
+          value: "Data unavailable",
+          tone: "neutral",
+          note: stored.unavailableReason ?? "Insufficient aligned history for a 24-hour comparison.",
+        });
+      }
+    }
+  }
   const divergence: ProfileModel["divergence"] = {
-    comparisons: protocolMapped ? inSection("fundamentals", "growth").filter((item) => isComparison(item.id)).map(withHorizon) : [],
+    comparisons,
     signals,
     signalsHorizon: signals.length > 0 ? crossMetricHorizon(signals.find((item) => item.interval)?.interval?.hours) : null,
     indicators: groups.find((group) => group.category === "divergence")?.indicators ?? [],
