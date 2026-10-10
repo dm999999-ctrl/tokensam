@@ -52,8 +52,8 @@ async function readTokens(client: SupabaseAdminClient): Promise<TokenInput[]> {
  * fetch every row in a bounded window over the wire and collapse to the few rows actually
  * needed in application memory, which was measured as this project's single largest
  * Supabase-egress contributor (~25MB/run; metrics runs ~96 times/day). The RPCs do the
- * identical collapse server side (latest-per-group; two-most-recent-points-per-series
- * plus the one ~24h-prior point alignedCrossChange needs), so only the rows the engine
+ * identical collapse server side (latest-per-group; two-most-recent-points-per-series,
+ * including retained daily aggregates, plus the one ~24h-prior point alignedCrossChange needs), so only the rows the engine
  * actually reads cross the wire -- measured live at ~947KB/run for the same data, a ~97%
  * reduction with no change to which rows feed the calculation.
  */

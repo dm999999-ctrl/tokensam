@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { addressEquals } from "../providers/dexscreener.ts";
 
 /** v2: source-scope enforcement and scope-explicit metric names (token-centric architecture). */
-export const CALCULATION_VERSION = "3";
+export const CALCULATION_VERSION = "4";
 
 /**
  * The scope each provider input must have. A row with any other scope (for
@@ -36,6 +36,8 @@ export type ObservationInput = {
   source_field: string | null;
   note: string | null;
   scope?: string | null;
+  /** Negative observation IDs are used by the metrics RPC for daily aggregate rows. */
+  daily_aggregate_id?: number | null;
 };
 
 export type RawRecordInput = {
@@ -110,7 +112,7 @@ export const CALCULATED_METRICS: MetricDefinition[] = [
   { id: "divergence_revenue_down_market_cap_up", name: "Associated protocol revenue down, market cap up", sourceScopes: "token/protocol", category: "divergence", unit: "boolean", formula: "protocol revenue growth < 0 AND market-cap growth > 0 on aligned intervals" },
 ];
 
-type SourceRef = Record<string, unknown> & { id: number; source_kind: "observation" | "raw_record"; raw_record_id?: number | null };
+type SourceRef = Record<string, unknown> & { id: number; source_kind: "observation" | "daily_aggregate" | "raw_record"; raw_record_id?: number | null };
 type Calculation = {
   value: number | null;
   status: CalculatedMetricRow["status"];
@@ -133,9 +135,11 @@ function numeric(value: unknown): number | null {
 }
 
 function observationRef(row: ObservationInput): SourceRef {
+  const isDailyAggregate = row.source_field === "daily_average" || row.source_field === "daily_snapshot";
+  const id = isDailyAggregate ? row.daily_aggregate_id ?? Math.abs(row.id) : row.id;
   return {
-    id: row.id,
-    source_kind: "observation",
+    id,
+    source_kind: isDailyAggregate ? "daily_aggregate" : "observation",
     provider_id: row.provider_id,
     token_id: row.token_id,
     chain_id: row.chain_id,
@@ -148,6 +152,7 @@ function observationRef(row: ObservationInput): SourceRef {
     scope: row.scope ?? INPUT_SCOPES[row.provider_id] ?? null,
     note: row.note,
     raw_record_id: row.raw_record_id,
+    ...(isDailyAggregate ? { daily_aggregate_id: id } : {}),
   };
 }
 
