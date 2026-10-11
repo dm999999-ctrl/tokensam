@@ -189,7 +189,11 @@ export function mergeById<T extends { id: number }>(...sets: T[][]): T[] {
  * Daily CoinGecko aggregates fill values whose source rows have rolled out of that
  * recent window.
  */
-export async function readLatestObservations<T extends Row>(client: SupabaseAdminClient, tokenIds: string[]): Promise<T[]> {
+export async function readLatestObservations<T extends Row>(
+  client: SupabaseAdminClient,
+  tokenIds: string[],
+  metricIds?: string[],
+): Promise<T[]> {
   if (tokenIds.length === 0) return [];
   const TOKEN_BATCH_SIZE = 50;
   const batches = Array.from({ length: Math.ceil(tokenIds.length / TOKEN_BATCH_SIZE) }, (_, index) =>
@@ -201,12 +205,15 @@ export async function readLatestObservations<T extends Row>(client: SupabaseAdmi
     utcToday.setUTCHours(0, 0, 0, 0);
     const tomorrow = new Date(utcToday.getTime() + 24 * 60 * 60 * 1000);
     const [recent, todaySnapshots, aggregates] = await Promise.all([
-      readPages<T>((from, to) => client.from("token_metric_observations")
-        .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS).is("excluded_reason", null)
-        .gte("observed_at", since)
-        .order("token_id").order("provider_id").order("metric_id")
-        .order("observed_at", { ascending: false }).order("collected_at", { ascending: false }).order("id", { ascending: false })
-        .range(from, to), "read recent observations"),
+      readPages<T>((from, to) => {
+        let query = client.from("token_metric_observations")
+          .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS).is("excluded_reason", null)
+          .gte("observed_at", since);
+        if (metricIds?.length) query = query.in("metric_id", metricIds);
+        return query.order("token_id").order("provider_id").order("metric_id")
+          .order("observed_at", { ascending: false }).order("collected_at", { ascending: false }).order("id", { ascending: false })
+          .range(from, to);
+      }, "read recent observations"),
       readPages<T>((from, to) => client.from("token_metric_observations")
         .select(COLUMNS).in("token_id", batch).eq("provider_id", "coingecko").in("metric_id", COINGECKO_DAILY_METRICS)
         .is("excluded_reason", null).gte("observed_at", utcToday.toISOString()).lt("observed_at", tomorrow.toISOString())
