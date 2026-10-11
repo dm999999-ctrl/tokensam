@@ -3,6 +3,7 @@ import { isAuthorizedRefreshRequest } from "../../../../lib/refresh/auth.ts";
 import { PROVIDER_STEPS, type ProviderStep } from "../../../../lib/refresh/config.ts";
 import { runDataRefresh } from "../../../../lib/refresh/orchestrator.ts";
 import { SupabaseRefreshStore } from "../../../../lib/refresh/store.ts";
+import { revalidateTag } from "next/cache";
 import { evaluateQuotaLevel, writeThrottleState } from "../../../../lib/monitoring/quota-tracker.ts";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +44,20 @@ export async function GET(request: Request): Promise<Response> {
       force: url.searchParams.get("force") === "1",
       only: requested as ProviderStep[] | undefined,
     });
+
+    // Cached page payloads are refreshed only when a provider or metrics step
+    // actually persists new data. A due-check that skips all work keeps the cache.
+    if (result.steps.some((step) => step.status === "succeeded")) {
+      try {
+        revalidateTag("live-dashboard-data", { expire: 0 });
+        revalidateTag("live-token-profile-data", { expire: 0 });
+        revalidateTag("live-sidebar-movers", { expire: 0 });
+      } catch (error) {
+        // Cache invalidation must not turn a successful collection into a failed
+        // refresh; the bounded cache lifetime still guarantees eventual freshness.
+        console.error("Live page cache invalidation failed:", error);
+      }
+    }
 
     // Check storage after every scheduled refresh so the Cloudflare scheduler can
     // alert before the Supabase Free-plan limit is reached. The alert is edge-triggered:

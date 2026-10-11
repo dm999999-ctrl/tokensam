@@ -8,6 +8,7 @@ import {
   type GeckoTerminalSyncTrigger,
 } from "../../../../lib/providers/geckoterminal-sync-lock.ts";
 import { runGeckoTerminalScheduledCollection } from "../../../../lib/providers/run-geckoterminal-collection.ts";
+import { revalidateTag } from "next/cache";
 
 export const dynamic = "force-dynamic";
 // Same ceiling as /api/cron/refresh on this deployment. A full 63-token sync
@@ -163,6 +164,13 @@ export async function GET(request: Request): Promise<Response> {
       // lease). The observations above are already committed regardless.
       console.error(`[geckoterminal-cron] run ${runId} lost lease ownership before finalization; its data is persisted but its status was not recorded.`);
       return Response.json({ status: "lost_ownership", runId, ...result }, { status: 500 });
+    }
+    if (result.observations > 0) {
+      try {
+        revalidateTag("live-token-profile-data", { expire: 0 });
+      } catch (error) {
+        console.error("Token profile cache invalidation after GeckoTerminal sync failed:", error);
+      }
     }
     return Response.json({ status, runId, ...result }, { status: status === "failed" ? 500 : 200 });
   } catch (error) {
