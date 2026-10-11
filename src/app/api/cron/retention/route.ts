@@ -2,7 +2,6 @@ import { createSupabaseAdminClient } from "../../../../lib/supabase/admin.ts";
 import { isAuthorizedRefreshRequest } from "../../../../lib/refresh/auth.ts";
 import { acquireRetentionLock, finishRetentionLock, lastSuccessfulRetentionRun, type RetentionTrigger } from "../../../../lib/retention/lock.ts";
 import { runRetentionBatches } from "../../../../lib/retention/run-retention.ts";
-import { revalidateTag } from "next/cache";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -82,15 +81,6 @@ export async function GET(request: Request): Promise<Response> {
     if (!finalized) {
       console.error(`[retention-cron] run ${runId} lost lease ownership before finalization; its deletes are already committed.`);
       return Response.json({ status: "lost_ownership", runId, ...result }, { status: 500 });
-    }
-    if (result.totalDeleted > 0) {
-      try {
-        revalidateTag("live-dashboard-data", { expire: 0 });
-        revalidateTag("live-token-profile-data", { expire: 0 });
-        revalidateTag("live-sidebar-movers", { expire: 0 });
-      } catch (error) {
-        console.error("Live page cache invalidation after retention failed:", error);
-      }
     }
     return Response.json({ status, runId, ...result, vacuumMaintenance, vacuumMaintenanceError: vacuumMaintenanceError?.message ?? null });
   } catch (error) {

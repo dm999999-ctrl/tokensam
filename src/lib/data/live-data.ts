@@ -799,9 +799,7 @@ async function readDashboardCalculated(client: SupabaseAdminClient, tokenIds: st
 
 /** Latest value per displayed metric; history only where a view needs it. */
 async function readLatest(client: SupabaseAdminClient, tokenIds: string[]): Promise<DbObservation[]> {
-  // Restrict the server query to metrics consumed by dashboard/profile rendering.
-  // The wider latest read is still available to research-context and backfill callers.
-  const rows = await readLatestObservations<DbObservation>(client, tokenIds, OBSERVED_METRICS);
+  const rows = await readLatestObservations<DbObservation>(client, tokenIds);
   return rows.filter((row) => OBSERVED_METRICS.includes(row.metric_id));
 }
 

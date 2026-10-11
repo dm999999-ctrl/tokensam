@@ -4,7 +4,7 @@ import { TokenProfile } from "@/components/TokenProfile";
 import { LiveDataUnavailable } from "@/components/LiveDataUnavailable";
 import { AppShell } from "@/components/AppShell";
 import { canonicalTokens } from "@/data/canonical-tokens";
-import { getCachedLiveTokenProfile, getCachedSidebarMovers } from "@/lib/data/cached-live-data";
+import { getLiveTokenProfile, getSidebarMovers } from "@/lib/data/live-data";
 
 export const dynamic = "force-dynamic";
 // Generous ceiling for the "Generate AI Report" Server Action invoked from this page. The
@@ -21,10 +21,10 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 export default async function TokenProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   // Sidebar movers never throw (null hides the section), so they load alongside the profile.
-  const moversRead = getCachedSidebarMovers();
+  const moversRead = getSidebarMovers();
   let data;
   try {
-    data = await getCachedLiveTokenProfile(id);
+    data = await getLiveTokenProfile(id);
   } catch (error) {
     console.error(`Live token profile load failed for ${id}:`, error);
     return <AppShell active="none" movers={await moversRead}><LiveDataUnavailable /></AppShell>;
