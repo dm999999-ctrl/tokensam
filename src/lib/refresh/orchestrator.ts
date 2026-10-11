@@ -259,6 +259,20 @@ export async function runDataRefresh(client: SupabaseAdminClient, store: Refresh
     // limits are unaffected; a provider's own collector still serializes and
     // paces its own HTTP requests exactly as before.
     for (const step of due) {
+      // Heartbeat before each provider step, not just once after the whole loop: each
+      // step's own timeout (REFRESH_POLICY[step].timeoutMs) is well under RUN_LEASE_MS,
+      // so this keeps the lease alive through however many steps are due. Without it, a
+      // step that stalls (a Postgres statement timeout, a slow upstream gateway) burns
+      // wall-clock/CPU time with the lease never renewed, so the run just sits until some
+      // LATER invocation's acquireRun sweep notices the expired lease and marks it
+      // "Run abandoned" -- sometimes tens of minutes later. Bailing out here the moment
+      // ownership is lost means this invocation stops immediately instead of continuing
+      // to burn CPU on steps a newer run may already own.
+      const stillOwnsBeforeStep = await store.renewLease(runId, lockToken, now(), RUN_LEASE_MS);
+      if (!stillOwnsBeforeStep) {
+        console.error(`[refresh] run ${runId} lost lease ownership before step "${step}"; stopping.`);
+        return { status: "lost_ownership", runId, due, steps };
+      }
       const startedAt = now().toISOString();
       const definition = collectors[step];
       const skipReason = definition.skipReason?.() ?? null;
