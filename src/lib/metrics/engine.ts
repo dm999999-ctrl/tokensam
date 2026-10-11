@@ -88,14 +88,14 @@ export const CALCULATED_METRICS: MetricDefinition[] = [
   { id: "fdv_to_revenue_24h", name: "DEX-reported FDV / associated protocol 24h revenue", sourceScopes: "market/protocol", category: "valuation", unit: "ratio", formula: "DEX Screener primary-pair fdv_usd / DeFiLlama revenue_24h_usd" },
   { id: "volume_to_market_cap", name: "Volume / market cap", sourceScopes: "token", category: "valuation", unit: "ratio", formula: "CoinGecko volume_24h_usd / CoinGecko market_cap_usd" },
   { id: "tvl_growth_pct", name: "Associated protocol TVL growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "24h-normalized change: ((latest DeFiLlama tvl_usd / nearest available value around 24h earlier) ^ (24 / measured_hours) - 1) * 100; baseline tolerance ±6h" },
-  { id: "revenue_growth_pct", name: "Associated protocol revenue growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "24h-normalized change: ((latest DeFiLlama revenue_24h_usd / nearest available value around 24h earlier) ^ (24 / measured_hours) - 1) * 100; baseline tolerance ±6h" },
+  { id: "revenue_growth_pct", name: "Associated protocol revenue growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "24h-normalized change from the latest individual DeFiLlama revenue_24h_usd observation and the closest prior individual observation within ±6h of 24h earlier; daily aggregates are excluded" },
   { id: "fees_growth_pct", name: "Associated protocol fees growth", sourceScopes: "protocol", category: "growth", unit: "percent", formula: "24h-normalized change: ((latest DeFiLlama fees_24h_usd / nearest available value around 24h earlier) ^ (24 / measured_hours) - 1) * 100; baseline tolerance ±6h" },
   { id: "price_growth_pct", name: "Price growth", sourceScopes: "token", category: "growth", unit: "percent", formula: "(latest CoinGecko price_usd / previous CoinGecko price_usd - 1) * 100" },
   { id: "market_cap_growth_pct", name: "Market cap growth", sourceScopes: "token", category: "growth", unit: "percent", formula: "(latest CoinGecko market_cap_usd / previous CoinGecko market_cap_usd - 1) * 100" },
   { id: "price_change_vs_tvl_growth_pct_points", name: "Price change vs associated protocol TVL growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "price 24h-normalized percent change - TVL 24h-normalized percent change; changes are compounded from latest observations within ±6h of 24h apart" },
-  { id: "price_change_vs_revenue_growth_pct_points", name: "Price change vs associated protocol revenue growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "price 24h-normalized percent change - revenue 24h-normalized percent change; changes are compounded from latest observations within ±6h of 24h apart" },
+  { id: "price_change_vs_revenue_growth_pct_points", name: "Price change vs associated protocol revenue growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "price 24h-normalized percent change - revenue 24h-normalized percent change; revenue uses the latest individual DeFiLlama observation and closest prior individual observation within ±6h of 24h earlier" },
   { id: "market_cap_change_vs_tvl_growth_pct_points", name: "Market-cap change vs associated protocol TVL growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "market-cap 24h-normalized percent change - TVL 24h-normalized percent change; changes are compounded from latest observations within ±6h of 24h apart" },
-  { id: "market_cap_change_vs_revenue_growth_pct_points", name: "Market-cap change vs associated protocol revenue growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "market-cap 24h-normalized percent change - revenue 24h-normalized percent change; changes are compounded from latest observations within ±6h of 24h apart" },
+  { id: "market_cap_change_vs_revenue_growth_pct_points", name: "Market-cap change vs associated protocol revenue growth", sourceScopes: "token/protocol", category: "growth", unit: "percentage_points", formula: "market-cap 24h-normalized percent change - revenue 24h-normalized percent change; revenue uses the latest individual DeFiLlama observation and closest prior individual observation within ±6h of 24h earlier" },
   { id: "dex_aggregate_volume_24h_usd", name: "Aggregate DEX volume (24h)", sourceScopes: "market", category: "market_structure", unit: "USD", formula: "sum exact-address DEX pair volume.h24" },
   { id: "dex_aggregate_liquidity_usd", name: "Aggregate DEX liquidity", sourceScopes: "market", category: "market_structure", unit: "USD", formula: "sum exact-address DEX pair liquidity.usd" },
   { id: "dex_primary_pair_liquidity_usd", name: "Primary-pair liquidity", sourceScopes: "market", category: "market_structure", unit: "USD", formula: "liquidity.usd for primary exact-address pair" },
@@ -182,8 +182,17 @@ function chooseLatest(rows: ObservationInput[], provider: string, metric: string
   return rows.filter((row) => row.provider_id === provider && row.metric_id === metric).sort(compareLatest)[0];
 }
 
-function series(rows: ObservationInput[], provider: string, metric: string): SeriesPoint[] {
-  const candidates = rows.filter((row) => row.provider_id === provider && row.metric_id === metric && usable(row));
+function series(
+  rows: ObservationInput[],
+  provider: string,
+  metric: string,
+  options: { includeDailyAggregates?: boolean } = {},
+): SeriesPoint[] {
+  const includeDailyAggregates = options.includeDailyAggregates ?? true;
+  const candidates = rows.filter((row) => row.provider_id === provider
+    && row.metric_id === metric
+    && usable(row)
+    && (includeDailyAggregates || (row.source_field !== "daily_average" && row.source_field !== "daily_snapshot")));
   const byTime = new Map<string, ObservationInput>();
   for (const row of candidates.sort(compareLatest)) {
     if (!byTime.has(new Date(row.observed_at).toISOString())) byTime.set(new Date(row.observed_at).toISOString(), row);
@@ -480,7 +489,9 @@ export function calculateTokenMetrics(
   const priceSeries = series(tokenRows, "coingecko", "price_usd");
   const marketCapSeries = series(tokenRows, "coingecko", "market_cap_usd");
   const tvlSeries = series(tokenRows, "defillama", "tvl_usd");
-  const revenueSeries = series(tokenRows, "defillama", "revenue_24h_usd");
+  // Revenue comparisons must use actual provider observations. Retained daily
+  // averages are useful history, but are not point-in-time endpoints for a 24h change.
+  const revenueSeries = series(tokenRows, "defillama", "revenue_24h_usd", { includeDailyAggregates: false });
   const feesSeries = series(tokenRows, "defillama", "fees_24h_usd");
 
   const rawVolume = sumField(dexSeries.pairs, (pair) => pair.volume?.h24);
