@@ -9,6 +9,7 @@ const IDENTITY_TABLES = new Set([
 /** Tables with a partial unique index permitting only one 'running' row (a lease-based single-run lock). */
 const SINGLE_RUNNING_ROW_TABLES = new Set(["data_refresh_runs", "geckoterminal_sync_runs"]);
 const VIEWS = {
+  token_metric_observations_resolved: { source: "token_metric_observations" },
   latest_token_metric_observations: { source: "token_metric_observations", key: ["token_id", "provider_id", "metric_id"], order: ["observed_at", "collected_at", "id"] },
   latest_raw_provider_records: { source: "raw_provider_records", key: ["provider_id", "token_id", "chain_id"], order: ["collected_at", "id"] },
 };
@@ -39,6 +40,14 @@ export function createFakeSupabase({ seed = {}, views = true, missingTables = []
 
   function viewRows(name) {
     const view = VIEWS[name];
+    if (name === "token_metric_observations_resolved") {
+      const metadata = new Map(rowsOf("observation_metadata").map((row) => [row.id, row]));
+      return rowsOf(view.source).map((row) => row.metadata_id == null ? { ...row } : {
+        ...row,
+        ...Object.fromEntries(["note", "source_field", "scope", "provider_asset_id"]
+          .map((field) => [field, metadata.get(row.metadata_id)?.[field] ?? null])),
+      });
+    }
     const latest = new Map();
     const sorted = [...rowsOf(view.source)].filter((row) => !row.excluded_reason).sort((a, b) => {
       for (const column of view.order) {
@@ -163,7 +172,7 @@ export function createFakeSupabase({ seed = {}, views = true, missingTables = []
   function latestObservationsBounded({ p_token_ids, p_provider_ids, p_since }) {
     const sinceMs = Date.parse(p_since);
     const groups = new Map();
-    for (const row of rowsOf("token_metric_observations")) {
+    for (const row of viewRows("token_metric_observations_resolved")) {
       if (row.excluded_reason) continue;
       if (!p_token_ids.includes(row.token_id)) continue;
       if (!p_provider_ids.includes(row.provider_id)) continue;
@@ -187,7 +196,7 @@ export function createFakeSupabase({ seed = {}, views = true, missingTables = []
     const result = [];
     for (const tokenId of p_token_ids) {
       for (const [providerId, metricId] of pairs) {
-        const candidates = rowsOf("token_metric_observations")
+        const candidates = viewRows("token_metric_observations_resolved")
           .filter((row) => row.token_id === tokenId && row.provider_id === providerId && row.metric_id === metricId
             && !row.excluded_reason && nowMs - Date.parse(row.observed_at) <= lookbackMs)
           .sort((a, b) => (isNewer(a, b) ? -1 : isNewer(b, a) ? 1 : 0));

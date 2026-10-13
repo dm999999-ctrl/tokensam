@@ -1,4 +1,5 @@
 import { recordApproxRead } from "../monitoring/quota-tracker.ts";
+import { observationRead } from "./observation-storage.ts";
 
 type SupabaseAdminClient = ReturnType<typeof import("../supabase/admin").createSupabaseAdminClient>;
 
@@ -201,17 +202,17 @@ export async function readLatestObservations<T extends Row>(client: SupabaseAdmi
     utcToday.setUTCHours(0, 0, 0, 0);
     const tomorrow = new Date(utcToday.getTime() + 24 * 60 * 60 * 1000);
     const [recent, todaySnapshots, aggregates] = await Promise.all([
-      readPages<T>((from, to) => client.from("token_metric_observations")
+      readPages<T>((from, to) => observationRead(client, (relation) => client.from(relation)
         .select(COLUMNS).in("token_id", batch).in("provider_id", PROVIDERS).is("excluded_reason", null)
         .gte("observed_at", since)
         .order("token_id").order("provider_id").order("metric_id")
         .order("observed_at", { ascending: false }).order("collected_at", { ascending: false }).order("id", { ascending: false })
-        .range(from, to), "read recent observations"),
-      readPages<T>((from, to) => client.from("token_metric_observations")
+        .range(from, to)), "read recent observations"),
+      readPages<T>((from, to) => observationRead(client, (relation) => client.from(relation)
         .select(COLUMNS).in("token_id", batch).eq("provider_id", "coingecko").in("metric_id", COINGECKO_DAILY_METRICS)
         .is("excluded_reason", null).gte("observed_at", utcToday.toISOString()).lt("observed_at", tomorrow.toISOString())
         .order("token_id").order("metric_id").order("observed_at", { ascending: false }).order("id", { ascending: false })
-        .range(from, to), "read today's CoinGecko daily snapshots"),
+        .range(from, to)), "read today's CoinGecko daily snapshots"),
       readPages<DailyAggregateRow>((from, to) => client.from("latest_token_metric_daily_aggregates")
         .select("id,token_id,chain_id,metric_id,provider_id,utc_day,value,status,source_observation_count,valid_value_count,aggregated_at,aggregation_method,first_source_observed_at,last_source_observed_at")
         .in("token_id", batch).eq("provider_id", "coingecko").in("metric_id", COINGECKO_DAILY_METRICS)
@@ -245,12 +246,12 @@ export async function readObservationWindow<T extends Row>(
   if (tokenIds.length === 0) return [];
   const results = await Promise.all(series.map(async ({ providerId, metricId }) => {
     const [observations, aggregates] = await Promise.all([
-      readKeyset<T>((fromObservedAt) => client.from("token_metric_observations")
+      readKeyset<T>((fromObservedAt) => observationRead(client, (relation) => client.from(relation)
         .select(COLUMNS).in("token_id", tokenIds).eq("provider_id", providerId).eq("metric_id", metricId)
         .is("excluded_reason", null)
         .gte("observed_at", fromObservedAt ?? since.toISOString())
         .order("observed_at", { ascending: true }).order("id", { ascending: true })
-        .limit(PAGE_SIZE), `read ${providerId} ${metricId} history`),
+        .limit(PAGE_SIZE)), `read ${providerId} ${metricId} history`),
       readPages<DailyAggregateRow>((from, to) => client.from("token_metric_daily_aggregates")
         .select("id,token_id,chain_id,metric_id,provider_id,utc_day,value,status,source_observation_count,valid_value_count,aggregated_at,aggregation_method,first_source_observed_at,last_source_observed_at")
         .in("token_id", tokenIds).eq("provider_id", providerId).eq("metric_id", metricId)

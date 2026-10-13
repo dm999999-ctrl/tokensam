@@ -1,7 +1,9 @@
 # Compact observation metadata: measured design
 
-Status: feasibility prototype only. No production schema, observations, readers,
-collectors, retention rules, or website components have changed for this design.
+Status: implemented with staged activation. The additive database foundation and
+transactional canaries have been verified. See [the operator runbook](observation-compaction.md)
+for deployment, activation, pause, and restoration. No presentation components or
+financial formulas change.
 
 ## Measured prototype
 
@@ -91,5 +93,6 @@ coverage labels, indicator formulas, and cross-metric alignment must not change.
    free disk space is checked. Do not automatically run a full-table rewrite
    merely because the smaller logical rows have been written.
 
-No active compaction job or new production migration has been created. Existing
-website data and display remain as they were after the earlier index optimization.
+The migrations register guarded maintenance workers but initialize packing as
+disabled. They pack no original observations. Runtime activation requires a
+verified deployment of the compatibility readers.
