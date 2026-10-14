@@ -257,6 +257,11 @@ export const coingeckoTokenIds: Record<string, string> = {
   "neon-evm-neon": "neon",
   "solana-pump": "pump-fun",
   "bnb-chain-aster": "aster-2",
+  "ethereum-wlfi": "world-liberty-financial",
+  "solana-trump": "official-trump",
+  "terra-classic-lunc": "terra-luna",
+  "ethereum-ape": "apecoin",
+  "bitcoin-ordi": "ordinals",
 };
 
 /** Native assets use the schema's separate chain-scoped native identity. */
@@ -355,4 +360,5 @@ export const nativeTokenIds = new Set([
   "peaq-peaq",
   "zetachain-zeta",
   "dusk-dusk",
+  "terra-classic-lunc",
 ]);

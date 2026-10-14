@@ -216,6 +216,15 @@ export const binanceSymbols: Record<string, string> = {
   "cronos-cro": "CROUSDT",
   "solana-pump": "PUMPUSDT",
   "bnb-chain-aster": "ASTERUSDT",
+  "flare-flr": "FLRUSDT",
+  "akash-akt": "AKTUSDT",
+  "ethereum-safe": "SAFEUSDT",
+  "solana-hnt": "HNTUSDT",
+  "ethereum-wlfi": "WLFIUSDT",
+  "solana-trump": "TRUMPUSDT",
+  "terra-classic-lunc": "LUNCUSDT",
+  "ethereum-ape": "APEUSDT",
+  "bitcoin-ordi": "ORDIUSDT",
 };
 
 /**

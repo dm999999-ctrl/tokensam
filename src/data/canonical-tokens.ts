@@ -296,16 +296,21 @@ const phase16OneThirtyEight: CanonicalTokenDefinition[] = [
   // 2026-10-14 addition: two high-market-cap tokens newly listed on both CoinGecko and Binance spot.
   { id: "solana-pump", name: "Pump.fun", symbol: "PUMP", chainId: "solana", chainName: "Solana", category: "Infrastructure", isNative: false, contractAddress: null, identityNote: "PUMP on Solana (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
   { id: "bnb-chain-aster", name: "Aster", symbol: "ASTER", chainId: "bnb-chain", chainName: "BNB Chain", category: "Derivatives", isNative: false, contractAddress: null, identityNote: "ASTER on BNB Chain (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
+  { id: "ethereum-wlfi", name: "World Liberty Financial", symbol: "WLFI", chainId: "ethereum", chainName: "Ethereum", category: "DeFi", isNative: false, contractAddress: null, identityNote: "WLFI on Ethereum (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
+  { id: "solana-trump", name: "Official Trump", symbol: "TRUMP", chainId: "solana", chainName: "Solana", category: "Memecoin", isNative: false, contractAddress: null, identityNote: "TRUMP on Solana (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
+  { id: "terra-classic-lunc", name: "Terra Luna Classic", symbol: "LUNC", chainId: "terra-classic", chainName: "Terra Classic", category: "Layer 1", isNative: true, contractAddress: null, identityNote: "Native Terra Classic asset; distinct from Terra 2.0 LUNA." },
+  { id: "ethereum-ape", name: "ApeCoin", symbol: "APE", chainId: "ethereum", chainName: "Ethereum", category: "Gaming", isNative: false, contractAddress: null, identityNote: "APE on Ethereum (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
+  { id: "bitcoin-ordi", name: "ORDI", symbol: "ORDI", chainId: "bitcoin", chainName: "Bitcoin", category: "BRC-20", isNative: false, contractAddress: null, identityNote: "ORDI is a BRC-20 inscription asset on Bitcoin; it has no EVM contract, and no verified address mapping is curated, so DEX Screener market-structure data is not shown for it." },
 ];
 
 const retiredCanonicalSymbols = new Set([
-  "ACX", "AIOZ", "AKT", "ALCX", "ATH", "AURORA", "BAL", "BAND", "BGB", "BIFI",
+  "ACX", "AIOZ", "ALCX", "ATH", "AURORA", "BAL", "BAND", "BGB", "BIFI",
   "BLAST", "BLUR", "BNT", "BOBA", "CELR", "CFG", "CORE", "CTSI", "DAI",
-  "DRIFT", "DYM", "EOS", "EUL", "EURC", "FLR", "FTM", "GFI", "GHST", "GMT",
-  "GNS", "GRASS", "GT", "HNT", "IOTX", "KCS", "KNC", "LEO",
+  "DRIFT", "DYM", "EOS", "EUL", "EURC", "FTM", "GFI", "GHST", "GMT",
+  "GNS", "GRASS", "GT", "IOTX", "KCS", "KNC", "LEO",
   "LQTY", "MAGIC", "MANTA", "METIS", "MNDE", "MON", "NEON", "NOS", "OCEAN",
   "OGN", "OKB", "OM", "ONE", "OSMO", "PEAQ", "POKT", "PRIME", "PYUSD", "REZ",
-  "RON", "RPL", "RSS3", "RVN", "SAFE", "SCRT", "SD", "SKL", "SSV", "STG",
+  "RON", "RPL", "RSS3", "RVN", "SCRT", "SD", "SKL", "SSV", "STG",
   "STORJ", "SYN", "SYS", "TAIKO", "TEL", "TLOS", "TNSR", "UMA", "USDe", "VVV",
   "WAXP", "WOO", "XCH", "XDC", "XMR", "XRD", "YGG", "ZETA", "ZORA",
 ]);
