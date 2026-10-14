@@ -105,7 +105,7 @@ $$;
 create or replace function public.retention_expire_observations_batch(batch_size int default 40)
 returns int
 language sql
-as $
+as $$
   with doomed as (
     select id
     from public.token_metric_observations
@@ -118,7 +118,7 @@ as $
     delete from public.token_metric_observations t using doomed where t.id = doomed.id returning t.id
   )
   select coalesce(count(*)::int, 0) from deleted;
-$;
+$$;
 
 create or replace function public.retention_expire_raw_provider_records_batch(batch_size int default 1000)
 returns int
