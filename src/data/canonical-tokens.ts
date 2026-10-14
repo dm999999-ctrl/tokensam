@@ -296,13 +296,15 @@ const phase16OneThirtyEight: CanonicalTokenDefinition[] = [
 ];
 
 const retiredCanonicalSymbols = new Set([
-  "ACX", "AIOZ", "AKT", "ALCX", "ATH", "AURORA", "BAL", "BGB", "BIFI", "BLAST",
-  "BOBA", "CFG", "CORE", "CRO", "DAI", "DRIFT", "DYM", "EOS", "EURC", "FLR",
-  "FTM", "GFI", "GHST", "GNS", "GRASS", "GT", "HNT", "KAS", "KCS", "LEO",
-  "LQTY", "MNDE", "MNT", "MON", "NEON", "NOS", "OCEAN", "OKB", "OM", "PEAQ",
-  "POKT", "PRIME", "PYUSD", "RON", "RSS3", "SAFE", "SCRT", "SD", "STG", "STORJ",
-  "SYS", "TAIKO", "TEL", "TLOS", "USDe", "VVV", "XCH", "XDC", "XMR", "XRD",
-  "ZETA", "ZORA",
+  "ACX", "AIOZ", "AKT", "ALCX", "ATH", "AURORA", "BAL", "BAND", "BGB", "BIFI",
+  "BLAST", "BLUR", "BNT", "BOBA", "CELR", "CFG", "CORE", "CRO", "CTSI", "DAI",
+  "DRIFT", "DYM", "EOS", "EUL", "EURC", "FLR", "FTM", "GFI", "GHST", "GMT",
+  "GNS", "GRASS", "GT", "HNT", "ILV", "IOTX", "KAS", "KCS", "KNC", "LEO",
+  "LQTY", "MAGIC", "MANTA", "METIS", "MNDE", "MNT", "MON", "NEON", "NOS", "OCEAN",
+  "OGN", "OKB", "OM", "ONE", "OSMO", "PEAQ", "POKT", "PRIME", "PYUSD", "REZ",
+  "RON", "RPL", "RSS3", "RVN", "SAFE", "SCRT", "SD", "SKL", "SSV", "STG",
+  "STORJ", "SYN", "SYS", "TAIKO", "TEL", "TLOS", "TNSR", "UMA", "USDe", "VVV",
+  "WAXP", "WOO", "XCH", "XDC", "XMR", "XRD", "YGG", "ZETA", "ZORA",
 ]);
 
 export const canonicalTokens: CanonicalTokenDefinition[] = [
