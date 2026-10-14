@@ -211,6 +211,11 @@ export const binanceSymbols: Record<string, string> = {
   "ethereum-eul": "EULUSDT",
   "ethereum-ssv": "SSVUSDT",
   "linea-linea": "LINEAUSDT",
+  "ethereum-mnt": "MNTUSDT",
+  "kaspa-kas": "KASUSDT",
+  "cronos-cro": "CROUSDT",
+  "solana-pump": "PUMPUSDT",
+  "bnb-chain-aster": "ASTERUSDT",
 };
 
 /**

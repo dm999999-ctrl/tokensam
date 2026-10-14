@@ -293,14 +293,17 @@ const phase16OneThirtyEight: CanonicalTokenDefinition[] = [
   { id: "base-vvv", name: "Venice Token", symbol: "VVV", chainId: "base", chainName: "Base", category: "AI & compute", isNative: false, contractAddress: null, identityNote: "VVV on Base (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
   { id: "zora-zora", name: "Zora", symbol: "ZORA", chainId: "zora", chainName: "Zora", category: "Layer 2", isNative: false, contractAddress: null, identityNote: "ZORA on Zora (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
   { id: "neon-evm-neon", name: "Neon", symbol: "NEON", chainId: "neon-evm", chainName: "Neon EVM", category: "Layer 2", isNative: false, contractAddress: null, identityNote: "NEON on Neon EVM (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
+  // 2026-10-14 addition: two high-market-cap tokens newly listed on both CoinGecko and Binance spot.
+  { id: "solana-pump", name: "Pump.fun", symbol: "PUMP", chainId: "solana", chainName: "Solana", category: "Infrastructure", isNative: false, contractAddress: null, identityNote: "PUMP on Solana (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
+  { id: "bnb-chain-aster", name: "Aster", symbol: "ASTER", chainId: "bnb-chain", chainName: "BNB Chain", category: "Derivatives", isNative: false, contractAddress: null, identityNote: "ASTER on BNB Chain (CoinGecko id below); no verified contract-address mapping is curated for this token, so DEX Screener market-structure data is not shown for it." },
 ];
 
 const retiredCanonicalSymbols = new Set([
   "ACX", "AIOZ", "AKT", "ALCX", "ATH", "AURORA", "BAL", "BAND", "BGB", "BIFI",
-  "BLAST", "BLUR", "BNT", "BOBA", "CELR", "CFG", "CORE", "CRO", "CTSI", "DAI",
+  "BLAST", "BLUR", "BNT", "BOBA", "CELR", "CFG", "CORE", "CTSI", "DAI",
   "DRIFT", "DYM", "EOS", "EUL", "EURC", "FLR", "FTM", "GFI", "GHST", "GMT",
-  "GNS", "GRASS", "GT", "HNT", "ILV", "IOTX", "KAS", "KCS", "KNC", "LEO",
-  "LQTY", "MAGIC", "MANTA", "METIS", "MNDE", "MNT", "MON", "NEON", "NOS", "OCEAN",
+  "GNS", "GRASS", "GT", "HNT", "IOTX", "KCS", "KNC", "LEO",
+  "LQTY", "MAGIC", "MANTA", "METIS", "MNDE", "MON", "NEON", "NOS", "OCEAN",
   "OGN", "OKB", "OM", "ONE", "OSMO", "PEAQ", "POKT", "PRIME", "PYUSD", "REZ",
   "RON", "RPL", "RSS3", "RVN", "SAFE", "SCRT", "SD", "SKL", "SSV", "STG",
   "STORJ", "SYN", "SYS", "TAIKO", "TEL", "TLOS", "TNSR", "UMA", "USDe", "VVV",

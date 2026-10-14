@@ -255,6 +255,8 @@ export const coingeckoTokenIds: Record<string, string> = {
   "base-vvv": "venice-token",
   "zora-zora": "zora",
   "neon-evm-neon": "neon",
+  "solana-pump": "pump-fun",
+  "bnb-chain-aster": "aster-2",
 };
 
 /** Native assets use the schema's separate chain-scoped native identity. */
