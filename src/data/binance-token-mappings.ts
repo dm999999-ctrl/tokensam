@@ -211,14 +211,8 @@ export const binanceSymbols: Record<string, string> = {
   "ethereum-eul": "EULUSDT",
   "ethereum-ssv": "SSVUSDT",
   "linea-linea": "LINEAUSDT",
-  "ethereum-mnt": "MNTUSDT",
-  "kaspa-kas": "KASUSDT",
-  "cronos-cro": "CROUSDT",
   "solana-pump": "PUMPUSDT",
   "bnb-chain-aster": "ASTERUSDT",
-  "flare-flr": "FLRUSDT",
-  "akash-akt": "AKTUSDT",
-  "ethereum-safe": "SAFEUSDT",
   "solana-hnt": "HNTUSDT",
   "ethereum-wlfi": "WLFIUSDT",
   "solana-trump": "TRUMPUSDT",
@@ -240,6 +234,30 @@ export const binanceUnmapped: Record<string, { reason: CoverageReason; detail: s
   "ethereum-stg": {
     reason: "no_provider_data",
     detail: "STGUSDT exists on Binance but its status was BREAK (trading halted) when this mapping was verified on 2026-10-06, so its last price is stale and must not be served as live.",
+  },
+  "cronos-cro": {
+    reason: "provider_does_not_support_token",
+    detail: "No CROUSDT (or any CRO) spot market exists on Binance, verified against /api/v3/exchangeInfo on 2026-10-17; an earlier mapping added without live verification was incorrect and broke the whole live-price batch.",
+  },
+  "ethereum-mnt": {
+    reason: "provider_does_not_support_token",
+    detail: "No MNTUSDT (or any MNT) spot market exists on Binance, verified against /api/v3/exchangeInfo on 2026-10-17; an earlier mapping added without live verification was incorrect and broke the whole live-price batch.",
+  },
+  "kaspa-kas": {
+    reason: "provider_does_not_support_token",
+    detail: "No KASUSDT (or any KAS) spot market exists on Binance, verified against /api/v3/exchangeInfo on 2026-10-17; an earlier mapping added without live verification was incorrect and broke the whole live-price batch.",
+  },
+  "flare-flr": {
+    reason: "provider_does_not_support_token",
+    detail: "No FLRUSDT (or any FLR) spot market exists on Binance, verified against /api/v3/exchangeInfo on 2026-10-17; an earlier mapping added without live verification was incorrect and broke the whole live-price batch.",
+  },
+  "akash-akt": {
+    reason: "provider_does_not_support_token",
+    detail: "No AKTUSDT (or any AKT) spot market exists on Binance, verified against /api/v3/exchangeInfo on 2026-10-17; an earlier mapping added without live verification was incorrect and broke the whole live-price batch.",
+  },
+  "ethereum-safe": {
+    reason: "provider_does_not_support_token",
+    detail: "No SAFEUSDT (or any SAFE) spot market exists on Binance, verified against /api/v3/exchangeInfo on 2026-10-17; an earlier mapping added without live verification was incorrect and broke the whole live-price batch.",
   },
 };
 
